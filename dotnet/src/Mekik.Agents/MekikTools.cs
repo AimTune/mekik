@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 using Microsoft.Extensions.AI;
 
 using Ilmek;
@@ -257,8 +259,27 @@ public static class MekikTools
         {
             IReadOnlyDictionary<string, object?> d => Mask(d, redact),
             string => value, // a string is IEnumerable; never treat it as a list
+            // A result that came back through Microsoft.Extensions.AI is JSON, not
+            // a dictionary: AIFunctionFactory marshals return values through
+            // System.Text.Json. Without this case Redact silently does nothing for
+            // every function built that way, which is nearly all of them.
+            JsonElement json => MaskJson(json, redact),
             IEnumerable<object?> seq => seq.Select(v => MaskValue(v, redact)).ToList(),
             _ => value,
         };
     }
+
+    /// <summary>
+    /// Walks a <see cref="JsonElement"/> the same way <see cref="Mask"/> walks a
+    /// dictionary. Scalars are returned untouched — the canonical writer already
+    /// knows how to emit them.
+    /// </summary>
+    private static object? MaskJson(JsonElement json, IReadOnlyList<string> redact) => json.ValueKind switch
+    {
+        JsonValueKind.Object => json.EnumerateObject().ToDictionary(
+            p => p.Name,
+            p => redact.Contains(p.Name) ? Redacted : MaskJson(p.Value, redact)),
+        JsonValueKind.Array => json.EnumerateArray().Select(v => MaskJson(v, redact)).ToList(),
+        _ => json,
+    };
 }

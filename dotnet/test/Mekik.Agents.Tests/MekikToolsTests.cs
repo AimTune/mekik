@@ -181,6 +181,49 @@ public class MekikToolsTests
     }
 
     [Fact]
+    public async Task Redact_reaches_into_a_function_result_and_its_nested_rows()
+    {
+        // Regression: AIFunctionFactory marshals return values through
+        // System.Text.Json, so a result arrives as a JsonElement rather than a
+        // dictionary. Redact used to walk only dictionaries, which meant it
+        // silently masked nothing on the way back — the params were masked, the
+        // result leaked. Both directions are asserted here.
+        var lookup = Fn("lookup_customers", "Find customers", () => new Dictionary<string, object?>
+        {
+            ["count"] = 2,
+            ["rows"] = new List<object?>
+            {
+                new Dictionary<string, object?> { ["name"] = "Grace", ["email"] = "grace@example.com" },
+                new Dictionary<string, object?> { ["name"] = "Ada", ["email"] = "ada@example.com" },
+            },
+        });
+
+        object? seenByFunction = null;
+        var app = MakeApp(async ctx =>
+        {
+            var tools = MekikTools.Wrap(ctx, [lookup],
+                new Dictionary<string, ToolPolicy> { ["lookup_customers"] = new() { Redact = ["email"] } });
+            seenByFunction = await tools[0].InvokeAsync(new AIFunctionArguments());
+            return "done";
+        });
+
+        var conn = new FakeConn();
+        await app.ConnectAsync(conn);
+        await app.ReceiveAsync(conn, TextFrame("go"));
+
+        var completed = Calls(conn.Sent, "lookup_customers")[1];
+        var wire = System.Text.Json.JsonSerializer.Serialize(completed["result"]);
+        Assert.DoesNotContain("grace@example.com", wire, StringComparison.Ordinal);
+        Assert.DoesNotContain("ada@example.com", wire, StringComparison.Ordinal);
+        Assert.Contains(MekikTools.Redacted, wire, StringComparison.Ordinal);
+        Assert.Contains("Grace", wire, StringComparison.Ordinal); // siblings survive
+
+        // The function's own return value is untouched — masking is a wire concern.
+        Assert.Contains("grace@example.com",
+            System.Text.Json.JsonSerializer.Serialize(seenByFunction), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_failing_function_surfaces_status_error_and_rethrows()
     {
         // Typed explicitly: a lambda whose body is a `throw` has no inferable
