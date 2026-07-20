@@ -16,6 +16,9 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Mekik.SemanticKernel/Mekik.SemanticKernel.csproj" />
+    <!-- The library only needs Abstractions; the tests additionally build real
+         functions and invoke them, which lives in Core. -->
+    <PackageReference Include="Microsoft.SemanticKernel.Core" Version="1.78.0" />
   </ItemGroup>
 
   <ItemGroup>
