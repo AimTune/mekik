@@ -1,0 +1,51 @@
+{
+  "name": "@mekik/langchain",
+  "version": "0.1.0",
+  "description": "LangChain integration for mekik — surface agent tool calls in the UI, gate them behind human approval, and make them exactly-once across an interrupt/resume.",
+  "type": "module",
+  "license": "MIT",
+  "author": "AimTune",
+  "homepage": "https://github.com/AimTune/mekik/tree/main/ts/packages/langchain#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AimTune/mekik.git",
+    "directory": "ts/packages/langchain"
+  },
+  "bugs": "https://github.com/AimTune/mekik/issues",
+  "keywords": [
+    "mekik",
+    "langchain",
+    "ilmek",
+    "tools",
+    "human-in-the-loop",
+    "generative-ui"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@mekik/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@langchain/core": ">=0.3 <2"
+  },
+  "devDependencies": {
+    "@langchain/core": "^1.2.3",
+    "@ilmek/core": "^0.1.1",
+    "zod": "^3.25.0"
+  }
+}
