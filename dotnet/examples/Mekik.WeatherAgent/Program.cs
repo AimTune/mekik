@@ -173,7 +173,8 @@ static double? ReadDouble(JsonElement daily, string name, int i) =>
 // ── who decides each turn ─────────────────────────────────────────────────────
 
 // Built lazily so `--probe` never constructs the client, which would demand a key
-// it does not need.
+// it does not need. Declared before `decide` below: a local function that captures
+// it cannot be assigned to a delegate before the capture is definitely assigned.
 var chat = new Lazy<IChatClient>(() => new AnthropicClient()
     .AsIChatClient("claude-opus-4-8", defaultMaxOutputTokens: 2048));
 
@@ -215,8 +216,9 @@ var desk = Graph.Create("weather-desk")
 
         for (var turn = 0; turn < MaxTurns; turn++)
         {
-            var decision = await ctx.StepAsync<Dictionary<string, object?>>(
-                $"llm:{turn}", () => decide(tools, messages, turn));
+            var decision = await ctx.StepAsync(
+                $"llm:{turn}",
+                () => new ValueTask<Dictionary<string, object?>>(decide(tools, messages, turn)));
 
             var text = decision.GetValueOrDefault("text") as string ?? "";
             var toolCalls = ((IEnumerable<object?>)(decision.GetValueOrDefault("calls") ?? new List<object?>()))
@@ -336,14 +338,8 @@ async Task<int> Probe()
         // failure lands in the *shown* tool instead of the hidden one.
         ("name=Bouvet",
          """{"results":[{"name":"Bouvet Island","country":"Norway","latitude":-54.42,"longitude":3.36}]}"""),
-        ("latitude=41.0138",
-         """{"daily":{"time":["2026-07-21","2026-07-22","2026-07-23"],"weather_code":[0,2,61],
-             "temperature_2m_max":[31.4,30.1,26.8],"temperature_2m_min":[23.0,22.4,20.9],
-             "precipitation_sum":[0,0,4.2]}}"""),
-        ("latitude=52.5244",
-         """{"daily":{"time":["2026-07-21","2026-07-22","2026-07-23"],"weather_code":[3,63,61],
-             "temperature_2m_max":[19.2,17.5,18.1],"temperature_2m_min":[12.4,11.8,12.0],
-             "precipitation_sum":[1.1,8.6,3.3]}}"""),
+        ("latitude=41.0138", """{"daily":{"time":["2026-07-21","2026-07-22","2026-07-23"],"weather_code":[0,2,61],"temperature_2m_max":[31.4,30.1,26.8],"temperature_2m_min":[23.0,22.4,20.9],"precipitation_sum":[0,0,4.2]}}"""),
+        ("latitude=52.5244", """{"daily":{"time":["2026-07-21","2026-07-22","2026-07-23"],"weather_code":[3,63,61],"temperature_2m_max":[19.2,17.5,18.1],"temperature_2m_min":[12.4,11.8,12.0],"precipitation_sum":[1.1,8.6,3.3]}}"""),
         ("latitude=-54.42", "{}"),
     };
 
