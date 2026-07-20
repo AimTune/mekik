@@ -63,7 +63,7 @@ node-authoring helpers (`mekik.ui`, `mekik.tool`, `mekik.approve`, …).
 ## Layout
 
 ```
-mekik1/
+mekik/
   PROTOCOL.md            # normative mekik/1 wire spec
   PLAN.md                # design rationale & milestones
   conformance/
@@ -147,8 +147,12 @@ See [`docs/LANGUAGES.md`](docs/LANGUAGES.md) for the naming map and
 
 Horizontal scale / distributed turn lock; transports other than WebSocket; durable
 (Redis/Postgres) history stores (ports exist, in-memory ships); a `debug` stream
-mode; Go/Python ports. The chativa `@chativa/connector-mekik` upgrade to
-`mekik/1` is a separate workstream.
+mode; Go/Python ports.
+
+The client end is chativa's `@chativa/connector-mekik`, which already speaks
+`mekik/1`: it renders `interrupt` frames as approval chips (or a mounted form),
+answers them with a `resume` keyed by interrupt id, and re-renders open pauses
+announced in `welcome.pending` after a reconnect.
 
 ## License
 
