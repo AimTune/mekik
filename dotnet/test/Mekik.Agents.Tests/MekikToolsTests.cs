@@ -212,7 +212,13 @@ public class MekikToolsTests
         await app.ReceiveAsync(conn, TextFrame("go"));
 
         var completed = Calls(conn.Sent, "lookup_customers")[1];
-        var wire = System.Text.Json.JsonSerializer.Serialize(completed["result"]);
+        // Relaxed escaping, or the guillemets in «redacted» come back as \u00ab
+        // and every assertion below silently looks for the wrong thing.
+        var relaxed = new System.Text.Json.JsonSerializerOptions
+        {
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        };
+        var wire = System.Text.Json.JsonSerializer.Serialize(completed["result"], relaxed);
         Assert.DoesNotContain("grace@example.com", wire, StringComparison.Ordinal);
         Assert.DoesNotContain("ada@example.com", wire, StringComparison.Ordinal);
         Assert.Contains(MekikTools.Redacted, wire, StringComparison.Ordinal);
@@ -220,7 +226,7 @@ public class MekikToolsTests
 
         // The function's own return value is untouched — masking is a wire concern.
         Assert.Contains("grace@example.com",
-            System.Text.Json.JsonSerializer.Serialize(seenByFunction), StringComparison.Ordinal);
+            System.Text.Json.JsonSerializer.Serialize(seenByFunction, relaxed), StringComparison.Ordinal);
     }
 
     [Fact]
