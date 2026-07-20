@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "mekik examples — a refund-approval agent served over the mekik/1 protocol, scripted and LLM-driven.",
+  "description": "mekik examples — scripted and LLM-driven agents over the mekik/1 protocol: refunds, SQL, weather, and a concierge that combines them.",
   "scripts": {
     "selftest": "node refund.ts",
     "serve": "node refund.ts --serve",
@@ -14,7 +14,10 @@
     "sql:serve": "node sql-agent.ts --serve",
     "weather": "node weather-agent.ts",
     "weather:probe": "node weather-agent.ts --probe",
-    "weather:serve": "node weather-agent.ts --serve"
+    "weather:serve": "node weather-agent.ts --serve",
+    "concierge": "node concierge.ts",
+    "concierge:probe": "node concierge.ts --probe",
+    "concierge:serve": "node concierge.ts --serve"
   },
   "dependencies": {
     "@mekik/core": "workspace:*",

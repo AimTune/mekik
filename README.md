@@ -74,8 +74,11 @@ mekik/
     packages/core/       # @mekik/core — protocol, mapper, engine, helpers, stores, auth
     packages/ws/         # @mekik/ws — WebSocket transport
     packages/langchain/  # @mekik/langchain — wrap an agent's tools
-    examples/refund.ts   # showcase: tool + GenUI + form approval + resume
+    examples/refund.ts    # showcase: tool + GenUI + form approval + resume
     examples/llm-agent.ts # the same desk, driven by a real Claude model
+    examples/sql-agent.ts # a model writing its own SQL over SQLite
+    examples/weather-agent.ts # chained network tools, fan-out, recovery
+    examples/concierge.ts # all three tool groups in one agent
   dotnet/
     src/Mekik.Core/            # mirror of @mekik/core
     src/Mekik.AspNetCore/      # app.MapMekik("/ws", app)
@@ -115,9 +118,26 @@ resume never charges twice. They call the live API, so they need a key and are
 kept out of the CI test path (CI still compiles them):
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-… node ts/examples/llm-agent.ts
+ANTHROPIC_API_KEY=sk-ant-… node ts/examples/llm-agent.ts       # refunds
+ANTHROPIC_API_KEY=sk-ant-… node ts/examples/sql-agent.ts       # SQL over SQLite
+ANTHROPIC_API_KEY=sk-ant-… node ts/examples/weather-agent.ts   # a public HTTP API
+ANTHROPIC_API_KEY=sk-ant-… node ts/examples/concierge.ts       # all of the above, one agent
 ANTHROPIC_API_KEY=sk-ant-… dotnet run --project dotnet/examples/Mekik.LlmAgent
 ```
+
+Each of the newer examples also has a `--probe` mode that scripts only the
+model's decisions (and, where relevant, the HTTP layer) and runs the identical
+graph, tools and wire path. That is what CI runs, so the examples stay honest
+without a key or a bill:
+
+```bash
+node ts/examples/concierge.ts --probe
+dotnet run --project dotnet/examples/Mekik.SqlAgent -- --probe
+```
+
+The GenUI components these emit — `data-table`, `weather-card`, `approval-form`,
+`order-card` — are registered in chativa's sandbox, so `--serve` renders end to
+end against a real client.
 
 Both sides are green in [CI](../../actions): TypeScript builds, passes the golden
 fixtures and behavioural scenarios, and runs the refund self-test; .NET builds and
