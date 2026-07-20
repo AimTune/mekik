@@ -69,6 +69,12 @@ jobs:
       # TypeScript suite runs — and compares canonical JSON byte-for-byte.
       - run: dotnet test Mekik.slnx -c Release --no-build --verbosity normal
 
+      # The SQL example's probe drives the real graph, tools and wire with the
+      # model's decisions scripted, so the hidden tool, the GenUI card, the
+      # redaction and the error recovery are all asserted without an API key.
+      - name: sql example (offline probe)
+        run: dotnet run --project examples/Mekik.SqlAgent -c Release --no-build -- --probe
+
       # Same idea as the TS pack step: prove the libraries still produce valid
       # NuGet packages, with dependencies wired, before a release ever runs.
       - name: pack (dry-run publish artifacts)

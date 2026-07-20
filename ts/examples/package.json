@@ -8,7 +8,10 @@
     "selftest": "node refund.ts",
     "serve": "node refund.ts --serve",
     "llm": "node llm-agent.ts",
-    "llm:serve": "node llm-agent.ts --serve"
+    "llm:serve": "node llm-agent.ts --serve",
+    "sql": "node sql-agent.ts",
+    "sql:probe": "node sql-agent.ts --probe",
+    "sql:serve": "node sql-agent.ts --serve"
   },
   "dependencies": {
     "@mekik/core": "workspace:*",

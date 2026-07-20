@@ -9,7 +9,7 @@
     "typecheck": "tsc -b",
     "test": "pnpm -r --filter \"./packages/**\" test",
     "test:core": "node --test packages/core/test/*.test.ts",
-    "check": "pnpm build && pnpm test && node examples/refund.ts"
+    "check": "pnpm build && pnpm test && node examples/refund.ts && node examples/sql-agent.ts --probe"
   },
   "devDependencies": {
     "typescript": "^5.9.0",
