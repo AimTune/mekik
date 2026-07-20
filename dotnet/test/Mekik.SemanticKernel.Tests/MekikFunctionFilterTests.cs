@@ -304,8 +304,10 @@ public class MekikFunctionFilterTests
     [Fact]
     public async Task A_failing_function_surfaces_status_error_and_rethrows()
     {
-        var boom = KernelFunctionFactory.CreateFromMethod(
-            () => throw new InvalidOperationException("upstream down"), "boom", "fails");
+        // Typed explicitly: a lambda whose body is a `throw` has no inferable
+        // delegate type.
+        Func<string> failing = () => throw new InvalidOperationException("upstream down");
+        var boom = KernelFunctionFactory.CreateFromMethod(failing, "boom", "fails");
 
         var app = MakeApp(async ctx =>
         {
