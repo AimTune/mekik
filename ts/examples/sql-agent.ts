@@ -1,47 +1,51 @@
-// An analytics desk over a real SQLite database. The model is given no schema up
-// front — it discovers the tables, reads their columns, writes its own SQL, and
-// explains the answer. Three scenarios run back to back:
+// An analytics desk over a real SQLite database, driven by a **toolkit** rather
+// than tools written for this example. `lib/sql-toolkit.ts` reproduces LangChain's
+// `SqlToolkit` (dropped in LangChain v1, see that file) — same tool names,
+// same `getTools()` shape — and this example does nothing to it except hand the
+// result to `withMekikTools`.
 //
-//   1. discovery  — list_tables (hidden) → describe_table → run_query, and the
+// That is the point: mekik wraps any `StructuredToolInterface[]`. A toolkit you
+// did not write, and cannot modify, still gets traces, masking and exactly-once
+// replay.
+//
+// The model is given no schema. Three scenarios run back to back:
+//
+//   1. discovery  — list-tables-sql (hidden) → info-sql → query-sql, and the
 //                   result set renders as a `data-table` GenUI card
 //   2. redaction  — a query that returns customer emails: the model sees the real
 //                   addresses, the surfaced trace shows «redacted»
-//   3. correction — the user asks for a DELETE; the read-only guard rejects it,
-//                   the failure surfaces as a `tool_call` error frame, and the
-//                   model recovers and answers instead of the node crashing
+//   3. correction — the user asks for a DELETE; the toolkit's read-only guard
+//                   rejects it, the failure surfaces as a `tool_call` error frame,
+//                   and the model recovers instead of the node crashing
 //
 //   ANTHROPIC_API_KEY=sk-ant-… node examples/sql-agent.ts          # the three scenarios
 //   ANTHROPIC_API_KEY=sk-ant-… node examples/sql-agent.ts --serve  # server on :8802
 //   node examples/sql-agent.ts --probe                             # no key, no API call
 //
-// `--probe` replaces only the model's decisions with a fixed script and runs the
-// identical graph, tools and wire path. It asserts the three behaviours above, so
-// the plumbing stays verifiable — and CI-checkable — without a key or a bill.
-// The database is created in memory on startup, so the example is self-contained.
-
-import { DatabaseSync } from "node:sqlite";
+// `--probe` replaces only the model's decisions and runs the identical graph,
+// tools and wire path. CI runs it, so this stays verifiable without a key.
 
 import { channel, graph, END, START } from "@ilmek/core";
+import type { Context } from "@ilmek/core";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import type { BaseMessage } from "@langchain/core/messages";
-import { tool } from "@langchain/core/tools";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import type { Context } from "@ilmek/core";
-import { z } from "zod";
 
 import { mekik } from "@mekik/core";
 import type { Connection, OutgoingFrame } from "@mekik/core";
 import { withMekikTools } from "@mekik/langchain";
 import { serveWs } from "@mekik/ws";
 
+import { SqlDatabase, SqlToolkit } from "./lib/sql-toolkit.ts";
+import type { Row } from "./lib/sql-toolkit.ts";
+
 // ── the database ──────────────────────────────────────────────────────────────
 
 // Money is stored in cents, and the column is `unit_price_cents` — deliberately
 // not the shape a question is asked in. The model has to read the schema and do
 // the conversion itself, which is the part worth demonstrating.
-const db = new DatabaseSync(":memory:");
-db.exec(`
+const db = SqlDatabase.fromSchema(`
     CREATE TABLE customers (
         id    TEXT PRIMARY KEY,
         name  TEXT NOT NULL,
@@ -86,124 +90,47 @@ db.exec(`
         ('ORD-6', 'GRINDER-3', 1, 18900);
 `);
 
-// The queries the model actually ran, so the run can be reported honestly at the
-// end rather than us claiming behaviour we did not observe.
-const audit: Array<{ sql: string; outcome: string }> = [];
-
 /**
- * Columns that must never reach the client. Declared once because they are
- * needed in *two* places, and the second one is easy to miss: the `redact`
- * policy masks the `tool_call` frame mekik emits for you, but it has no say over
- * a `genui` chunk the tool emits itself. Anything a tool renders directly is the
- * tool's own responsibility to mask.
+ * Columns that must never reach the client. Needed in *two* places, and the
+ * second is easy to miss: the `redact` policy masks the `tool_call` frame mekik
+ * emits for you, but it has no say over a `genui` chunk emitted alongside it.
+ * Anything rendered directly is the renderer's own responsibility to mask.
  */
 const PRIVATE_COLUMNS = ["email"] as const;
 
-function maskRows(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+function maskRows(rows: Row[]): Row[] {
     return rows.map((row) => {
-        const out: Record<string, unknown> = { ...row };
+        const out: Row = { ...row };
         for (const col of PRIVATE_COLUMNS) if (col in out) out[col] = "«redacted»";
         return out;
     });
 }
 
-// ── the tools ─────────────────────────────────────────────────────────────────
+// ── the tools: a toolkit, wrapped ─────────────────────────────────────────────
 
-/** Anything that is not a single read is refused before it reaches SQLite. */
-function assertReadOnly(sql: string): void {
-    const trimmed = sql.trim().replace(/;\s*$/, "");
-    if (/;/.test(trimmed)) {
-        throw new Error("Only a single statement is allowed — remove the ';' and send one query.");
-    }
-    if (!/^(select|with)\b/i.test(trimmed)) {
-        const verb = trimmed.split(/\s+/, 1)[0]?.toUpperCase() ?? "that";
-        throw new Error(
-            `This connection is read-only, so ${verb} is refused. You can SELECT to inspect data, but not modify it.`,
-        );
-    }
-}
-
-/**
- * Built per run so `run_query` can emit its GenUI card through *this* run's ctx.
- * The tools themselves stay plain LangChain tools — `withMekikTools` is what adds
- * the traces, the masking and the journaling.
- */
 function makeSqlTools(ctx: Context<any>): StructuredToolInterface[] {
-    const listTables = tool(
-        () => {
-            const rows = db
-                .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-                .all() as Array<{ name: string }>;
-            return rows.map((r) => r.name).join(", ");
-        },
-        {
-            name: "list_tables",
-            description: "List every table in the database. Call this first if you do not know the schema.",
-            schema: z.object({}),
-        },
-    );
-
-    const describeTable = tool(
-        ({ table }) => {
-            const row = db
-                .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
-                .get(table) as { sql?: string } | undefined;
-            if (!row?.sql) throw new Error(`No table named ${table}.`);
-            return row.sql;
-        },
-        {
-            name: "describe_table",
-            description: "Show one table's CREATE TABLE statement, including its columns and foreign keys.",
-            schema: z.object({ table: z.string().describe("The table name, e.g. orders") }),
-        },
-    );
-
-    const runQuery = tool(
-        ({ sql }) => {
-            assertReadOnly(sql);
-            let rows: Array<Record<string, unknown>>;
-            try {
-                rows = db.prepare(sql).all() as Array<Record<string, unknown>>;
-            } catch (err) {
-                // SQLite's message names the offending token, which is exactly
-                // what the model needs to fix the query on its next turn.
-                audit.push({ sql, outcome: "sql error" });
-                throw new Error(`SQLite rejected the query: ${err instanceof Error ? err.message : String(err)}`);
-            }
-            audit.push({ sql, outcome: `${rows.length} row(s)` });
-
-            const columns = rows.length > 0 ? Object.keys(rows[0]!) : [];
-            // The card is emitted from inside the tool, so the client renders the
-            // result the moment the query lands rather than after the model has
-            // finished writing its explanation. It is also outside the `redact`
-            // policy's reach, so it is masked here by hand.
+    // Built per run so the card is emitted through *this* run's ctx. The toolkit
+    // knows nothing about mekik; it just reports its rows.
+    const toolkit = new SqlToolkit(db, {
+        onRows: ({ columns, rows, sql }) => {
             mekik.ui(ctx, "data-table", { columns, rows: maskRows(rows), sql });
-            // Returned as an object, not a JSON string: `redact` masks by field
-            // name and walks nested rows, and it cannot see into a string.
-            return { columns, rows };
         },
-        {
-            name: "run_query",
-            description:
-                "Run one read-only SQL query (SELECT or WITH) against the SQLite database and return its rows as JSON.",
-            schema: z.object({ sql: z.string().describe("A single SELECT statement, without a trailing semicolon") }),
-        },
-    );
+    });
 
-    return withMekikTools(ctx, [listTables, describeTable, runQuery], {
+    return withMekikTools(ctx, toolkit.getTools(), {
         // Schema plumbing: it runs, but the customer has no reason to watch us
         // enumerate table names.
-        list_tables: { show: false },
-        describe_table: { show: true },
+        "list-tables-sql": { show: false },
+        "info-sql": { show: true },
         // The model reads real addresses; the surfaced params and rows do not
         // carry them. Masking is by field name, and it walks nested rows.
-        run_query: { show: true, redact: ["email"] },
+        "query-sql": { show: true, redact: ["email"] },
     });
 }
 
 const SYSTEM = [
     "You are a data analyst answering questions about a shop's SQLite database.",
-    "You do not know the schema: discover it with list_tables and describe_table before querying.",
+    "You do not know the schema: discover it with list-tables-sql and info-sql before querying.",
     "Prices are stored in cents — convert to dollars when you report money.",
     "The connection is read-only. If a request needs a write, explain that you cannot make it rather than trying twice.",
     "Answer the user in one or two short sentences; the rows are already shown to them as a table.",
@@ -312,7 +239,7 @@ function makeApp() {
     });
 }
 
-// ── the three scenarios ───────────────────────────────────────────────────────
+// ── console plumbing ──────────────────────────────────────────────────────────
 
 class Collector implements Connection {
     readonly id = "conn-sql";
@@ -352,7 +279,7 @@ const SCENARIOS: Array<{ title: string; ask: string; expect: string }> = [
     {
         title: "1. discovery — the model finds the schema and writes its own SQL",
         ask: "Which three customers have spent the most in total? Show the amounts in dollars.",
-        expect: "at least one run_query, and a data-table card",
+        expect: "at least one query-sql, and a data-table card",
     },
     {
         title: "2. redaction — the model sees emails, the wire does not",
@@ -368,7 +295,7 @@ const SCENARIOS: Array<{ title: string; ask: string; expect: string }> = [
 
 async function run(): Promise<number> {
     if (!process.env.ANTHROPIC_API_KEY) {
-        console.error("Set ANTHROPIC_API_KEY — this example calls the real Claude API.");
+        console.error("Set ANTHROPIC_API_KEY — this example calls the real Claude API (or pass --probe).");
         return 1;
     }
 
@@ -401,43 +328,39 @@ async function run(): Promise<number> {
     }
 
     console.log("\nSQL the model actually ran:");
-    for (const entry of audit) console.log(`  ${entry.outcome.padEnd(12)} ${truncate(entry.sql.replace(/\s+/g, " "))}`);
+    for (const entry of db.audit) console.log(`  ${entry.outcome.padEnd(12)} ${truncate(entry.sql.replace(/\s+/g, " "))}`);
 
     // A real model is allowed to reach an answer a different way, so these are
     // reported rather than asserted — an unmet expectation is information, not a
     // failure of the wiring.
     console.log("\nobserved:");
-    console.log(`  data-table card rendered      ${sawTable ? "yes" : "no"}`);
-    console.log(`  email masked in the trace     ${sawRedaction ? "yes" : "no"}`);
-    console.log(`  write refused + recovered     ${sawError ? "yes" : "no"}`);
-    console.log(`  list_tables hidden from wire  ${audit.length > 0 ? "yes (never traced)" : "n/a"}`);
+    console.log(`  data-table card rendered        ${sawTable ? "yes" : "no"}`);
+    console.log(`  email masked in the trace       ${sawRedaction ? "yes" : "no"}`);
+    console.log(`  write refused + recovered       ${sawError ? "yes" : "no"}`);
 
     return 0;
 }
 
 // ── probe: the same graph, offline ────────────────────────────────────────────
 
-/** A scripted stand-in for one model turn. */
 function say(text: string): Decision {
     return { text, toolCalls: [] };
 }
 function call(name: string, args: Record<string, unknown>): Decision {
-    return { text: "", toolCalls: [{ id: `call-${name}-${Math.random().toString(36).slice(2, 8)}`, name, args }] };
+    return { text: "", toolCalls: [{ id: `call-${name}`, name, args }] };
 }
 
-/** One script per scenario, consumed a turn at a time. */
 let script: Decision[] = [];
-const probeDecide: Decide = async (_tools, _messages, turn) =>
-    script[turn] ?? say("(script exhausted)");
+const probeDecide: Decide = async (_tools, _messages, turn) => script[turn] ?? say("(script exhausted)");
 
 const PROBE: Array<{ title: string; ask: string; script: Decision[] }> = [
     {
         title: "1. discovery — schema lookup, query, GenUI card",
         ask: "Which three customers have spent the most in total?",
         script: [
-            call("list_tables", {}),
-            call("describe_table", { table: "order_items" }),
-            call("run_query", {
+            call("list-tables-sql", {}),
+            call("info-sql", { tables: "orders,order_items" }),
+            call("query-sql", {
                 sql: `SELECT c.name, SUM(i.qty * i.unit_price_cents) / 100.0 AS dollars
                       FROM customers c
                       JOIN orders o ON o.customer_id = c.id
@@ -451,7 +374,7 @@ const PROBE: Array<{ title: string; ask: string; script: Decision[] }> = [
         title: "2. redaction — the model sees the email, the wire does not",
         ask: "Who placed ORD-3, and what is their email?",
         script: [
-            call("run_query", {
+            call("query-sql", {
                 sql: `SELECT c.name, c.email FROM customers c
                       JOIN orders o ON o.customer_id = c.id WHERE o.id = 'ORD-3'`,
             }),
@@ -462,7 +385,7 @@ const PROBE: Array<{ title: string; ask: string; script: Decision[] }> = [
         title: "3. correction — the write is refused and the turn survives",
         ask: "Please delete order ORD-4.",
         script: [
-            call("run_query", { sql: "DELETE FROM orders WHERE id = 'ORD-4'" }),
+            call("query-sql", { sql: "DELETE FROM orders WHERE id = 'ORD-4'" }),
             say("I can only read from this database, so I cannot delete that order."),
         ],
     },
@@ -470,6 +393,7 @@ const PROBE: Array<{ title: string; ask: string; script: Decision[] }> = [
 
 function check(cond: unknown, msg: string): void {
     if (!cond) throw new Error(`assertion failed: ${msg}`);
+    console.log(`     ✓ ${msg}`);
 }
 
 async function probe(): Promise<number> {
@@ -489,8 +413,8 @@ async function probe(): Promise<number> {
 
         const traced = frames.filter((f) => f.type === "tool_call");
         check(
-            !traced.some((f) => (f.data as { name: string }).name === "list_tables"),
-            "list_tables is never traced (show: false)",
+            !traced.some((f) => (f.data as { name: string }).name === "list-tables-sql"),
+            "list-tables-sql is never traced (show: false)",
         );
 
         if (scenario.title.startsWith("1.")) {
@@ -501,12 +425,20 @@ async function probe(): Promise<number> {
             const chunk = (card as Extract<OutgoingFrame, { type: "genui" }>).chunk;
             const rows = chunk.type === "ui" ? ((chunk.props as { rows?: unknown[] }).rows ?? []) : [];
             check(rows.length === 3, `the card carries 3 rows (got ${rows.length})`);
+            // The toolkit's info-sql is a tool we did not author, and it is traced
+            // like any other — that is the whole claim of this example.
+            check(
+                traced.some((f) => (f.data as { name: string }).name === "info-sql"),
+                "the toolkit's own info-sql is traced without being modified",
+            );
         }
 
         if (scenario.title.startsWith("2.")) {
             const wire = JSON.stringify(traced);
             check(wire.includes("«redacted»"), "the email is masked on the wire");
             check(!wire.includes("grace@example.com"), "the real address never reaches the client");
+            const cardWire = JSON.stringify(frames.filter((f) => f.type === "genui"));
+            check(!cardWire.includes("grace@example.com"), "the card does not carry the address either");
         }
 
         if (scenario.title.startsWith("3.")) {
@@ -522,9 +454,9 @@ async function probe(): Promise<number> {
     }
 
     console.log("\nSQL the script ran:");
-    for (const entry of audit) console.log(`  ${entry.outcome.padEnd(12)} ${truncate(entry.sql.replace(/\s+/g, " "))}`);
+    for (const entry of db.audit) console.log(`  ${entry.outcome.padEnd(12)} ${truncate(entry.sql.replace(/\s+/g, " "))}`);
 
-    console.log("\n✅ probe passed — hidden tool, GenUI table, masking, and error recovery all verified offline");
+    console.log("\n✅ probe passed — a prebuilt toolkit, traced, masked and guarded, all verified offline");
     return 0;
 }
 

@@ -22,7 +22,7 @@
  *         internal_lookup: { show: false },                        // runs, unseen
  *         create_order:    { show: true, redact: ["cardNumber"] }, // shown, masked
  *     });
- *     const agent = createReactAgent({ llm, tools });
+ *     const agent = createAgent({ model, tools }); // langchain v1's entry point
  *     const out = await agent.invoke({ messages: [new HumanMessage(state.input)] });
  *     return { reply: lastText(out) };
  * })

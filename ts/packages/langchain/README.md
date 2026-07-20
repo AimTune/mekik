@@ -18,7 +18,9 @@ import { withMekikTools } from "@mekik/langchain";
         charge:          { show: true, redact: ["cardNumber"] }, // shown, masked
     });
 
-    const agent = createReactAgent({ llm, tools });
+    // `createAgent` from `langchain` v1 — the prebuilt `createReactAgent` it
+    // replaced still works, but it is the legacy entry point.
+    const agent = createAgent({ model, tools });
     const out = await agent.invoke({ messages: [new HumanMessage(state.input)] });
     return { reply: lastText(out) };
 })

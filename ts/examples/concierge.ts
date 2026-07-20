@@ -3,7 +3,7 @@
 // The model is given no routing rules — it picks tools per question, and mixes
 // them when a question needs more than one.
 //
-//   shop      run_query / describe_table / list_tables   → `data-table`
+//   shop      a LangChain-shaped SqlToolkit (query-sql, …)   → `data-table`
 //   refunds   issue_refund                               → `approval-form`, then a write
 //   weather   geocode_city / get_forecast                → `weather-card`
 //
@@ -22,8 +22,6 @@
 // The sandbox in the chativa repo registers all four components, so `--serve`
 // renders end to end.
 
-import { DatabaseSync } from "node:sqlite";
-
 import { channel, graph, END, START } from "@ilmek/core";
 import type { Context } from "@ilmek/core";
 import { ChatAnthropic } from "@langchain/anthropic";
@@ -38,10 +36,15 @@ import type { Connection, OutgoingFrame } from "@mekik/core";
 import { withMekikTools } from "@mekik/langchain";
 import { serveWs } from "@mekik/ws";
 
+import { SqlDatabase, SqlToolkit } from "./lib/sql-toolkit.ts";
+
 // ── the shop database ─────────────────────────────────────────────────────────
 
-const db = new DatabaseSync(":memory:");
-db.exec(`
+// The shop tools are not written here: `lib/sql-toolkit.ts` reproduces
+// LangChain's `SqlToolkit` (dropped in v1), and the concierge wraps its tools
+// alongside its own. One `withMekikTools` call, mixed provenance — the policy
+// map does not care who authored which tool.
+const db = SqlDatabase.fromSchema(`
     CREATE TABLE customers (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, tier TEXT NOT NULL
     );
@@ -67,7 +70,8 @@ db.exec(`
 
 // Counted so the probe can separate two things that look alike on the wire: how
 // many times a tool's *effect* ran, versus how many times its *frames* were sent.
-const sideEffects = { issue_refund: 0, run_query: 0 };
+// (Query executions are counted by the toolkit itself, in `db.audit`.)
+const sideEffects = { issue_refund: 0 };
 
 // ── the weather API (swappable, so the probe never touches the network) ───────
 
@@ -96,76 +100,22 @@ function maskRows(rows: Array<Record<string, unknown>>): Array<Record<string, un
     });
 }
 
-function assertReadOnly(sql: string): void {
-    const trimmed = sql.trim().replace(/;\s*$/, "");
-    if (/;/.test(trimmed)) throw new Error("Send a single statement, without a ';'.");
-    if (!/^(select|with)\b/i.test(trimmed)) {
-        const verb = trimmed.split(/\s+/, 1)[0]?.toUpperCase() ?? "that";
-        throw new Error(
-            `run_query is read-only, so ${verb} is refused. To move money, use issue_refund — it asks the customer first.`,
-        );
-    }
-}
-
 function makeTools(ctx: Context<any>): StructuredToolInterface[] {
-    // ── shop ──────────────────────────────────────────────────────────────────
-    const listTables = tool(
-        () =>
-            (db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as Array<{ name: string }>)
-                .map((r) => r.name)
-                .join(", "),
-        {
-            name: "list_tables",
-            description: "List the shop database's tables. Call this first if you do not know the schema.",
-            schema: z.object({}),
-        },
-    );
-
-    const describeTable = tool(
-        ({ table }) => {
-            const row = db
-                .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?")
-                .get(table) as { sql?: string } | undefined;
-            if (!row?.sql) throw new Error(`No table named ${table}.`);
-            return row.sql;
-        },
-        {
-            name: "describe_table",
-            description: "Show one table's CREATE TABLE statement.",
-            schema: z.object({ table: z.string() }),
-        },
-    );
-
-    const runQuery = tool(
-        ({ sql }) => {
-            sideEffects.run_query++;
-            assertReadOnly(sql);
-            let rows: Array<Record<string, unknown>>;
-            try {
-                rows = db.prepare(sql).all() as Array<Record<string, unknown>>;
-            } catch (err) {
-                throw new Error(`SQLite rejected the query: ${err instanceof Error ? err.message : String(err)}`);
-            }
-            const columns = rows.length > 0 ? Object.keys(rows[0]!) : [];
-            // Masked here as well as by the policy: a `redact` policy covers the
-            // `tool_call` frame mekik emits, never a `genui` chunk a tool emits.
+    // ── shop: the toolkit's tools, untouched ──────────────────────────────────
+    const toolkit = new SqlToolkit(db, {
+        onRows: ({ columns, rows, sql }) => {
+            // Masked here as well as by the policy: `redact` covers the
+            // `tool_call` frame mekik emits, never a `genui` chunk emitted beside it.
             mekik.ui(ctx, "data-table", { columns, rows: maskRows(rows), sql });
-            return { columns, rows };
         },
-        {
-            name: "run_query",
-            description:
-                "Run one read-only SQL query (SELECT or WITH) against the shop database. Money is stored in cents.",
-            schema: z.object({ sql: z.string().describe("A single SELECT statement") }),
-        },
-    );
+    });
 
     // ── refunds ───────────────────────────────────────────────────────────────
     const issueRefund = tool(
         ({ orderId, amountCents }) => {
             sideEffects.issue_refund++;
-            db.prepare("INSERT OR REPLACE INTO refunds VALUES (?, ?, ?)").run(orderId, amountCents, "2026-07-21");
-            db.prepare("UPDATE orders SET status = 'refunded' WHERE id = ?").run(orderId);
+            db.db.prepare("INSERT OR REPLACE INTO refunds VALUES (?, ?, ?)").run(orderId, amountCents, "2026-07-21");
+            db.db.prepare("UPDATE orders SET status = 'refunded' WHERE id = ?").run(orderId);
             return { orderId, refundedDollars: amountCents / 100 };
         },
         {
@@ -233,10 +183,10 @@ function makeTools(ctx: Context<any>): StructuredToolInterface[] {
     // One policy map for every tool the concierge owns. The interesting part is
     // that the three groups get *different* treatment, and the model never has to
     // know: it just calls tools.
-    return withMekikTools(ctx, [listTables, describeTable, runQuery, issueRefund, geocodeCity, getForecast], {
-        list_tables: { show: false },
-        describe_table: { show: true },
-        run_query: { show: true, redact: ["email"] },
+    return withMekikTools(ctx, [...toolkit.getTools(), issueRefund, geocodeCity, getForecast], {
+        "list-tables-sql": { show: false },
+        "info-sql": { show: true },
+        "query-sql": { show: true, redact: ["email"] },
         // The only tool that moves money: park the graph and ask a human.
         issue_refund: {
             show: true,
@@ -253,10 +203,10 @@ function makeTools(ctx: Context<any>): StructuredToolInterface[] {
 
 const SYSTEM = [
     "You are the concierge for an online shop. You can query the shop database, check the weather, and issue refunds.",
-    "You do not know the database schema: discover it with list_tables and describe_table before querying.",
+    "You do not know the database schema: discover it with list-tables-sql and info-sql before querying.",
     "Money is stored in cents — convert to dollars when you report it.",
     "get_forecast needs coordinates, so resolve places with geocode_city first.",
-    "run_query is read-only; to refund, call issue_refund, which asks the customer for approval first.",
+    "query-sql is read-only; to refund, call issue_refund, which asks the customer for approval first.",
     "Some questions need more than one of these — use as many tools as the question actually requires.",
     "Answer in one or two short sentences; tables and forecasts are already shown to the user as cards.",
 ].join(" ");
@@ -463,10 +413,10 @@ const PROBE: Array<{ title: string; ask: string; script: Decision[]; approve?: b
         title: "1. analytics — routed to the database",
         ask: "Which customer has spent the most with us?",
         script: [
-            callTool(["list_tables", {}]),
-            callTool(["describe_table", { table: "orders" }]),
+            callTool(["list-tables-sql", {}]),
+            callTool(["info-sql", { tables: "orders,customers" }]),
             callTool([
-                "run_query",
+                "query-sql",
                 {
                     sql: "SELECT c.name, SUM(o.total_cents)/100.0 AS dollars FROM customers c " +
                         "JOIN orders o ON o.customer_id = c.id GROUP BY c.id ORDER BY dollars DESC LIMIT 3",
@@ -489,7 +439,7 @@ const PROBE: Array<{ title: string; ask: string; script: Decision[]; approve?: b
         ask: "ORD-3 arrived damaged — please refund it.",
         approve: true,
         script: [
-            callTool(["run_query", { sql: "SELECT id, total_cents FROM orders WHERE id = 'ORD-3'" }]),
+            callTool(["query-sql", { sql: "SELECT id, total_cents FROM orders WHERE id = 'ORD-3'" }]),
             callTool(["issue_refund", { orderId: "ORD-3", amountCents: 62430 }]),
             say("Refunded $624.30 for ORD-3."),
         ],
@@ -500,7 +450,7 @@ const PROBE: Array<{ title: string; ask: string; script: Decision[]; approve?: b
         script: [
             // The database and the weather API, in a single assistant turn.
             callTool(
-                ["run_query", { sql: "SELECT id, status, ships_to FROM orders WHERE id = 'ORD-3'" }],
+                ["query-sql", { sql: "SELECT id, status, ships_to FROM orders WHERE id = 'ORD-3'" }],
                 ["geocode_city", { city: "Berlin" }],
             ),
             callTool(["get_forecast", BERLIN]),
@@ -547,7 +497,7 @@ async function probe(): Promise<number> {
         // Hidden tools stay hidden no matter which group they belong to.
         const traced = frames.filter((f) => f.type === "tool_call");
         check(
-            !traced.some((f) => ["list_tables", "geocode_city"].includes((f.data as { name: string }).name)),
+            !traced.some((f) => ["list-tables-sql", "geocode_city"].includes((f.data as { name: string }).name)),
             "no hidden tool reaches the wire, in any group",
         );
 
@@ -564,7 +514,7 @@ async function probe(): Promise<number> {
         if (scenario.approve) {
             const interrupt = frames.find((f) => f.type === "interrupt");
             check(interrupt, "the refund parks the graph with an interrupt");
-            const queriesBefore = sideEffects.run_query;
+            const queriesBefore = db.audit.length;
             const ui = (interrupt as Extract<OutgoingFrame, { type: "interrupt" }>).data.ui;
             check(ui?.component === "approval-form", "the interrupt mounts approval-form");
             check(sideEffects.issue_refund === 0, "nothing was written before the human answered");
@@ -582,21 +532,21 @@ async function probe(): Promise<number> {
 
             // Worth being precise about, because the two halves diverge here.
             // Resuming replays the node from the top: the journal returns
-            // run_query's recorded rows without touching SQLite (the effect is
+            // query-sql's recorded rows without touching SQLite (the effect is
             // exactly-once), but the wrapper's trace emission is not journaled,
-            // so the client is sent a SECOND pair of run_query frames for a
+            // so the client is sent a SECOND pair of query-sql frames for a
             // query that never ran again. Effects are deduplicated; frames are
             // not. A UI that renders each tool_call as a row will show it twice.
             check(
-                sideEffects.run_query === queriesBefore,
-                `the replayed query did not re-execute (still ${sideEffects.run_query})`,
+                db.audit.length === queriesBefore,
+                `the replayed query did not re-execute (still ${db.audit.length})`,
             );
             check(
-                frames.filter((f) => f.type === "tool_call" && (f.data as { name: string }).name === "run_query")
+                frames.filter((f) => f.type === "tool_call" && (f.data as { name: string }).name === "query-sql")
                     .length > 0,
                 "…but its frames ARE re-emitted on the replay pass",
             );
-            const refunded = db.prepare("SELECT status FROM orders WHERE id = 'ORD-3'").get() as { status: string };
+            const refunded = db.db.prepare("SELECT status FROM orders WHERE id = 'ORD-3'").get() as { status: string };
             check(refunded.status === "refunded", "and the row really changed");
         }
 
