@@ -31,6 +31,20 @@ public static class Shuttle
         return $"{(string.IsNullOrEmpty(ctx.TaskId) ? "task" : ctx.TaskId)}:tool:{n}";
     }
 
+    /// <summary>
+    /// Emit one `tool_call` frame. The low-level primitive behind <see cref="Tool{T}"/>,
+    /// public so an integration that does its own execution (e.g. Mekik.Agents,
+    /// where the model invokes the function) can still produce the same trace
+    /// without re-deriving the reserved <c>$mekik</c> payload shape. Traces upsert
+    /// by <c>call["id"]</c>, so re-emitting the same id is how a
+    /// running→completed pair is expressed.
+    /// </summary>
+    public static void ToolTrace(IContext ctx, IReadOnlyDictionary<string, object?> call) =>
+        ctx.Emit(new Dictionary<string, object?> { [MekikKey] = "tool", ["call"] = call });
+
+    /// <summary>Mint a replay-stable `tool_call` id for this ctx. See <see cref="ToolTrace"/>.</summary>
+    public static string NextToolCallId(IContext ctx) => NextToolId(ctx);
+
     private static void EmitChunk(IContext ctx, Dictionary<string, object?> chunk) =>
         ctx.Emit(new Dictionary<string, object?> { [MekikKey] = "genui", ["chunk"] = chunk });
 
@@ -62,7 +76,7 @@ public static class Shuttle
     public static async ValueTask<T> Tool<T>(IContext ctx, string name, IReadOnlyDictionary<string, object?> @params, Func<ValueTask<T>> fn)
     {
         var id = NextToolId(ctx);
-        void EmitTool(Dictionary<string, object?> call) => ctx.Emit(new Dictionary<string, object?> { [MekikKey] = "tool", ["call"] = call });
+        void EmitTool(Dictionary<string, object?> call) => ToolTrace(ctx, call);
 
         EmitTool(new Dictionary<string, object?> { ["id"] = id, ["name"] = name, ["status"] = "running", ["params"] = @params });
         try

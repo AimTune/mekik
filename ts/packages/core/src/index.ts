@@ -48,6 +48,10 @@ export type { IdMinter, TurnMapperDeps } from "./mapper.ts";
 export { approve, event, text, tool, ui } from "./helpers.ts";
 export type { ApproveOptions } from "./helpers.ts";
 
+// Low-level trace primitives, for integrations that execute tools themselves
+// (see @mekik/langchain).
+export { nextToolCallId, toolTrace } from "./helpers.ts";
+
 export {
     AUTH_CLOSE_CODE,
     canonicalize,

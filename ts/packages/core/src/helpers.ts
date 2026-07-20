@@ -47,6 +47,22 @@ export function event(ctx: Context<any>, name: string, payload?: unknown): void 
 }
 
 /**
+ * Emit one `tool_call` frame. The low-level primitive behind `tool()`, exported
+ * so an integration that does its own execution (e.g. `@mekik/langchain`, where
+ * the agent invokes the tool) can still produce the same trace without
+ * re-deriving the reserved `$mekik` payload shape. Traces upsert by `call.id`,
+ * so re-emitting the same id is how a running→completed pair is expressed.
+ */
+export function toolTrace(ctx: Context<any>, call: ToolCall): void {
+    ctx.emit({ [MEKIK_KEY]: "tool", call });
+}
+
+/** Mint a replay-stable `tool_call` id for this ctx. See `toolTrace`. */
+export function nextToolCallId(ctx: Context<any>): string {
+    return nextToolId(ctx);
+}
+
+/**
  * Run a tool exactly once (journaled by `ctx.step`) and emit its `tool_call`
  * running→completed/error trace. The side effect is memoized across an
  * interrupt-replay; the trace, being an upsert by id, re-emits harmlessly.
@@ -58,7 +74,7 @@ export async function tool<T>(
     fn: () => T | Promise<T>,
 ): Promise<T> {
     const id = nextToolId(ctx);
-    const emitTool = (call: ToolCall): void => ctx.emit({ [MEKIK_KEY]: "tool", call });
+    const emitTool = (call: ToolCall): void => toolTrace(ctx, call);
 
     emitTool({ id, name, status: "running", params });
     try {
