@@ -1,0 +1,49 @@
+{
+  "name": "@mekik/core",
+  "version": "0.1.0",
+  "description": "mekik core — the realtime serving layer for ilmek graphs: WebSocket sessions, streaming generative UI, and durable human-in-the-loop over the mekik/1 wire protocol.",
+  "type": "module",
+  "license": "MIT",
+  "author": "AimTune",
+  "homepage": "https://github.com/AimTune/mekik/tree/main/ts/packages/core#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AimTune/mekik.git",
+    "directory": "ts/packages/core"
+  },
+  "bugs": "https://github.com/AimTune/mekik/issues",
+  "keywords": [
+    "ilmek",
+    "agent",
+    "realtime",
+    "websocket",
+    "genui",
+    "human-in-the-loop",
+    "chativa",
+    "llm"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "node --test test/*.test.ts",
+    "gen:fixtures": "node scripts/gen-fixtures.ts"
+  },
+  "dependencies": {
+    "@ilmek/core": "^0.1.1"
+  }
+}

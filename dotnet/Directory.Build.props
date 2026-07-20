@@ -1,0 +1,24 @@
+<Project>
+
+  <!-- Shared package metadata for every project under dotnet/. Test and example
+       projects set IsPackable=false, so this is inert for them. -->
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>AimTune</Authors>
+    <Company>AimTune</Company>
+    <Product>mekik</Product>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/AimTune/mekik</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/AimTune/mekik.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>ilmek;agent;realtime;websocket;genui;human-in-the-loop;chativa</PackageTags>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- Reproducible, source-linked builds when packed in CI. -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+</Project>

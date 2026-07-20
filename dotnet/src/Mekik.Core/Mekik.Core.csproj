@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- CS1591 would demand a doc comment on every record positional parameter.
+         The types that carry meaning are documented; this keeps the signal. -->
+    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
+    <RootNamespace>Mekik</RootNamespace>
+    <AssemblyName>Mekik.Core</AssemblyName>
+    <Description>mekik core — the realtime serving layer for ilmek graphs: WebSocket sessions, streaming generative UI, and durable human-in-the-loop over the mekik/1 wire protocol.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- mekik builds on ilmek (PROTOCOL.md §5), consumed from NuGet. -->
+    <PackageReference Include="Ilmek.Core" Version="0.1.0" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

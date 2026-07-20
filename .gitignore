@@ -1,0 +1,44 @@
+# ── Node / TypeScript ─────────────────────────────────────────────────────────
+node_modules/
+dist/
+*.tsbuildinfo
+.pnpm-store/
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+# ── .NET ──────────────────────────────────────────────────────────────────────
+bin/
+obj/
+*.user
+[Bb]in/
+[Oo]bj/
+.vs/
+
+# ── SQLite (ilmek checkpointer files a demo may create) ───────────────────────
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# ── Editors / OS ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+# Keep committed VS Code config, ignore local overrides
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# ── Env / secrets ─────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Logs / coverage ───────────────────────────────────────────────────────────
+*.log
+coverage/
+.nyc_output/

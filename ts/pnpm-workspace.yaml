@@ -1,0 +1,5 @@
+packages:
+  - "packages/*"
+  - "examples"
+minimumReleaseAgeExclude:
+  - '@ilmek/core@0.1.1'

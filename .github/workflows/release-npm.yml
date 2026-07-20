@@ -1,0 +1,53 @@
+name: Release (npm)
+
+# Publishes the @mekik/* packages to npm. Trigger with the same `v*` tag as the
+# NuGet release; a separate file so it versions and fails independently.
+#
+# Auth: npm trusted publishing (OIDC) — no token stored. Each package needs a
+# trusted-publisher policy on npmjs.com bound to owner AimTune, repo mekik, and
+# this file (release-npm.yml); keep the filename in sync with those policies.
+# Trusted publishing also generates provenance automatically, so neither the
+# --provenance flag nor NPM_CONFIG_PROVENANCE is needed here.
+#
+# pnpm is pinned to 10 deliberately: OIDC publishing regressed in pnpm 11
+# (pnpm/pnpm#11513). Verify that issue is fixed before bumping the major.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # npm trusted publishing / provenance
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ts/pnpm-lock.yaml
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      # Never publish something that does not build or pass its tests.
+      - run: pnpm check
+
+      # Publishes every non-private workspace package in dependency order,
+      # rewriting workspace:* to real versions. Already-published versions are
+      # skipped, so a re-run after a partial failure is safe. (ts/examples is
+      # marked private and is not published.)
+      - name: pnpm publish
+        run: pnpm -r publish --access public --no-git-checks

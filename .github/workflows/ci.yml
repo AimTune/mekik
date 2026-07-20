@@ -1,0 +1,75 @@
+name: CI
+
+# Build and test both implementations on every push and PR. The two suites are
+# held to one wire by the shared golden fixtures in conformance/fixtures, which
+# each language replays through its own eventToFrames — so a divergence between
+# TypeScript and .NET shows up here as a red job, not as a bug in production.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ts:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          # Tests and examples are run as .ts directly via Node's type stripping,
+          # which needs a recent Node (and tsconfig's erasableSyntaxOnly keeps the
+          # source strippable). Type stripping does NOT typecheck — the build
+          # (real tsc) is what proves the types.
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ts/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      # build → test (fixtures + scenarios) → refund example self-test.
+      - run: pnpm check
+
+      # Prove every publishable package still produces a valid tarball, and that
+      # workspace:* deps rewrite to real versions — the failure mode a plain test
+      # run would miss.
+      - name: pack (dry-run publish artifacts)
+        run: |
+          pnpm -r --filter "./packages/**" exec pnpm pack --pack-destination "$RUNNER_TEMP/tgz"
+          ls -la "$RUNNER_TEMP/tgz"
+
+  dotnet:
+    name: .NET
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dotnet
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - run: dotnet restore Mekik.slnx
+      - run: dotnet build Mekik.slnx -c Release --no-restore
+      # ConformanceTests replays conformance/fixtures/*.json — the same files the
+      # TypeScript suite runs — and compares canonical JSON byte-for-byte.
+      - run: dotnet test Mekik.slnx -c Release --no-build --verbosity normal
+
+      # Same idea as the TS pack step: prove the libraries still produce valid
+      # NuGet packages, with dependencies wired, before a release ever runs.
+      - name: pack (dry-run publish artifacts)
+        run: dotnet pack Mekik.slnx -c Release --no-build -o "$RUNNER_TEMP/nupkg" && ls -la "$RUNNER_TEMP/nupkg"

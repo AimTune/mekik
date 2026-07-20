@@ -1,0 +1,48 @@
+{
+  "name": "@mekik/ws",
+  "version": "0.1.0",
+  "description": "WebSocket transport for mekik — serve a MekikApp over the mekik/1 wire protocol.",
+  "type": "module",
+  "license": "MIT",
+  "author": "AimTune",
+  "homepage": "https://github.com/AimTune/mekik/tree/main/ts/packages/ws#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AimTune/mekik.git",
+    "directory": "ts/packages/ws"
+  },
+  "bugs": "https://github.com/AimTune/mekik/issues",
+  "keywords": [
+    "mekik",
+    "websocket",
+    "ws",
+    "realtime",
+    "transport"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@mekik/core": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.0"
+  }
+}

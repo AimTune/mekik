@@ -1,0 +1,19 @@
+{
+  "name": "@mekik/workspace",
+  "private": true,
+  "type": "module",
+  "description": "mekik - the realtime serving layer for ilmek graphs. TypeScript workspace root.",
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "typecheck": "tsc -b",
+    "test": "pnpm -r --filter \"./packages/**\" test",
+    "test:core": "node --test packages/core/test/*.test.ts",
+    "check": "pnpm build && pnpm test && node examples/refund.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "@types/node": "^24.0.0"
+  },
+  "license": "MIT"
+}

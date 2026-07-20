@@ -1,0 +1,53 @@
+name: Release (NuGet)
+
+# Publishes Mekik.Core and Mekik.AspNetCore to nuget.org via NuGet trusted
+# publishing (OIDC) — no API key stored. Trigger by pushing a version tag after
+# bumping <Version> in dotnet/Directory.Build.props:
+#
+#     git tag v0.2.0 && git push origin v0.2.0
+#
+# The NuGet trusted-publishing policy is bound to this file path (release.yml),
+# owner aimtune, repo aimtune/mekik — keep the name in sync with the policy.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # NuGet/login exchanges this OIDC token for a short-lived key
+
+jobs:
+  nuget:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dotnet
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      # Never publish something that does not build or pass its tests.
+      - run: dotnet restore Mekik.slnx
+      - run: dotnet build Mekik.slnx -c Release --no-restore
+      - run: dotnet test Mekik.slnx -c Release --no-build
+
+      - run: dotnet pack Mekik.slnx -c Release --no-build -o "${{ runner.temp }}/nupkg"
+
+      # Trusted publishing: mint a short-lived API key from the OIDC token. The
+      # `user` is the nuget.org package owner the policy names.
+      - name: NuGet login (OIDC)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: aimtune
+
+      - name: Push packages
+        run: >
+          dotnet nuget push "${{ runner.temp }}/nupkg/*.nupkg"
+          --api-key "${{ steps.login.outputs.NUGET_API_KEY }}"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate

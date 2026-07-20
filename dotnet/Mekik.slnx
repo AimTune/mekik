@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="src/Mekik.Core/Mekik.Core.csproj" />
+  <Project Path="src/Mekik.AspNetCore/Mekik.AspNetCore.csproj" />
+  <Project Path="test/Mekik.Core.Tests/Mekik.Core.Tests.csproj" />
+  <Project Path="examples/Mekik.Examples/Mekik.Examples.csproj" />
+</Solution>
