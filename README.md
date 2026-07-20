@@ -1,5 +1,7 @@
 # mekik
 
+[![CI](https://github.com/AimTune/mekik/actions/workflows/ci.yml/badge.svg)](https://github.com/AimTune/mekik/actions/workflows/ci.yml)
+
 **The realtime serving layer for [ilmek](https://www.npmjs.com/package/@ilmek/core) graphs.** mekik turns a
 running ilmek graph into a live conversation: a client (the [chativa](https://github.com/AimTune/chativa)
 widget) sends user turns and interrupt answers over a WebSocket; the server drives
@@ -103,11 +105,11 @@ dotnet test Mekik.slnx                       # conformance: same fixtures, canon
 dotnet run --project examples/Mekik.Examples
 ```
 
-> Status: the TypeScript side is built and green (golden fixtures + behavioural
-> scenarios + the ws transport verified over a real socket). The .NET side is
-> written to mirror it; CI is what compiles and verifies it — the conformance
-> suite there replays the shared golden fixtures and is what proves the two
-> languages produce the identical wire.
+Both sides are green in [CI](../../actions): TypeScript builds, passes the golden
+fixtures and behavioural scenarios, and runs the refund self-test; .NET builds and
+replays the **same** golden fixtures through its own `EventToFrames`, comparing
+canonical JSON byte-for-byte. That cross-language fixture run is what proves the
+two implementations produce the identical wire.
 
 ## The protocol in one screen
 
