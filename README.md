@@ -73,12 +73,17 @@ mekik/
   ts/
     packages/core/       # @mekik/core — protocol, mapper, engine, helpers, stores, auth
     packages/ws/         # @mekik/ws — WebSocket transport
+    packages/langchain/  # @mekik/langchain — wrap an agent's tools
     examples/refund.ts   # showcase: tool + GenUI + form approval + resume
+    examples/llm-agent.ts # the same desk, driven by a real Claude model
   dotnet/
-    src/Mekik.Core/         # mirror of @mekik/core
-    src/Mekik.AspNetCore/   # app.MapMekik("/ws", app)
-    test/Mekik.Core.Tests/  # loads the SAME fixtures
-    examples/Mekik.Examples # mirror of the refund showcase
+    src/Mekik.Core/            # mirror of @mekik/core
+    src/Mekik.AspNetCore/      # app.MapMekik("/ws", app)
+    src/Mekik.Agents/          # Microsoft.Extensions.AI function wrapping
+    src/Mekik.SemanticKernel/  # one filter covers SK agents and planners
+    test/Mekik.Core.Tests/     # loads the SAME fixtures
+    examples/Mekik.Examples    # mirror of the refund showcase
+    examples/Mekik.LlmAgent    # mirror of the LLM-driven desk
 ```
 
 mekik depends on ilmek as a published package — [`@ilmek/core`](https://www.npmjs.com/package/@ilmek/core)
@@ -101,6 +106,17 @@ node examples/refund.ts --serve              # a real ws://localhost:8800 server
 cd dotnet
 dotnet test Mekik.slnx                       # conformance: same fixtures, canonical compare
 dotnet run --project examples/Mekik.Examples
+```
+
+**With a real model.** The two `llm-agent` examples run the same refund desk with
+nothing scripted: Claude reads the message and picks the tools itself, while mekik
+surfaces each call, gates the refund behind a human, and journals both so a
+resume never charges twice. They call the live API, so they need a key and are
+kept out of the CI test path (CI still compiles them):
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-… node ts/examples/llm-agent.ts
+ANTHROPIC_API_KEY=sk-ant-… dotnet run --project dotnet/examples/Mekik.LlmAgent
 ```
 
 Both sides are green in [CI](../../actions): TypeScript builds, passes the golden

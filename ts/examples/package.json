@@ -3,16 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "mekik examples — a refund-approval agent served over the mekik/1 protocol.",
+  "description": "mekik examples — a refund-approval agent served over the mekik/1 protocol, scripted and LLM-driven.",
   "scripts": {
     "selftest": "node refund.ts",
-    "serve": "node refund.ts --serve"
+    "serve": "node refund.ts --serve",
+    "llm": "node llm-agent.ts",
+    "llm:serve": "node llm-agent.ts --serve"
   },
   "dependencies": {
     "@mekik/core": "workspace:*",
+    "@mekik/langchain": "workspace:*",
     "@mekik/ws": "workspace:*",
     "@ilmek/core": "^0.1.1",
-    "ws": "^8.18.0"
+    "@langchain/anthropic": "^1.0.0",
+    "@langchain/core": "^1.2.3",
+    "ws": "^8.18.0",
+    "zod": "^3.25.0"
   },
   "license": "MIT"
 }

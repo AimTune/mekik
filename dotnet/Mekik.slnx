@@ -7,4 +7,5 @@
   <Project Path="test/Mekik.Agents.Tests/Mekik.Agents.Tests.csproj" />
   <Project Path="test/Mekik.SemanticKernel.Tests/Mekik.SemanticKernel.Tests.csproj" />
   <Project Path="examples/Mekik.Examples/Mekik.Examples.csproj" />
+  <Project Path="examples/Mekik.LlmAgent/Mekik.LlmAgent.csproj" />
 </Solution>
