@@ -1,6 +1,10 @@
 <Solution>
   <Project Path="src/Mekik.Core/Mekik.Core.csproj" />
   <Project Path="src/Mekik.AspNetCore/Mekik.AspNetCore.csproj" />
+  <Project Path="src/Mekik.Agents/Mekik.Agents.csproj" />
+  <Project Path="src/Mekik.SemanticKernel/Mekik.SemanticKernel.csproj" />
   <Project Path="test/Mekik.Core.Tests/Mekik.Core.Tests.csproj" />
+  <Project Path="test/Mekik.Agents.Tests/Mekik.Agents.Tests.csproj" />
+  <Project Path="test/Mekik.SemanticKernel.Tests/Mekik.SemanticKernel.Tests.csproj" />
   <Project Path="examples/Mekik.Examples/Mekik.Examples.csproj" />
 </Solution>
