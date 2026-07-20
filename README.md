@@ -28,8 +28,7 @@ strings, and whose interrupts were a `text`+chips convention answered by "the ne
 user message." mekik/1 fixes those: it is **ilmek-native** (consumes ilmek's
 typed event stream — no error-sniffing), interrupts are **first-class frames**
 answered by thread-scoped id (concurrent pauses can't collapse), and parity is
-**two languages checked by golden fixtures**, not four checked by hope. See
-[`PLAN.md`](PLAN.md) for the full rationale.
+**two languages checked by golden fixtures**, not four checked by hope.
 
 ## Quickstart (TypeScript)
 
@@ -65,7 +64,6 @@ node-authoring helpers (`mekik.ui`, `mekik.tool`, `mekik.approve`, …).
 ```
 mekik/
   PROTOCOL.md            # normative mekik/1 wire spec
-  PLAN.md                # design rationale & milestones
   conformance/
     README.md            # language-neutral scenario list
     fixtures/*.json      # golden event→frame fixtures (shared by both suites)

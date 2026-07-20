@@ -42,3 +42,6 @@ Thumbs.db
 *.log
 coverage/
 .nyc_output/
+
+# Internal planning doc — kept locally, not published
+PLAN.md
