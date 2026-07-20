@@ -9,4 +9,5 @@
   <Project Path="examples/Mekik.Examples/Mekik.Examples.csproj" />
   <Project Path="examples/Mekik.LlmAgent/Mekik.LlmAgent.csproj" />
   <Project Path="examples/Mekik.SqlAgent/Mekik.SqlAgent.csproj" />
+  <Project Path="examples/Mekik.WeatherAgent/Mekik.WeatherAgent.csproj" />
 </Solution>

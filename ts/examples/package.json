@@ -11,7 +11,10 @@
     "llm:serve": "node llm-agent.ts --serve",
     "sql": "node sql-agent.ts",
     "sql:probe": "node sql-agent.ts --probe",
-    "sql:serve": "node sql-agent.ts --serve"
+    "sql:serve": "node sql-agent.ts --serve",
+    "weather": "node weather-agent.ts",
+    "weather:probe": "node weather-agent.ts --probe",
+    "weather:serve": "node weather-agent.ts --serve"
   },
   "dependencies": {
     "@mekik/core": "workspace:*",

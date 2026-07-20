@@ -183,16 +183,15 @@ IReadOnlyList<AIFunction> MakeSqlTools(IContext ctx)
 // tools and the wire can be exercised offline. Everything downstream is identical.
 Func<IReadOnlyList<AIFunction>, List<ChatMessage>, int, Task<Dictionary<string, object?>>> decide = AskClaudeAsync;
 
-IChatClient? chat = null;
 // Built lazily so `--probe` never constructs the client, which would demand a key
 // it does not need.
-IChatClient Model() => chat ??= new AnthropicClient()
-    .AsIChatClient("claude-opus-4-8", defaultMaxOutputTokens: 2048);
+var chat = new Lazy<IChatClient>(() => new AnthropicClient()
+    .AsIChatClient("claude-opus-4-8", defaultMaxOutputTokens: 2048));
 
 async Task<Dictionary<string, object?>> AskClaudeAsync(
     IReadOnlyList<AIFunction> tools, List<ChatMessage> messages, int turn)
 {
-    var response = await Model().GetResponseAsync(messages, new ChatOptions { Tools = [.. tools] });
+    var response = await chat.Value.GetResponseAsync(messages, new ChatOptions { Tools = [.. tools] });
     var calls = response.Messages
         .SelectMany(m => m.Contents)
         .OfType<FunctionCallContent>()
@@ -229,7 +228,8 @@ var analyst = Graph.Create("sql-analyst")
             // an interrupt would re-ask the same question — paying for it again
             // and possibly getting different calls, which would desync the
             // replayed step keys.
-            var decision = await ctx.StepAsync($"llm:{turn}", () => decide(tools, messages, turn));
+            var decision = await ctx.StepAsync<Dictionary<string, object?>>(
+                $"llm:{turn}", () => decide(tools, messages, turn));
 
             var text = decision.GetValueOrDefault("text") as string ?? "";
             var calls = ((IEnumerable<object?>)(decision.GetValueOrDefault("calls") ?? new List<object?>()))
