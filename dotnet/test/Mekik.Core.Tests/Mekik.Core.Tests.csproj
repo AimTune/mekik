@@ -19,6 +19,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The golden fixtures are shared with the TypeScript suite and live at the
+         repo root. Copy them next to the test assembly and resolve from
+         AppContext.BaseDirectory: a [CallerFilePath] would break in CI, where
+         deterministic builds rewrite source paths to /_/. -->
+    <Content Include="../../../conformance/fixtures/*.json"
+             Link="fixtures/%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
 

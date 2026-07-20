@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using Mekik;
 using Ilmek;
 
@@ -105,6 +104,10 @@ public class ConformanceTests
         };
     }
 
-    private static string FixturesDir([CallerFilePath] string thisFile = "") =>
-        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(thisFile)!, "../../../conformance/fixtures"));
+    /// <summary>
+    /// The shared golden fixtures, copied next to the test assembly by the csproj.
+    /// Resolved from the output directory rather than the source path, because a
+    /// deterministic CI build rewrites source paths to <c>/_/</c>.
+    /// </summary>
+    private static string FixturesDir() => Path.Combine(AppContext.BaseDirectory, "fixtures");
 }
