@@ -21,6 +21,10 @@
 //
 // The sandbox in the chativa repo registers all four components, so `--serve`
 // renders end to end.
+//
+// This is the single-node shape: one node, every tool, the model routes by
+// choosing among them. `routed-desk.ts` is the same desk as a real graph —
+// a router node, one node per domain, and the pause as its own node.
 
 import { channel, graph, END, START } from "@ilmek/core";
 import type { Context } from "@ilmek/core";
@@ -532,6 +536,8 @@ async function probe(): Promise<number> {
 
             // Worth being precise about, because the two halves diverge here.
             // Resuming replays the node from the top: the journal returns
+            // (routed-desk.ts is the same desk with the pause split into its own
+            // node, which avoids this entirely — see its scenario 4.)
             // query-sql's recorded rows without touching SQLite (the effect is
             // exactly-once), but the wrapper's trace emission is not journaled,
             // so the client is sent a SECOND pair of query-sql frames for a

@@ -17,7 +17,10 @@
     "weather:serve": "node weather-agent.ts --serve",
     "concierge": "node concierge.ts",
     "concierge:probe": "node concierge.ts --probe",
-    "concierge:serve": "node concierge.ts --serve"
+    "concierge:serve": "node concierge.ts --serve",
+    "routed": "node routed-desk.ts",
+    "routed:probe": "node routed-desk.ts --probe",
+    "routed:serve": "node routed-desk.ts --serve"
   },
   "dependencies": {
     "@mekik/core": "workspace:*",

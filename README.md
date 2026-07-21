@@ -78,7 +78,8 @@ mekik/
     examples/llm-agent.ts # the same desk, driven by a real Claude model
     examples/sql-agent.ts # a model writing its own SQL over SQLite
     examples/weather-agent.ts # chained network tools, fan-out, recovery
-    examples/concierge.ts # all three tool groups in one agent
+    examples/concierge.ts # all three tool groups in one agent (single node)
+    examples/routed-desk.ts # the same desk as a real graph: router + per-domain nodes
   dotnet/
     src/Mekik.Core/            # mirror of @mekik/core
     src/Mekik.AspNetCore/      # app.MapMekik("/ws", app)
@@ -121,7 +122,8 @@ kept out of the CI test path (CI still compiles them):
 ANTHROPIC_API_KEY=sk-ant-… node ts/examples/llm-agent.ts       # refunds
 ANTHROPIC_API_KEY=sk-ant-… node ts/examples/sql-agent.ts       # SQL over SQLite
 ANTHROPIC_API_KEY=sk-ant-… node ts/examples/weather-agent.ts   # a public HTTP API
-ANTHROPIC_API_KEY=sk-ant-… node ts/examples/concierge.ts       # all of the above, one agent
+ANTHROPIC_API_KEY=sk-ant-… node ts/examples/concierge.ts       # all of the above, one node
+ANTHROPIC_API_KEY=sk-ant-… node ts/examples/routed-desk.ts     # the same, as a routed graph
 ANTHROPIC_API_KEY=sk-ant-… dotnet run --project dotnet/examples/Mekik.LlmAgent
 ```
 
@@ -138,6 +140,15 @@ dotnet run --project dotnet/examples/Mekik.SqlAgent -- --probe
 The GenUI components these emit — `data-table`, `weather-card`, `approval-form`,
 `order-card` — are registered in chativa's sandbox, so `--serve` renders end to
 end against a real client.
+
+**One node or many?** `concierge.ts` and `routed-desk.ts` are the same desk built
+both ways, and the pair is the argument for ilmek being a graph rather than a
+loop. The routed version classifies the turn in a router node, gives each domain
+its own node with only its own tools, and makes the human-in-the-loop pause a
+node of its own. That last split has a consequence you can see on the wire:
+resuming replays **one node**, so the lookup that ran before the pause is neither
+re-run nor re-emitted — where the single-node version re-sends its `tool_call`
+frames for a query that never ran again. Both probes assert their own behaviour.
 
 Both sides are green in [CI](../../actions): TypeScript builds, passes the golden
 fixtures and behavioural scenarios, and runs the refund self-test; .NET builds and
