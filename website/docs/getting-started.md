@@ -15,11 +15,28 @@ This page takes you from an empty folder to a running mekik server that streams 
 
 ## Step 1 — Install
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```bash
 pnpm add @mekik/core @mekik/ws @ilmek/core
 ```
 
-`@mekik/core` is the engine, mapper, helpers, stores, and auth port. `@mekik/ws` is the WebSocket transport. `@ilmek/core` is the graph runtime mekik serves — it's a peer you already depend on to author graphs.
+`@mekik/core` is the engine, mapper, helpers, stores, and auth port. `@mekik/ws` is the WebSocket transport. `@ilmek/core` is the graph runtime mekik serves — a peer you already depend on to author graphs.
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```bash
+dotnet add package Mekik.Core
+dotnet add package Mekik.AspNetCore
+dotnet add package Ilmek.Core
+```
+
+`Mekik.Core` is the engine, mapper, helpers, stores, and auth port. `Mekik.AspNetCore` is the ASP.NET Core WebSocket transport. `Ilmek.Core` is the graph runtime mekik serves.
+
+</TabItem>
+</Tabs>
 
 ## Step 2 — Serve a graph
 
@@ -99,12 +116,16 @@ That's the whole loop. Everything below adds richer frames to it.
 
 The three authoring helpers are the reason to use mekik over a raw socket. Here's a node that uses all three:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 import { mekik } from "@mekik/core";
 
 // inside .node("refund", async (s, ctx) => { ... })
-const order = await mekik.tool(ctx, "get_order", { id: s.input }, () =>
-  Orders.get(s.input),                              // ← runs exactly once, journaled
+const id = s.input as string;
+const order = await mekik.tool(ctx, "get_order", { id }, () =>
+  Orders.get(id),                                    // ← runs exactly once, journaled
 );
 
 mekik.ui(ctx, "order-card", { id: order.id, total: order.total }); // ← stream a component
@@ -117,6 +138,36 @@ const ok = await mekik.approve<{ approved: boolean }>(              // ← pause
 
 return { reply: ok.approved ? "Refunded." : "Cancelled." };
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+using Mekik;
+
+// inside .Node("refund", async (State s, IContext ctx) => { ... })
+var id = s.Get<string>("input");
+var order = (Order)(await Shuttle.Tool(ctx, "get_order",            // ← runs exactly once, journaled
+    new Dictionary<string, object?> { ["id"] = id },
+    () => (object?)Orders.Get(id)))!;
+
+Shuttle.Ui(ctx, "order-card",                                       // ← stream a component
+    new Dictionary<string, object?> { ["id"] = order.Id, ["total"] = order.Total });
+
+var ok = await Shuttle.Approve<Dictionary<string, object?>>(        // ← pause for a human
+    ctx,
+    new Dictionary<string, object?> { ["title"] = $"Refund {order.Total}?" },
+    ui: new Dictionary<string, object?>
+    {
+        ["component"] = "approval-form",
+        ["props"] = new Dictionary<string, object?> { ["orderId"] = order.Id },
+    });
+
+return Update.Of("reply", ok.GetValueOrDefault("approved") is true ? "Refunded." : "Cancelled.");
+```
+
+</TabItem>
+</Tabs>
 
 Each helper maps to a frame on the wire:
 
@@ -133,6 +184,9 @@ The **exactly-once** guarantee is the point of `mekik.tool`: because a paused no
 
 `mekik(options)` takes a handful of options; all but `graph` have sensible defaults.
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 const app = mekik({
   graph: g,
@@ -148,11 +202,33 @@ const app = mekik({
 
   // A one-time bot message when a fresh conversation first connects.
   greeting: (conv) => "Hi! Send an order number to start a refund.",
-
-  // Opt in to connect-time auth (see the Authentication guide).
-  authenticator: undefined,
 });
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+var app = new MekikApp(new MekikOptions
+{
+    Graph = g,
+
+    // Map an inbound text turn to the graph's input update. Default: { input = text }.
+    Input = f => Update.Of("input", ((IReadOnlyDictionary<string, object?>)f["data"]!)["text"]),
+
+    // Pick the run's consolidated reply text from final channel state.
+    Reply = state => state.GetValueOrDefault("reply") as string,
+
+    // Per-turn server context, placed at ctx.Meta["mekik"] for nodes to read.
+    Context = (conv, turn) => new Dictionary<string, object?> { ["userId"] = conv.UserId, ["locale"] = "en" },
+
+    // A one-time bot message when a fresh conversation first connects.
+    Greeting = conv => "Hi! Send an order number to start a refund.",
+});
+```
+
+</TabItem>
+</Tabs>
 
 The full option list, with types, is in [Concepts → The app](./concepts.md#3-the-app--mekik-graph-). For durability, swap the in-memory checkpointer for a real one (see [Persistence](./persistence.md)) — an interrupt lives in the checkpoint, so an in-memory one loses parked pauses on restart.
 

@@ -85,13 +85,13 @@ Open interrupts live in ilmek's checkpoint, not in memory, so they survive a res
 
 ## Client-side resume, in practice
 
-chativa's connector persists the identity and watermark to `localStorage` (under `chativa:mekik:<url>`) when you pass `resumeConversation: true`, so a page reload rejoins the same conversation:
+This is the **client** end — the chativa browser widget, which is TypeScript-only (mekik ships no .NET client; a .NET app is the *server*). chativa's connector persists the identity and watermark to `localStorage` (under `chativa:mekik:<url>`) when you pass `resumeConversation: true`, so a page reload rejoins the same conversation:
 
 ```ts
 new MekikConnector({ url: "wss://bot.example.com/chat", resumeConversation: true });
 ```
 
-On the wire that's just a `hello` carrying the stored `conversationId` and `watermark`. Any client can do the same by remembering the two values from `welcome` and asserting them on the next connect.
+On the wire that's just a `hello` carrying the stored `conversationId` and `watermark` — plain JSON, so **any** client in any language can do the same by remembering the two values from `welcome` and asserting them on the next connect.
 
 ## Where to go next
 

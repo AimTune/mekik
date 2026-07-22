@@ -6,6 +6,10 @@ description: "@mekik/langchain — wrap a LangChain agent's tools so each gets a
 
 # LangChain
 
+:::note TypeScript integration
+LangChain is a TypeScript library, so this page is TypeScript-only by nature. On **.NET**, the equivalents are [Microsoft.Extensions.AI](./dotnet-agents.md) and [Semantic Kernel](./semantic-kernel.md) — same policy shape, same three capabilities.
+:::
+
 `@mekik/langchain` runs a LangChain agent inside an ilmek node and gives each of its tools the mekik treatment: a `tool_call` trace, optional human approval, and exactly-once across a pause/resume. You wrap the tools once before handing them to the agent; the wrappers keep their name, description, and schema, so the model binds them exactly as before.
 
 ```bash

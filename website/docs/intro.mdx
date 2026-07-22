@@ -51,6 +51,9 @@ mekik is the successor to a standalone connector whose protocol was hand-mirrore
 
 Point mekik at a compiled ilmek graph and serve it:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 import { graph, channel, START, END } from "@ilmek/core";
 import { mekik } from "@mekik/core";
@@ -69,6 +72,37 @@ const g = graph("greeter")
 const app = mekik({ graph: g, reply: (s) => s.reply as string });
 serveWs(app, { port: 8800, path: "/ws" });
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+using Mekik;
+using Ilmek;
+
+var g = Graph.Create("greeter")
+    .Channel("input", Channels.LastWrite(""))
+    .Channel("reply", Channels.LastWrite(""))
+    .Node("greet", (State s, IContext ctx) =>
+    {
+        var name = s.Get<string>("input");
+        Shuttle.Ui(ctx, "hello-card", new Dictionary<string, object?> { ["name"] = name }); // stream GenUI
+        return Update.Of("reply", $"Hi, {name}!");
+    })
+    .Edge(Graph.Start, "greet").Edge("greet", Graph.End)
+    .Compile();
+
+var app = new MekikApp(new MekikOptions { Graph = g, Reply = s => s.GetValueOrDefault("reply") as string });
+
+// serve from ASP.NET Core:
+var web = WebApplication.CreateBuilder(args).Build();
+web.UseWebSockets();
+web.MapMekik("/ws", app);
+web.Run();
+```
+
+</TabItem>
+</Tabs>
 
 That's a working server. A client connecting over `ws://localhost:8800/ws` gets a `welcome` frame, and every `text` turn it sends runs the graph and streams the result back.
 

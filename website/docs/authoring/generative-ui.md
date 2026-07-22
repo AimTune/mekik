@@ -10,13 +10,28 @@ Generative UI (GenUI) is how a mekik turn renders more than a text bubble: a nod
 
 ## The three chunk helpers
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
-mekik.text(ctx, "Analyzing… ");                       // a prose delta
-mekik.ui(ctx, "weather-card", { city: "Ankara", c: 18 }); // mount/update a component
-mekik.event(ctx, "highlight", { rowId: 3 });          // dispatch an event to a mounted component
+mekik.text(ctx, "Analyzing… ");                            // a prose delta
+mekik.ui(ctx, "weather-card", { city: "Ankara", c: 18 });  // mount/update a component
+mekik.event(ctx, "highlight", { rowId: 3 });               // dispatch an event to a mounted component
 ```
 
-Each emits one `genui` frame carrying an `AIChunk`:
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+Shuttle.Text(ctx, "Analyzing… ");                          // a prose delta
+Shuttle.Ui(ctx, "weather-card", new Dictionary<string, object?> { ["city"] = "Ankara", ["c"] = 18 }); // mount/update
+Shuttle.Event(ctx, "highlight", new Dictionary<string, object?> { ["rowId"] = 3 });                   // dispatch an event
+```
+
+</TabItem>
+</Tabs>
+
+Each emits one `genui` frame carrying an `AIChunk` — the same JSON shape on the wire in either language:
 
 ```ts
 type AIChunk =
@@ -59,6 +74,9 @@ The durable reply is the single consolidated `bot` `text` frame the mapper emits
 
 The pattern for streaming model output:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 .node("answer", async (state, ctx) => {
   let full = "";
@@ -69,6 +87,25 @@ The pattern for streaming model output:
   return { reply: full };     // durable — what replay shows
 })
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+.Node("answer", async (State state, IContext ctx) =>
+{
+    var full = new StringBuilder();
+    await foreach (var delta in Model.StreamAsync(state.Get<string>("input")))
+    {
+        Shuttle.Text(ctx, delta);   // live, transient
+        full.Append(delta);
+    }
+    return Update.Of("reply", full.ToString());   // durable — what replay shows
+})
+```
+
+</TabItem>
+</Tabs>
 
 If you *only* stream and never return a reply, the run has no persistent text — the genui chunks were the whole answer, and there's nothing for replay to show as a bubble. That's a valid choice for a purely visual turn (a card, a chart), less so for prose.
 

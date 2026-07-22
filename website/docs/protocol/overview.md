@@ -84,6 +84,9 @@ Two payload shapes are shared verbatim with chativa, so the widget renders them 
 
 **`AIChunk`** — the unit of generative UI:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 type AIChunk =
   | { type: "ui"; component: string; props?: Record<string, unknown>; id?: string | number }
@@ -91,12 +94,47 @@ type AIChunk =
   | { type: "event"; name: string; payload?: unknown; id?: string | number };
 ```
 
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+// .NET represents frames and chunks as Dictionary<string, object?> (parity §2) —
+// the same JSON on the wire, no typed AIChunk. A "ui" chunk, for example:
+new Dictionary<string, object?>
+{
+    ["type"] = "ui",
+    ["component"] = "hello-card",
+    ["props"] = new Dictionary<string, object?> { ["name"] = "Ada" },
+};
+```
+
+</TabItem>
+</Tabs>
+
 **`MessageAction`** — an interrupt/quick-reply chip:
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
 
 ```ts
 type MessageAction = { label: string; value?: unknown };
 // when value is omitted, the answer is the label string
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+// A dictionary again; omit "value" to make the answer the label string.
+new Dictionary<string, object?>
+{
+    ["label"] = "Approve",
+    ["value"] = new Dictionary<string, object?> { ["approved"] = true },
+};
+```
+
+</TabItem>
+</Tabs>
 
 ## Sections in this reference
 

@@ -14,6 +14,9 @@ Authentication in mekik is **opt-in** and **connect-time only**. By default ever
 
 An `Authenticator` is a one-method port:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 interface Authenticator {
   authenticate(credential: Credential): Promise<AuthVerdict> | AuthVerdict;
@@ -33,6 +36,34 @@ interface AuthVerdict {
 }
 ```
 
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+public interface IAuthenticator
+{
+    ValueTask<AuthVerdict> AuthenticateAsync(Credential credential);
+}
+
+public sealed record Credential
+{
+    public string? Token { get; init; }                                 // from hello.token, ?token=, or Bearer header
+    public IReadOnlyDictionary<string, string?>? Headers { get; init; }  // raw connect headers (cookie/session check)
+    public IReadOnlyDictionary<string, string?>? Query { get; init; }    // raw connect query params
+}
+
+public sealed record AuthVerdict
+{
+    public required bool Ok { get; init; }
+    public string? UserId { get; init; }                                 // authoritative id — overrides the asserted one
+    public IReadOnlyDictionary<string, object?>? Claims { get; init; }   // surfaced to nodes at ctx.Meta["auth"]
+    public string? Reason { get; init; }                                 // human-readable rejection reason
+}
+```
+
+</TabItem>
+</Tabs>
+
 Enable it on the app:
 
 <Tabs groupId="lang">
@@ -51,7 +82,7 @@ The port is `Authenticator` with an `authenticate(credential)` method returning 
 var app = new MekikApp(new MekikOptions { Graph = graph, Authenticator = myAuthenticator });
 ```
 
-The port is `IAuthenticator` with an `AuthenticateAsync(credential, ct)` method returning the same verdict shape.
+The port is `IAuthenticator` with an `AuthenticateAsync(credential)` method returning the same verdict shape.
 
 </TabItem>
 </Tabs>
@@ -96,19 +127,41 @@ followed by WebSocket close code **4401** (`AUTH_CLOSE_CODE`). A client should t
 
 On success, the verdict's `claims` are placed at `ctx.meta.auth`, so a node reads verified, server-side facts without the graph knowing anything about auth:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 .node("desk", async (state, ctx) => {
   const claims = ctx.meta.auth as { role?: string; tenant?: string } | undefined;
   if (claims?.role !== "admin") return { reply: "Not authorized for that." };
-  // …
+  return { reply: await adminAction() };
 })
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+.Node("desk", async (State state, IContext ctx) =>
+{
+    var claims = ctx.Meta.GetValueOrDefault("auth") as IReadOnlyDictionary<string, object?>;
+    if (claims?.GetValueOrDefault("role") as string != "admin")
+        return Update.Of("reply", "Not authorized for that.");
+    return Update.Of("reply", await AdminAction());
+})
+```
+
+</TabItem>
+</Tabs>
 
 `claims` stay server-side — they are *not* sent to the client. They're the trusted context your graph branches on. See [Concepts → Graph context](./concepts.md#7-graph-context-as-a-parameter).
 
 ## A minimal authenticator
 
 For tests and simple deployments, `StaticTokenAuthenticator` is a fixed `token → {userId, claims}` table:
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
 
 ```ts
 import { mekik, StaticTokenAuthenticator } from "@mekik/core";
@@ -122,7 +175,30 @@ const app = mekik({
 });
 ```
 
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+using Mekik;
+
+var app = new MekikApp(new MekikOptions
+{
+    Graph = graph,
+    Authenticator = new StaticTokenAuthenticator(new Dictionary<string, (string, IReadOnlyDictionary<string, object?>?)>
+    {
+        ["tok-alice"] = ("u-alice", new Dictionary<string, object?> { ["role"] = "admin" }),
+        ["tok-bob"]   = ("u-bob",   new Dictionary<string, object?> { ["role"] = "user" }),
+    }),
+});
+```
+
+</TabItem>
+</Tabs>
+
 A real one verifies a JWT signature or a session cookie:
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
 
 ```ts
 const jwtAuth: Authenticator = {
@@ -137,6 +213,36 @@ const jwtAuth: Authenticator = {
   },
 };
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+public sealed class JwtAuthenticator : IAuthenticator
+{
+    public async ValueTask<AuthVerdict> AuthenticateAsync(Credential cred)
+    {
+        if (cred.Token is null) return new AuthVerdict { Ok = false, Reason = "no token presented" };
+        try
+        {
+            var payload = await VerifyJwt(cred.Token, secret);
+            return new AuthVerdict
+            {
+                Ok = true,
+                UserId = payload.Sub,
+                Claims = new Dictionary<string, object?> { ["role"] = payload.Role },
+            };
+        }
+        catch
+        {
+            return new AuthVerdict { Ok = false, Reason = "invalid token" };
+        }
+    }
+}
+```
+
+</TabItem>
+</Tabs>
 
 ## Pairing with the client
 

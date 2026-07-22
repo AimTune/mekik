@@ -12,11 +12,26 @@ The `ConversationEngine` owns every behaviour that spans more than one frame or 
 
 A transport drives the engine (via the `MekikApp`) with exactly three calls:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 app.connect(conn, params);      // a socket opened — run the handshake
 app.receive(conn, raw);         // a frame arrived on that socket
 app.disconnect(conn);           // the socket closed
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+await app.ConnectAsync(conn, paramsIn); // a socket opened — run the handshake
+await app.ReceiveAsync(conn, raw);      // a frame arrived on that socket
+app.Disconnect(conn);                   // the socket closed
+```
+
+</TabItem>
+</Tabs>
 
 `conn` is a `Connection` — anything with `send(frame)` and `close(code?, reason?)`. The engine never constructs one; the transport does. This is the seam that keeps protocol logic out of the socket layer.
 

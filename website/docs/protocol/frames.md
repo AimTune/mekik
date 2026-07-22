@@ -151,6 +151,9 @@ Statuses: `started`, `finished`, `interrupted`, `error`, `aborted`. See [Engine 
 
 **`AIChunk`** (the `genui` payload; identical to chativa's):
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 type AIChunk =
   | { type: "ui"; component: string; props?: Record<string, unknown>; id?: string | number }
@@ -158,12 +161,38 @@ type AIChunk =
   | { type: "event"; name: string; payload?: unknown; id?: string | number };
 ```
 
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+// .NET frames/chunks are Dictionary<string, object?> (parity §2) — same wire JSON,
+// no typed AIChunk. A "text" chunk, for example:
+new Dictionary<string, object?> { ["type"] = "text", ["content"] = "Hi" };
+```
+
+</TabItem>
+</Tabs>
+
 **`MessageAction`** (an interrupt/quick-reply chip):
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
 
 ```ts
 type MessageAction = { label: string; value?: unknown };
 // value omitted → the answer is the label string
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+// value omitted → the answer is the label string.
+new Dictionary<string, object?> { ["label"] = "Approve", ["value"] = new Dictionary<string, object?> { ["approved"] = true } };
+```
+
+</TabItem>
+</Tabs>
 
 ## Where to go next
 
