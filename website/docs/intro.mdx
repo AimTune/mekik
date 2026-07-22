@@ -1,0 +1,129 @@
+---
+sidebar_position: 1
+title: What is mekik?
+description: The realtime serving layer for ilmek graphs — WebSocket sessions, generative UI streaming, tool traces, and durable human-in-the-loop over the mekik/1 wire protocol.
+---
+
+# What is mekik?
+
+**mekik** is the realtime serving layer for [**ilmek**](https://www.npmjs.com/package/@ilmek/core) graphs. You write a graph in ilmek — nodes, channels, edges — and mekik turns each run of it into a live conversation: a client sends a user turn over a WebSocket, the server drives the graph, and streams back text, generative UI, tool traces, and interactive human-in-the-loop pauses.
+
+> **One graph run == one conversational turn.** That single equation is the whole idea. Everything else — resume, tool journaling, interrupts — falls out of taking it seriously.
+
+```
+chativa ⇄ @chativa/connector-mekik ⇄ WebSocket ⇄ ConversationEngine ⇄ IlmekAdapter ⇄ ilmek graph
+                                                    │ HistoryStore                     │ Checkpointer
+                                                    │ ConversationStore                │ (ilmek's own)
+                                                    │ Authenticator
+```
+
+The client end is the [**chativa**](https://github.com/AimTune/chativa) widget — its `@chativa/connector-mekik` already speaks the protocol. mekik is the server end. Between them sits one wire protocol, **`mekik/1`**, and [`PROTOCOL.md`](https://github.com/AimTune/mekik/blob/main/PROTOCOL.md) is its normative spec.
+
+> **TL;DR — three paragraphs is the whole mental model:**
+>
+> 1. You bring a compiled **ilmek graph**. mekik never asks the graph to know it is being served.
+> 2. `mekik({ graph })` builds an **app**; a transport (`@mekik/ws`) drives it over a socket. Each inbound `text` frame starts one graph run; the run's events become **frames** streamed back to the client.
+> 3. Inside a node you call **authoring helpers** — `mekik.ui`, `mekik.tool`, `mekik.approve` — to stream UI, journal a side effect, or pause for a human. That's the entire authoring surface.
+>
+> Everything else in these docs is a refinement of those three paragraphs.
+
+## The names: ilmek, mekik, chativa
+
+These three projects are one family, and the names are Turkish weaving terms that say how they relate:
+
+| Project | Turkish sense | Role |
+|---|---|---|
+| **ilmek** | a *stitch* / loop | The graph runtime — orchestration, state channels, checkpoints, interrupts. |
+| **mekik** | the loom *shuttle* that carries the thread across | The serving layer — turns a graph run into a streamed conversation. |
+| **chativa** | — | The chat widget — renders the conversation in the browser. |
+
+mekik is the shuttle: it carries each turn of the graph across to the client and back. It depends on ilmek as a **published package** ([`@ilmek/core`](https://www.npmjs.com/package/@ilmek/core) on npm, [`Ilmek.Core`](https://www.nuget.org/packages/Ilmek.Core) on NuGet), so this repo stands alone — no sibling checkout needed.
+
+## Why does it exist?
+
+mekik is the successor to a standalone connector whose protocol was hand-mirrored "byte-for-byte" across four languages with no cross-language test, whose human-in-the-loop detection sniffed error strings, and whose interrupts were a `text`-plus-chips convention answered by "whatever the user typed next." Those are exactly the things that break quietly. mekik/1 fixes the three that matter most:
+
+- **ilmek-native.** The mapper consumes ilmek's *typed* event stream. No error-string sniffing to guess whether the graph paused — the `interrupt` event says so.
+- **First-class interrupts.** A pause is an `interrupt` frame answered by a thread-scoped `id`, not a text convention. Concurrent pauses can't collapse into one answer.
+- **Parity checked by fixtures, not hope.** Two implementations (TypeScript reference + .NET port) replay the same recorded event streams through their mappers and compare canonical JSON byte-for-byte. If they diverge, CI goes red.
+
+## A 60-second tour
+
+Point mekik at a compiled ilmek graph and serve it:
+
+```ts
+import { graph, channel, START, END } from "@ilmek/core";
+import { mekik } from "@mekik/core";
+import { serveWs } from "@mekik/ws";
+
+const g = graph("greeter")
+  .channel("input", channel.lastWrite<string>(""))
+  .channel("reply", channel.lastWrite<string>(""))
+  .node("greet", (s, ctx) => {
+    mekik.ui(ctx, "hello-card", { name: s.input }); // stream a GenUI component
+    return { reply: `Hi, ${s.input}!` };
+  })
+  .edge(START, "greet").edge("greet", END)
+  .compile();
+
+const app = mekik({ graph: g, reply: (s) => s.reply as string });
+serveWs(app, { port: 8800, path: "/ws" });
+```
+
+That's a working server. A client connecting over `ws://localhost:8800/ws` gets a `welcome` frame, and every `text` turn it sends runs the graph and streams the result back.
+
+The single `mekik` export is both the **app factory** (`mekik({ graph })`) and the **authoring helpers** (`mekik.ui`, `mekik.tool`, `mekik.approve`, `mekik.text`, `mekik.event`) — one name, read two ways depending on where you call it.
+
+## What's in the box
+
+| Capability | Where to read more |
+|---|---|
+| One graph run per turn, over WebSocket | [Concepts](./concepts.md) · [Transport](./serving/transport.md) |
+| Generative UI streaming (`ui` / `text` / `event` chunks) | [Authoring → Generative UI](./authoring/generative-ui.md) |
+| Tool traces with exactly-once side effects | [Authoring → Tools](./authoring/tools.md) |
+| Durable, interactive human-in-the-loop | [Authoring → Human-in-the-loop](./authoring/human-in-the-loop.md) |
+| Watermark resume, multi-tab, multi-device | [Protocol → Identity & resume](./protocol/identity.md) |
+| Connect-time authentication (opt-in) | [Authentication](./authentication.md) |
+| LangChain / Microsoft.Extensions.AI / Semantic Kernel agents | [Agent integrations](./integrations/overview.md) |
+| TypeScript reference **and** .NET port, one wire | [Parity → TypeScript ↔ .NET](./parity/languages.md) |
+
+## The repository, at a glance
+
+```
+mekik/
+  PROTOCOL.md            # normative mekik/1 wire spec
+  conformance/
+    README.md            # language-neutral scenario list
+    fixtures/*.json      # golden event→frame fixtures (shared by both suites)
+  ts/
+    packages/core/       # @mekik/core — protocol, mapper, engine, helpers, stores, auth
+    packages/ws/         # @mekik/ws — WebSocket transport
+    packages/langchain/  # @mekik/langchain — wrap an agent's tools
+    packages/redis/      # @mekik/redis — Redis turn lock + Pub/Sub backplane (fleet)
+    examples/            # refund, llm-agent, sql-agent, weather-agent, concierge, routed-desk
+  dotnet/
+    src/Mekik.Core/            # mirror of @mekik/core
+    src/Mekik.AspNetCore/      # app.MapMekik("/ws", app)
+    src/Mekik.Agents/          # Microsoft.Extensions.AI function wrapping
+    src/Mekik.SemanticKernel/  # one filter covers SK agents and planners
+    src/Mekik.Redis/           # Redis turn lock + Pub/Sub backplane (fleet)
+    test/Mekik.Core.Tests/     # loads the SAME fixtures
+```
+
+## Where to go next
+
+If this is your first time:
+
+1. [**Get started** in 5 minutes](./getting-started.md) — install, serve a graph, connect a client.
+2. [**Concepts**](./concepts.md) — the app, the engine, the mapper, and the ports, from zero.
+3. [**Protocol → Overview**](./protocol/overview.md) — the wire in one screen.
+
+If you're building the conversation:
+
+- [**Authoring → Helpers**](./authoring/helpers.md) — `mekik.ui`, `mekik.tool`, `mekik.approve`.
+- [**Human-in-the-loop**](./authoring/human-in-the-loop.md) — pause for a person, resume without double-charging.
+
+If you're porting or verifying:
+
+- [**Parity → TypeScript ↔ .NET**](./parity/languages.md) — the naming map and the deliberate divergences.
+- [**Parity → Conformance**](./parity/conformance.md) — the golden fixtures and scenario suites.

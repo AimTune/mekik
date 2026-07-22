@@ -1,0 +1,220 @@
+---
+sidebar_position: 6
+title: Horizontal scale
+description: Run mekik as a fleet — a Redis backplane, conversation affinity, fleet authentication, and autoscaling that drains WebSocket sessions instead of dropping them. Every part is opt-in and identical in TypeScript and .NET.
+---
+
+# Horizontal scale
+
+One mekik node serves every conversation out of the box: in-memory stores, a
+process-local turn lock, direct fan-out. That is the whole v1 default, and most
+apps never need more. This page is for the other case — running mekik as a
+**fleet** of nodes behind a load balancer, with a Redis backplane and an
+autoscaler.
+
+Two promises hold throughout:
+
+- **Opt-in.** Nothing here changes `mekik({ graph })`. The fleet parts are extra
+  options with in-memory defaults, exactly like `history` and `conversations`
+  already are. If you don't want to scale, you pass nothing and get the original
+  single-node behaviour byte-for-byte.
+- **One model, both languages.** The ports below exist identically in
+  `@mekik/core` (TypeScript) and `Mekik.Core` (.NET). The naming map is the usual
+  one (see [Parity](./parity/languages.md)); the shapes are native to each
+  language.
+
+For the full design rationale — including why we chose affinity over a pure
+backplane — see [`docs/SCALING.md`](https://github.com/AimTune/mekik/blob/main/docs/SCALING.md)
+in the repo. This page is the operator's and integrator's view.
+
+## The one idea
+
+A **conversation is the unit of consistency.** On one node that is automatic —
+everything about a conversation lives in a single in-memory record: its `seq`
+counter, the set of connected tabs, and the turn lock that keeps one run in
+flight at a time. Scaling horizontally means keeping that *single-writer*
+guarantee when the tabs of one conversation may land on different nodes.
+
+mekik does that with **conversation affinity**: a sticky load balancer routes
+every connection for a conversation to one owner node, so the turn lock, the seq
+counter, and fan-out stay in-process and fast. A **Redis backplane** is the
+safety net for the brief window where a reconnect races ahead of a re-home.
+
+```
+                 ┌─────────────── LB / ingress ───────────────┐
+                 │   hash(conversationId) → owner node          │
+                 └──────────┬───────────────────┬──────────────┘
+                            │                    │
+                      ┌─────▼─────┐        ┌─────▼─────┐
+   tab A ────────────▶│  node 1   │        │  node 2   │◀──────────── tab B
+   (conv C)           │ owns C    │        │ (re-home  │              (conv C)
+                      └─────┬─────┘        │  window)  │
+                            │ publish(C)   └─────┬─────┘
+                            └──────────┬─────────┘ subscribe(C) — fallback
+                                       │
+                    ┌──────────────────▼───────────────────┐
+                    │  Redis: history · conversations ·      │
+                    │  ilmek checkpointer · turn lease       │
+                    └───────────────────────────────────────┘
+```
+
+## The ports
+
+Four things get a durable/shared backend for a fleet. The first two you already
+know; the last two are the scaling ports.
+
+| Port | Default (single node) | Fleet |
+|---|---|---|
+| `HistoryStore` | in-memory | Redis (Stream / sorted set by `seq`) |
+| `ConversationStore` | in-memory | Redis (hash) |
+| **`TurnLock`** | `LocalTurnLock` (no lease) | Redis `SET NX PX` lease + heartbeat |
+| **`Backplane`** | `NoopBackplane` (direct fan-out) | Redis Pub/Sub |
+| ilmek `Checkpointer` | in-memory | durable (Redis / Postgres) — swap ilmek's |
+
+`TurnLock` is the cross-node single-writer lease: `acquire` returns a lease, or
+nothing if another node already owns the turn (the caller answers `busy`).
+`Backplane` carries every dispatched frame to the other nodes holding tabs of the
+same conversation; the producing node still records each frame exactly once.
+
+### TypeScript
+
+```ts
+import { Redis } from "ioredis";
+import { mekik } from "@mekik/core";
+import { RedisTurnLock, RedisBackplane } from "@mekik/redis";
+
+const redis = new Redis(process.env.REDIS_URL!);
+
+const app = mekik({
+  graph,
+  // everything below is optional — omit for a single node
+  turnLock:  new RedisTurnLock(redis),   // SET NX PX single-writer lease
+  backplane: new RedisBackplane(redis),  // Pub/Sub cross-node fan-out
+  history:   myRedisHistoryStore,        // bring your own (HistoryStore port)
+  checkpointer: myDurableCheckpointer,   // ilmek's port
+});
+```
+
+### .NET
+
+```csharp
+using Mekik;
+using StackExchange.Redis;
+
+var redis = await ConnectionMultiplexer.ConnectAsync(config["Redis"]!);
+
+var app = new MekikApp(new MekikOptions
+{
+    Graph = graph,
+    TurnLock  = new RedisTurnLock(redis),   // ITurnLock  — Mekik.Redis
+    Backplane = new RedisBackplane(redis),  // IBackplane — Mekik.Redis
+    History   = myRedisHistoryStore,        // bring your own (IHistoryStore)
+    Checkpointer = myDurableCheckpointer,
+});
+```
+
+The .NET shapes are native: a lease and a subscription are `IAsyncDisposable`
+(release / unsubscribe on `await using`), acquisition returns `ITurnLease?`, and
+every method takes a `CancellationToken`. `LocalTurnLock` and `NoopBackplane` are
+the defaults, so a plain `new MekikApp(new MekikOptions { Graph = graph })` still
+runs exactly as before.
+
+:::note What ships today
+The two fleet-critical ports **and their Redis implementations** ship: pass
+`RedisTurnLock` / `RedisBackplane` from **[`@mekik/redis`](https://www.npmjs.com/package/@mekik/redis)**
+(TypeScript) or **`Mekik.Redis`** (.NET, StackExchange.Redis). A durable
+`HistoryStore` is still bring-your-own — the port exists, the Redis adapter is the
+remaining follow-up. Omit all of them and mekik runs single-node exactly as before.
+:::
+
+## Conversation affinity & routing
+
+Affinity only works if the load balancer can see the `conversationId` **at the
+WebSocket upgrade**, before any frame is sent. mekik's `hello` frame carries the
+id, but it arrives *after* the handshake — too late for an L7 router. So the id
+must also travel in the connect URL query string.
+
+The [chativa](https://github.com/AimTune/chativa) connector does this on request:
+
+```ts
+new MekikConnector({
+  url: "wss://mekik.example.com/chat",
+  conversationId,          // resumed id
+  routeInUrl: true,        // ← put conversationId (+ userId) in the URL query
+  resumeConversation: true,
+});
+```
+
+With `routeInUrl` on, the socket opens against
+`wss://…/chat?conversationId=…&userId=…`, and your ingress hashes that to pick
+the owner node. It is **off by default** — ids stay out of URLs and server logs
+unless you're running a fleet. Use **rendezvous (HRW) hashing** at the ingress so
+adding or removing a node remaps only ~1/N conversations, not the whole ring.
+
+The connector's resume fields are fleet-ready either way: it persists the
+`conversationId` + `watermark`, re-sends them on reconnect, adopts a
+server-substituted id, and resets the watermark when the conversation changes —
+so a client that lands on a new node after a re-home replays the tail it missed
+via `welcome.watermark`. Its storage key is scoped per configured `userId`, so
+two users sharing a browser origin don't collide.
+
+## Fleet authentication
+
+Authentication needs no special scaling machinery — the `Authenticator` port is
+**stateless per connect**, so any node can verify a credential independently.
+What matters for a fleet is *where the credential rides*, because sticky routing
+happens at the upgrade:
+
+| Transport | Where the credential is | Fleet notes |
+|---|---|---|
+| `hello` frame (default `TokenAuth`) | first frame body | Fine — auth runs after the handshake, on whichever node the LB picked. |
+| query string (`TokenAuth { transport: "query" }`) | connect URL | Visible to the LB; combine with `routeInUrl` so the same URL carries both the token and the routing keys. |
+| cookie (`CookieAuth`) | HTTP upgrade headers | The browser attaches it automatically; works with any sticky scheme. Short-lived tokens refresh per reconnect. |
+
+Because verification is independent, the only rule is that every node shares the
+same `Authenticator` configuration (the same signing key / introspection
+endpoint). A verified `userId` always overrides a client-asserted one, on every
+node, so a re-home can't be used to spoof identity. On rejection the server sends
+an `error` with `code: "unauthorized"` and closes with 4401; the connector treats
+**only** that code as an auth failure (other codes — `busy`, `interrupted` — keep
+the socket open), and suppresses auto-reconnect unless the auth provider mints a
+fresh credential.
+
+## Autoscaling
+
+WebSocket + LLM serving breaks the usual stateless-HTTP autoscaling assumptions.
+
+**Scale on the right metric — not CPU.** LLM turns are I/O-bound: the node waits
+on the model, so CPU stays low while the box is full of live sessions. Export a
+custom metric — **active conversations**, concurrent WS connections, or in-flight
+turn depth — and drive the autoscaler from that. KEDA with a Redis or Prometheus
+scaler is the clean path; a raw CPU HPA will under-provision badly.
+
+**Scale-out is easy.** New nodes join the hash ring; with rendezvous hashing only
+a small slice of conversations re-home.
+
+**Scale-in must drain, not kill.** A node holds live sockets and possibly
+in-flight turns:
+
+1. Fail readiness so the LB stops sending new connections.
+2. Give in-flight turns time to finish (`terminationGracePeriodSeconds`), or abort
+   them — parked interrupts survive in the durable checkpointer.
+3. In a `preStop` hook: flush the transcript, release turn leases, close sockets.
+4. Clients reconnect to another node and replay the tail via `welcome.watermark`
+   + `history.after`.
+
+That last step is why the durable stores are non-negotiable for a fleet:
+**autoscaling leans on mekik's existing reconnect-and-replay mechanism.** Use the
+connector's `reconnectBackoff: "exponential"` so that when a whole node dies, its
+clients don't thunder back in lockstep — the jittered backoff spreads the
+reconnect wave across the surviving nodes.
+
+## Checklist
+
+- [ ] Durable `HistoryStore` + `ConversationStore` (Redis).
+- [ ] Durable ilmek `Checkpointer` (so parked interrupts survive a re-home).
+- [ ] `TurnLock` + `Backplane` (Redis) — or leave the defaults for a single node.
+- [ ] Sticky-by-`conversationId` ingress with rendezvous hashing.
+- [ ] Connector `routeInUrl: true` (and query-transport auth if used).
+- [ ] Autoscaler on active-conversation metric, with a draining `preStop`.
+- [ ] Connector `reconnectBackoff: "exponential"` to tame reconnect storms.

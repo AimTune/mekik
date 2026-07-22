@@ -74,6 +74,7 @@ mekik/
     packages/core/       # @mekik/core — protocol, mapper, engine, helpers, stores, auth
     packages/ws/         # @mekik/ws — WebSocket transport
     packages/langchain/  # @mekik/langchain — wrap an agent's tools
+    packages/redis/      # @mekik/redis — Redis turn lock + Pub/Sub backplane (fleet)
     examples/refund.ts    # showcase: tool + GenUI + form approval + resume
     examples/llm-agent.ts # the same desk, driven by a real Claude model
     examples/sql-agent.ts # a model writing its own SQL over SQLite
@@ -85,6 +86,7 @@ mekik/
     src/Mekik.AspNetCore/      # app.MapMekik("/ws", app)
     src/Mekik.Agents/          # Microsoft.Extensions.AI function wrapping
     src/Mekik.SemanticKernel/  # one filter covers SK agents and planners
+    src/Mekik.Redis/           # Redis turn lock + Pub/Sub backplane (fleet)
     test/Mekik.Core.Tests/     # loads the SAME fixtures
     examples/Mekik.Examples    # mirror of the refund showcase
     examples/Mekik.LlmAgent    # mirror of the LLM-driven desk

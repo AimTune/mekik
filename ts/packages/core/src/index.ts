@@ -92,5 +92,8 @@ export {
 } from "./stores.ts";
 export type { ConversationRecord, ConversationStore, HistoryStore, PersistentFrame } from "./stores.ts";
 
+export { LocalTurnLock, NoopBackplane } from "./scaling.ts";
+export type { Backplane, BackplaneMessage, Subscription, TurnLease, TurnLock } from "./scaling.ts";
+
 export { StaticTokenAuthenticator } from "./auth.ts";
 export type { AuthVerdict, Authenticator, Credential } from "./auth.ts";

@@ -15,6 +15,7 @@ import {
     type ConversationStore,
     type HistoryStore,
 } from "./stores.ts";
+import { LocalTurnLock, NoopBackplane, type Backplane, type TurnLock } from "./scaling.ts";
 
 export interface MekikOptions {
     /** The ilmek graph this app serves. One run == one conversational turn. */
@@ -42,6 +43,16 @@ export interface MekikOptions {
     authenticator?: Authenticator;
     history?: HistoryStore;
     conversations?: ConversationStore;
+    /**
+     * Cross-node single-writer turn lease (docs/SCALING.md). Default: `LocalTurnLock`
+     * — one node, no lease. Pass a Redis lock to run a fleet.
+     */
+    turnLock?: TurnLock;
+    /**
+     * Cross-node fan-out backplane (docs/SCALING.md). Default: `NoopBackplane` — one
+     * node fans out directly. Pass a Redis Pub/Sub backplane to run a fleet.
+     */
+    backplane?: Backplane;
     /** ilmek superstep budget per run. */
     recursionLimit?: number;
     /** Override the wire id minter (tests inject a deterministic one). */
@@ -69,6 +80,8 @@ export class MekikApp {
             input: options.input ?? ((f) => ({ input: f.data.text })),
             minter: options.minter ?? randomMinter(),
             now: options.now ?? Date.now,
+            turnLock: options.turnLock ?? new LocalTurnLock(),
+            backplane: options.backplane ?? new NoopBackplane(),
             // Spread-conditionally so exactOptionalPropertyTypes never sees an
             // explicit `undefined` for an omitted optional.
             ...(options.authenticator ? { authenticator: options.authenticator } : {}),
