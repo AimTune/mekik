@@ -89,19 +89,25 @@
   display: block;
 }
 
-.codeBlock {
-  background: #0f172a;
-  color: #e2e8f0;
-  padding: 1.25rem 1.5rem;
-  border-radius: 12px;
-  text-align: left;
-  font-family: var(--ifm-font-family-monospace);
-  font-size: 0.86rem;
-  line-height: 1.6;
-  margin: 2rem auto 0;
+/* Centered, width-capped wrapper around the hero's <CodeBlock>. The CodeBlock
+   itself brings Prism syntax highlighting, a copy button, and theme awareness. */
+.codeWrap {
   max-width: 760px;
-  overflow-x: auto;
-  white-space: pre;
+  margin: 2rem auto 0;
+  text-align: left;
+}
+
+.codeWrap :global(.theme-code-block),
+.heroCode {
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  border-radius: 12px;
+}
+
+/* Slightly smaller type + a touch more line-height so the snippet reads well on
+   the gradient banner. */
+.heroCode :global(code) {
+  font-size: 0.82rem;
+  line-height: 1.55;
 }
 
 @media (max-width: 768px) {

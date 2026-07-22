@@ -4,6 +4,7 @@ import Link from "@docusaurus/Link";
 import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 import Layout from "@theme/Layout";
 import Heading from "@theme/Heading";
+import CodeBlock from "@theme/CodeBlock";
 
 import styles from "./index.module.css";
 
@@ -90,7 +91,11 @@ function HomepageHeader() {
             Read the protocol ↗
           </Link>
         </div>
-        <pre className={styles.codeBlock}>{HERO_SNIPPET}</pre>
+        <div className={styles.codeWrap}>
+          <CodeBlock language="tsx" className={styles.heroCode}>
+            {HERO_SNIPPET}
+          </CodeBlock>
+        </div>
       </div>
     </header>
   );
