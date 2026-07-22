@@ -21,13 +21,13 @@ jobs:
       run:
         working-directory: ts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           # Tests and examples are run as .ts directly via Node's type stripping,
           # which needs a recent Node (and tsconfig's erasableSyntaxOnly keeps the
@@ -57,9 +57,9 @@ jobs:
       run:
         working-directory: dotnet
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "9.0.x"
 
