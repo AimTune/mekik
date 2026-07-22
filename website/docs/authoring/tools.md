@@ -8,6 +8,9 @@ description: mekik.tool — surface a side effect as a tool_call trace and run i
 
 `mekik.tool` does two things at once: it surfaces a side effect to the client as a `tool_call` trace, and it runs that side effect **exactly once** across an interrupt/resume cycle. The second is the one that matters — it's the difference between a refund that charges once and one that charges twice.
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 const order = await mekik.tool(ctx, "get_order", { id }, () => Orders.get(id));
 ```
@@ -22,6 +25,27 @@ function tool<T>(
   fn: () => T | Promise<T>,
 ): Promise<T>;
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+var order = (Order)(await Shuttle.Tool(ctx, "get_order",
+    new Dictionary<string, object?> { ["id"] = id }, () => (object?)Orders.Get(id)))!;
+```
+
+Signature (a `Func<T>` overload takes a synchronous body):
+
+```csharp
+ValueTask<T> Tool<T>(
+    IContext ctx,
+    string name,
+    IReadOnlyDictionary<string, object?> @params,
+    Func<ValueTask<T>> fn);
+```
+
+</TabItem>
+</Tabs>
 
 ## The trace lifecycle
 
@@ -40,25 +64,66 @@ If `fn` throws, the final frame is `status:"error"` carrying the message instead
 
 A paused node **re-runs from the top** on resume. So this node, without journaling, would look up the order twice:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 // ❌ re-runs on resume — get_order fires again
 .node("refund", async (s, ctx) => {
   const order = await Orders.get(s.input);          // runs on BOTH passes
   const ok = await ctx.interrupt({ title: "Refund?" });
-  // …
+  return { reply: ok ? "refunded" : "kept" };
 })
 ```
 
-`mekik.tool` fixes it by running `fn` inside ilmek's `ctx.step`, which journals the result:
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+// ❌ re-runs on resume — Orders.Get fires again
+.Node("refund", async (State s, IContext ctx) =>
+{
+    var order = Orders.Get(s.Get<string>("input"));   // runs on BOTH passes
+    var ok = await ctx.InterruptAsync<bool>(new Dictionary<string, object?> { ["title"] = "Refund?" });
+    return Update.Of("reply", ok ? "refunded" : "kept");
+})
+```
+
+</TabItem>
+</Tabs>
+
+`mekik.tool` / `Shuttle.Tool` fixes it by running `fn` inside ilmek's `ctx.step` / `ctx.StepAsync`, which journals the result:
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
 
 ```ts
 // ✅ get_order runs once; the resume pass returns the journaled order
 .node("refund", async (s, ctx) => {
   const order = await mekik.tool(ctx, "get_order", { id: s.input }, () => Orders.get(s.input));
-  const ok = await mekik.approve(ctx, { title: "Refund?" });
-  // …
+  const ok = await mekik.approve<{ approved: boolean }>(ctx, { title: "Refund?" });
+  return { reply: ok.approved ? "refunded" : "kept" };
 })
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+// ✅ get_order runs once; the resume pass returns the journaled order
+.Node("refund", async (State s, IContext ctx) =>
+{
+    var id = s.Get<string>("input");
+    var order = (Order)(await Shuttle.Tool(ctx, "get_order",
+        new Dictionary<string, object?> { ["id"] = id }, () => (object?)Orders.Get(id)))!;
+    var ok = await Shuttle.Approve<Dictionary<string, object?>>(ctx,
+        new Dictionary<string, object?> { ["title"] = "Refund?" });
+    return Update.Of("reply", ok.GetValueOrDefault("approved") is true ? "refunded" : "kept");
+})
+```
+
+</TabItem>
+</Tabs>
 
 On the first pass `fn` runs and its result is recorded. On the resume pass the node re-executes down to the same `ctx.step`, which returns the recorded value — `Orders.get` is never called again. The `tool_call` trace *does* re-emit on the resume pass, but because it's an upsert by `id`, the client just re-updates the existing entry. No second lookup, no duplicate spinner.
 
@@ -78,20 +143,45 @@ Because the result is recorded and replayed from the journal, it must survive a 
 
 When an integration executes the tool itself — a LangChain or Semantic Kernel agent invoking its own functions — you can't wrap the call in `mekik.tool`. mekik exports the primitives behind it so the same trace is producible:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 import { nextToolCallId, toolTrace } from "@mekik/core";
+import { isInterrupt } from "@ilmek/core";
 
-const id = nextToolCallId(ctx);                                    // replay-stable id
+const id = nextToolCallId(ctx);                                   // replay-stable id
 toolTrace(ctx, { id, name, status: "running", params });
 try {
-  const result = await ctx.step(name, () => runTool());           // journal it yourself
+  const result = await ctx.step(name, () => runTool());          // journal it yourself
   toolTrace(ctx, { id, name, status: "completed", result });
 } catch (err) {
-  if (isInterrupt(err)) throw err;
+  if (isInterrupt(err)) throw err;                               // a pause is not a failure
   toolTrace(ctx, { id, name, status: "error", error: String(err) });
   throw err;
 }
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+var id = Shuttle.NextToolCallId(ctx);                            // replay-stable id
+Shuttle.ToolTrace(ctx, new Dictionary<string, object?> { ["id"] = id, ["name"] = name, ["status"] = "running", ["params"] = @params });
+try
+{
+    var result = await ctx.StepAsync(name, () => RunTool());     // journal it yourself
+    Shuttle.ToolTrace(ctx, new Dictionary<string, object?> { ["id"] = id, ["name"] = name, ["status"] = "completed", ["result"] = result });
+}
+catch (Exception ex) when (ex is not InterruptSignalException)   // a pause is not a failure
+{
+    Shuttle.ToolTrace(ctx, new Dictionary<string, object?> { ["id"] = id, ["name"] = name, ["status"] = "error", ["error"] = ex.Message });
+    throw;
+}
+```
+
+</TabItem>
+</Tabs>
 
 You rarely write this by hand — the [agent integrations](../integrations/overview.md) do it for you, wrapping each of an agent's tools so they emit traces, journal through `ctx.step`, and optionally pause for approval. Reach for the primitives only when wrapping a runner mekik doesn't already integrate.
 
@@ -99,10 +189,24 @@ You rarely write this by hand — the [agent integrations](../integrations/overv
 
 `mekik.tool` itself surfaces `params` and `result` as-is. The agent integrations add a per-tool `redact` policy that masks named fields in the *surfaced* trace while the tool still receives the real values:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 // @mekik/langchain
 withMekikTools(ctx, [charge], { charge: { show: true, redact: ["cardNumber"] } });
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+// Mekik.Agents
+MekikTools.Wrap(ctx, [charge], new() { ["charge"] = new ToolPolicy { Redact = ["cardNumber"] } });
+```
+
+</TabItem>
+</Tabs>
 
 Masking applies only to what's shown on the wire — the tool sees `cardNumber` intact. See [LangChain integration](../integrations/langchain.md) and [Microsoft.Extensions.AI](../integrations/dotnet-agents.md).
 

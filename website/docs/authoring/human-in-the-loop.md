@@ -12,6 +12,9 @@ mekik's headline feature is durable, interactive human-in-the-loop (HITL): a gra
 
 Use `mekik.approve` (`Shuttle.Approve` in .NET), a thin wrapper over ilmek's `ctx.interrupt` that attaches presentation metadata:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 const answer = await mekik.approve<{ approved: boolean }>(
   ctx,
@@ -25,6 +28,28 @@ const answer = await mekik.approve<{ approved: boolean }>(
   },
 );
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+var answer = await Shuttle.Approve<Dictionary<string, object?>>(
+    ctx,
+    new Dictionary<string, object?> { ["title"] = $"Refund {order.Total}?" },  // the question payload
+    ui: new Dictionary<string, object?>                                        // mount a form
+    {
+        ["component"] = "approval-form",
+        ["props"] = new Dictionary<string, object?> { ["orderId"] = order.Id },
+    },
+    actions: new List<object>                                                  // …or chip fallback
+    {
+        new Dictionary<string, object?> { ["label"] = "Approve", ["value"] = new Dictionary<string, object?> { ["approved"] = true } },
+        new Dictionary<string, object?> { ["label"] = "Reject",  ["value"] = new Dictionary<string, object?> { ["approved"] = false } },
+    });
+```
+
+</TabItem>
+</Tabs>
 
 The node **suspends** at that `await` on the first pass — it never returns. The engine emits an `interrupt` frame (carrying the question `payload`, the optional `ui`, and the `actions`) and ends the run `interrupted`. When the client answers, the graph re-runs the node from the top and the `await` returns the human's answer.
 
@@ -71,13 +96,17 @@ A form mounted by the interrupt's `ui` already knows its interrupt `id` (the fra
 
 Because a paused node **re-runs from the top** on resume, any side effect that ran before the pause would happen twice — unless it's journaled. Wrap every side effect in `mekik.tool` (which is `ctx.step` plus a `tool_call` trace):
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 .node("checkout", async (s, ctx) => {
   // Runs ONCE, ever. On the resume pass it returns the journaled order.
   const order = await mekik.tool(ctx, "create_order", { cart: s.cart },
     () => Orders.create(s.cart));
 
-  const ok = await mekik.approve(ctx, { title: `Charge ${order.total}?` });
+  const ok = await mekik.approve<{ approved: boolean }>(ctx, { title: `Charge ${order.total}?` });
+  if (!ok.approved) return { reply: "cancelled" };
 
   // Everything above re-runs on resume — but create_order is memoized, so no
   // second order is opened. This charge runs only after the pause that gates it.
@@ -85,6 +114,33 @@ Because a paused node **re-runs from the top** on resume, any side effect that r
   return { reply: "done" };
 })
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+.Node("checkout", async (State s, IContext ctx) =>
+{
+    // Runs ONCE, ever. On the resume pass it returns the journaled order.
+    var order = (Order)(await Shuttle.Tool(ctx, "create_order",
+        new Dictionary<string, object?> { ["cart"] = s.Get<object>("cart") },
+        () => (object?)Orders.Create(s.Get<object>("cart"))))!;
+
+    var ok = await Shuttle.Approve<Dictionary<string, object?>>(ctx,
+        new Dictionary<string, object?> { ["title"] = $"Charge {order.Total}?" });
+    if (ok.GetValueOrDefault("approved") is not true) return Update.Of("reply", "cancelled");
+
+    // Everything above re-runs on resume — but create_order is memoized, so no
+    // second order is opened. This charge runs only after the pause that gates it.
+    await Shuttle.Tool(ctx, "charge",
+        new Dictionary<string, object?> { ["orderId"] = order.Id },
+        () => (object?)Payments.Charge(order));
+    return Update.Of("reply", "done");
+})
+```
+
+</TabItem>
+</Tabs>
 
 Two corollaries for tool authors:
 
@@ -131,10 +187,24 @@ Open interrupts live in ilmek's checkpoint, not in memory, so they survive a res
 
 When a model-driven agent (LangChain, Microsoft.Extensions.AI, Semantic Kernel) decides to call a sensitive tool, you can gate that tool behind the same interrupt machinery — without hand-writing `mekik.approve`. Mark the tool `approve` in its policy and the integration pauses the graph before the tool runs:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 // @mekik/langchain
 withMekikTools(ctx, [refundPayment], { refund_payment: { show: true, approve: true } });
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+// Mekik.Agents
+MekikTools.Wrap(ctx, [refundPayment], new() { ["refund_payment"] = new ToolPolicy { Approve = new ApproveSpec() } });
+```
+
+</TabItem>
+</Tabs>
 
 The pause is an ordinary `interrupt` frame — chativa renders chips or a form, and it survives a restart like any other. Each tool gets a stable interrupt key so several approvals in one node stay separately addressable. See [Agent integrations](../integrations/overview.md).
 

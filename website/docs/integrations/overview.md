@@ -28,6 +28,9 @@ Each integration owns the tool's invocation, so it can close both — plus add a
 
 All three integrations share the same per-tool policy, so you learn it once:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 interface ToolPolicy {
   show?: boolean;                   // surface the trace (default true)
@@ -44,6 +47,31 @@ interface ToolPolicy {
   charge:          { show: true, redact: ["cardNumber"] }, // shown, masked
 }
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+public sealed record ToolPolicy
+{
+    public bool Show { get; init; } = true;              // surface the trace
+    public ApproveSpec? Approve { get; init; }           // pause for a human first (null = no)
+    public IReadOnlyList<string>? Redact { get; init; }  // mask these fields in the surfaced trace
+}
+```
+
+```csharp
+new()
+{
+    ["get_order"]       = new ToolPolicy(),                               // trace shown
+    ["refund_payment"]  = new ToolPolicy { Approve = new ApproveSpec() }, // ask the human first
+    ["internal_lookup"] = new ToolPolicy { Show = false },                // runs, not shown
+    ["charge"]          = new ToolPolicy { Redact = ["cardNumber"] },     // shown, masked
+}
+```
+
+</TabItem>
+</Tabs>
 
 `redact` masks only what is *surfaced* — the tool itself always receives the real values. When a human declines an `approve` tool, it's never executed and the agent gets a plain refusal observation (`denyMessage`) so its loop can continue rather than crash.
 

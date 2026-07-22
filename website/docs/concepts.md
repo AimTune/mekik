@@ -47,6 +47,9 @@ Your graph sits at the bottom, unaware. It's ordinary ilmek. The only mekik-spec
 
 `mekik(options)` is the assembly point. It wires the adapter, the ports, and the engine into one `MekikApp` that a transport can drive. Every option but `graph` has an in-memory default, so `mekik({ graph })` is a complete server.
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 interface MekikOptions {
   /** The ilmek graph this app serves. One run == one conversational turn. */
@@ -78,11 +81,54 @@ interface MekikOptions {
 
   history?: HistoryStore;
   conversations?: ConversationStore;
+  turnLock?: TurnLock;          // cross-node single-writer lease (fleet); default local
+  backplane?: Backplane;        // cross-node fan-out (fleet); default no-op
   recursionLimit?: number;      // ilmek superstep budget per run
   minter?: IdMinter;            // override the wire id minter (tests inject a deterministic one)
   now?: () => number;           // override the clock (tests inject a fixed one)
 }
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+public sealed record MekikOptions
+{
+    /// <summary>The ilmek graph this app serves. One run == one conversational turn.</summary>
+    public required CompiledGraph Graph { get; init; }
+
+    /// <summary>ilmek's checkpointer (durable HITL). Default: in-memory.</summary>
+    public ICheckpointer? Checkpointer { get; init; }
+
+    /// <summary>Map an inbound `text` turn to the graph's input update. Default: { input = text }.</summary>
+    public Func<IReadOnlyDictionary<string, object?>, IReadOnlyDictionary<string, object?>>? Input { get; init; }
+
+    /// <summary>Pick the run's consolidated reply text from final channel state.</summary>
+    public Func<IReadOnlyDictionary<string, object?>, string?>? Reply { get; init; }
+
+    /// <summary>Per-turn server context, placed at ctx.Meta["mekik"] for nodes to read.</summary>
+    public Func<(string ConversationId, string UserId), (string Text, IReadOnlyDictionary<string, object?>? Meta), IReadOnlyDictionary<string, object?>>? Context { get; init; }
+
+    /// <summary>Allowlist client-supplied meta into ctx.Meta["client"]. Default: drop everything.</summary>
+    public Func<IReadOnlyDictionary<string, object?>, IReadOnlyDictionary<string, object?>?>? AcceptClientMeta { get; init; }
+
+    /// <summary>A one-time bot message when a fresh conversation first connects.</summary>
+    public Func<(string ConversationId, string UserId), string?>? Greeting { get; init; }
+
+    public IAuthenticator? Authenticator { get; init; }
+    public IHistoryStore? History { get; init; }
+    public IConversationStore? Conversations { get; init; }
+    public ITurnLock? TurnLock { get; init; }   // cross-node single-writer lease (fleet); default local
+    public IBackplane? Backplane { get; init; }  // cross-node fan-out (fleet); default no-op
+    public int? RecursionLimit { get; init; }
+    public IIdMinter? Minter { get; init; }
+    public Func<long>? Now { get; init; }
+}
+```
+
+</TabItem>
+</Tabs>
 
 The `MekikApp` it returns exposes three methods a transport calls — `connect(conn, params)`, `receive(conn, raw)`, `disconnect(conn)` — plus the `engine`, `adapter`, `history`, and `conversations` it assembled, so you can inspect or share them.
 
