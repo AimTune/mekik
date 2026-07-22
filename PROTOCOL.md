@@ -22,8 +22,8 @@ chativa ⇄ @chativa/connector-mekik ⇄ WebSocket ⇄ ConversationEngine ⇄ Il
 major bump is breaking; within a major, receivers MUST ignore unknown fields and
 unknown frame `type`s so additive changes never break an older peer.
 
-mekik/1 supersedes botiva/1 (the standalone 4-language connector). The breaking
-changes from botiva/1: interrupts are first-class `interrupt` / `resume` /
+mekik/1 replaces the standalone 4-language connector that preceded it. The breaking
+changes from that predecessor: interrupts are first-class `interrupt` / `resume` /
 `interrupt_resolved` frames instead of a `text`+`actions` convention answered by
 the next user message; the `run` frame gains `interrupted`/`error`/`aborted`
 states; `welcome` re-announces open interrupts. Frame names that chativa already
@@ -33,7 +33,7 @@ renders (`text`, `tool_call`, `genui`) are unchanged.
 
 ## 1. Identity model (§1)
 
-Four ids, exactly as botiva/1 - chativa already speaks them:
+Four ids - chativa already speaks them:
 
 | id               | lifetime      | owns                                                                                                           |
 | ---------------- | ------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -66,7 +66,7 @@ Frames are JSON objects with a `type` discriminator. The reference transport is
 shapes are transport-agnostic; other transports (SSE, Socket.IO, SignalR) MAY be
 added later carrying the identical frames.
 
-**Envelope.** Frames are flat (botiva/1 style). Server→client frames that are
+**Envelope.** Frames are flat. Server→client frames that are
 _persistent_ carry a 1-based, per-conversation, strictly monotonic `seq` with no
 gaps, plus a `timestamp` (ms since epoch) where noted. Transient frames carry
 neither.
@@ -97,7 +97,7 @@ frame with `seq > watermark` in order, then resumes live delivery.
 | `hello`       | `{type, userId?, conversationId?, watermark?, token?, meta?}` | handshake; may also travel as WS query string. `meta` is a client-supplied context map (see §6).                                                                                                               |
 | `text`        | `{type, data:{text}, meta?}`                                  | one user turn → starts a run (or is refused `busy`, §5).                                                                                                                                                       |
 | `resume`      | `{type, answers:{[interruptId]: any}}`                        | answer the open interrupts, keyed by thread-scoped interrupt `id`. Must cover **every** open interrupt (ilmek's `resumeKeyed` requires it); a resume that omits one draws `error{incomplete_resume}`.          |
-| `genui_event` | `{type, streamId, eventType, payload}`                        | an interaction from a mounted GenUI component (unchanged from botiva/1). If the component was bound to an interrupt and `eventType == "submit"`, the server treats it as a `resume` for that interrupt (§4.4). |
+| `genui_event` | `{type, streamId, eventType, payload}`                        | an interaction from a mounted GenUI component. If the component was bound to an interrupt and `eventType == "submit"`, the server treats it as a `resume` for that interrupt (§4.4). |
 | `abort`       | `{type}`                                                      | cancel the in-flight run. The graph stops at the next superstep boundary; the last checkpoint stands, so the thread stays resumable.                                                                           |
 
 Malformed frames (bad JSON, missing `type`, unknown required fields) draw an
@@ -281,7 +281,7 @@ emits is idempotent (upsert by id) so re-emitting on replay is harmless.
 
 ## 7. Auth (§7, opt-in)
 
-Identical model to botiva/1. Credential arrives via `hello.token`, WS
+Credential arrives via `hello.token`, WS
 `?token=`, an `Authorization: Bearer` header, or a cookie. The `Authenticator`
 port returns `{ok, userId?, claims?, reason?}`. On reject: send `error`
 `{code:"unauthorized", message: reason}` then close with WS code **4401**
