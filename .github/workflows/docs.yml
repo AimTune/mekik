@@ -1,0 +1,74 @@
+name: Docs
+
+# Build the Docusaurus site under website/ and deploy it to GitHub Pages
+# (mekik.aimtune.dev). Pull requests build the site as a check; only a push to
+# main deploys. Set the repository's Pages source to "GitHub Actions" once for
+# this workflow to publish.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "website/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; never cancel an in-flight publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm 10: OIDC and build-script handling regressed in 11 (see the release
+      # workflows), so every job in this repo pins 10.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      # Invoke the Docusaurus binary directly instead of `pnpm build`, so the
+      # build never depends on a package-manager pre-run step. The site is
+      # theme-checked (broken links/anchors fail the build via onBrokenLinks).
+      - name: Build site
+        run: node node_modules/@docusaurus/core/bin/docusaurus.mjs build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          # Relative to the repo root (action inputs ignore defaults.run).
+          path: website/build
+
+  deploy:
+    name: Deploy
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

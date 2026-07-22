@@ -24,7 +24,8 @@ const config: Config = {
   projectName: "mekik",
   trailingSlash: false,
 
-  onBrokenLinks: "warn",
+  onBrokenLinks: "throw",
+  onBrokenAnchors: "throw",
   markdown: {
     mermaid: true,
     hooks: {

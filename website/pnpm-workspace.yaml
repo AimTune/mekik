@@ -1,3 +1,5 @@
-allowBuilds:
-  '@swc/core': set this to true or false
-  core-js: set this to true or false
+# The docs site needs no dependency build scripts — @swc/core (used by
+# @docusaurus/faster) ships prebuilt platform binaries, and core-js's postinstall
+# is only a funding notice. An explicit empty allowlist means "build nothing",
+# which keeps `pnpm install` deterministic and non-interactive in CI.
+onlyBuiltDependencies: []
