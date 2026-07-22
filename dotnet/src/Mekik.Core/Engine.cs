@@ -45,6 +45,10 @@ public sealed record EngineConfig
     public Func<(string ConversationId, string UserId), string?>? Greeting { get; init; }
     public required IIdMinter Minter { get; init; }
     public required Func<long> Now { get; init; }
+    /// <summary>Cross-node single-writer lease. Default: <see cref="LocalTurnLock"/> (single node).</summary>
+    public required ITurnLock TurnLock { get; init; }
+    /// <summary>Cross-node fan-out. Default: <see cref="NoopBackplane"/> (single node fans out directly).</summary>
+    public required IBackplane Backplane { get; init; }
 }
 
 /// <summary>
@@ -66,8 +70,10 @@ public sealed class ConversationEngine
     {
         public long Seq;
         public readonly Dictionary<string, ConnState> Connections = new();
-        /// <summary>The in-flight run's cancellation source, or null when idle — the turn lock.</summary>
+        /// <summary>The in-flight run's cancellation source, or null when idle — the local turn lock.</summary>
         public CancellationTokenSource? Turn;
+        /// <summary>This node's backplane subscription for the conversation (NoopBackplane: inert).</summary>
+        public IAsyncDisposable? Sub;
         public readonly object Gate = new();
     }
 
@@ -75,6 +81,8 @@ public sealed class ConversationEngine
     private readonly Dictionary<string, Live> _live = new();
     private readonly Dictionary<string, string> _connIndex = new();
     private readonly object _registryLock = new();
+    /// <summary>This node's identity — stamped on published frames so we skip our own on the backplane.</summary>
+    private readonly string _nodeId = $"node-{Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant()}";
 
     public ConversationEngine(EngineConfig cfg) => _cfg = cfg;
 
@@ -208,8 +216,14 @@ public sealed class ConversationEngine
             if (live.Turn is not null) { conn.Send(ErrorFrame("busy", "a run is already in flight")); return; }
             live.Turn = cts;
         }
+        ITurnLease? lease = null;
         try
         {
+            // The cross-node lease: null means another node owns the turn
+            // (single-node LocalTurnLock always grants). See docs/SCALING.md.
+            lease = await _cfg.TurnLock.AcquireAsync(convId).ConfigureAwait(false);
+            if (lease is null) { conn.Send(ErrorFrame("busy", "a run is already in flight")); return; }
+
             var pending = await _cfg.Adapter.PendingAsync(convId).ConfigureAwait(false);
             if (pending.Count > 0)
             {
@@ -238,6 +252,7 @@ public sealed class ConversationEngine
         }
         finally
         {
+            if (lease is not null) await lease.DisposeAsync().ConfigureAwait(false);
             lock (live.Gate) live.Turn = null;
             cts.Dispose();
         }
@@ -252,8 +267,12 @@ public sealed class ConversationEngine
             if (live.Turn is not null) { conn.Send(ErrorFrame("busy", "a run is already in flight")); return; }
             live.Turn = cts;
         }
+        ITurnLease? lease = null;
         try
         {
+            lease = await _cfg.TurnLock.AcquireAsync(convId).ConfigureAwait(false);
+            if (lease is null) { conn.Send(ErrorFrame("busy", "a run is already in flight")); return; }
+
             var pending = await _cfg.Adapter.PendingAsync(convId).ConfigureAwait(false);
             if (pending.Count == 0)
             {
@@ -288,6 +307,7 @@ public sealed class ConversationEngine
         }
         finally
         {
+            if (lease is not null) await lease.DisposeAsync().ConfigureAwait(false);
             lock (live.Gate) live.Turn = null;
             cts.Dispose();
         }
@@ -335,9 +355,21 @@ public sealed class ConversationEngine
 
     // ── plumbing ──────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Persist a persistent frame, fan it out to this node's connections, then hand
+    /// it to the backplane for the other nodes. The producing node records once;
+    /// backplane subscribers only re-fan (see <see cref="EnsureLiveAsync"/>).
+    /// </summary>
     private async Task DispatchAsync(string convId, IReadOnlyDictionary<string, object?> frame, string? exceptConnId = null)
     {
         if (Protocol.IsPersistent(frame)) await _cfg.History.RecordAsync(convId, frame).ConfigureAwait(false);
+        FanOutLocal(convId, frame, exceptConnId);
+        await _cfg.Backplane.PublishAsync(convId, new BackplaneMessage(_nodeId, frame)).ConfigureAwait(false);
+    }
+
+    /// <summary>Send a frame to this node's own connections for the conversation (no record, no publish).</summary>
+    private void FanOutLocal(string convId, IReadOnlyDictionary<string, object?> frame, string? exceptConnId = null)
+    {
         if (!_live.TryGetValue(convId, out var live)) return;
         List<ConnState> targets;
         lock (live.Gate) targets = live.Connections.Values.ToList();
@@ -383,13 +415,27 @@ public sealed class ConversationEngine
         lock (_registryLock) _live.TryGetValue(convId, out live);
         if (live is not null) return live;
         var seq = await _cfg.History.CurrentSeqAsync(convId).ConfigureAwait(false);
+        var created = false;
         lock (_registryLock)
         {
             if (!_live.TryGetValue(convId, out live))
             {
                 live = new Live { Seq = seq };
                 _live[convId] = live;
+                created = true;
             }
+        }
+        if (created)
+        {
+            // Subscribe once per conversation this node holds. Frames another node
+            // produced arrive here and fan out to our local sockets; we skip our own
+            // (OriginId) to avoid the pub/sub self-delivery echo. NoopBackplane never
+            // delivers, so single-node behaviour is unchanged.
+            live.Sub = await _cfg.Backplane.SubscribeAsync(convId, msg =>
+            {
+                if (msg.OriginId == _nodeId) return;
+                FanOutLocal(convId, msg.Frame);
+            }).ConfigureAwait(false);
         }
         return live;
     }

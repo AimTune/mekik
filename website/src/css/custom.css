@@ -1,0 +1,44 @@
+/**
+ * Global Infima overrides for mekik docs.
+ * Brand color is a woven teal (#0f766e) — the shuttle carrying the thread across,
+ * a sibling to ilmek (the stitch) and chativa (indigo).
+ */
+
+:root {
+  --ifm-color-primary: #0f766e;
+  --ifm-color-primary-dark: #0e6a63;
+  --ifm-color-primary-darker: #0d645d;
+  --ifm-color-primary-darkest: #0b524d;
+  --ifm-color-primary-light: #108279;
+  --ifm-color-primary-lighter: #118880;
+  --ifm-color-primary-lightest: #139a90;
+  --ifm-code-font-size: 92%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.08);
+
+  --mekik-hero-gradient-start: #0f766e;
+  --mekik-hero-gradient-end: #155e75;
+}
+
+[data-theme="dark"] {
+  --ifm-color-primary: #5eead4;
+  --ifm-color-primary-dark: #3ce3c8;
+  --ifm-color-primary-darker: #2ae0c2;
+  --ifm-color-primary-darkest: #1cbba0;
+  --ifm-color-primary-light: #80efe0;
+  --ifm-color-primary-lighter: #92f1e5;
+  --ifm-color-primary-lightest: #c7f8f2;
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.08);
+
+  --mekik-hero-gradient-start: #0b4f4a;
+  --mekik-hero-gradient-end: #164e63;
+}
+
+/* Tighter table styling for the mapping / capability matrices these docs lean on */
+table {
+  display: table;
+  width: 100%;
+}
+
+article header h1 {
+  font-size: 2.4rem;
+}

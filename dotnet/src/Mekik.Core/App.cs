@@ -22,6 +22,10 @@ public sealed record MekikOptions
     public IAuthenticator? Authenticator { get; init; }
     public IHistoryStore? History { get; init; }
     public IConversationStore? Conversations { get; init; }
+    /// <summary>Cross-node single-writer turn lease (docs/SCALING.md). Default: <see cref="LocalTurnLock"/>.</summary>
+    public ITurnLock? TurnLock { get; init; }
+    /// <summary>Cross-node fan-out backplane (docs/SCALING.md). Default: <see cref="NoopBackplane"/>.</summary>
+    public IBackplane? Backplane { get; init; }
     public int? RecursionLimit { get; init; }
     public IIdMinter? Minter { get; init; }
     public Func<long>? Now { get; init; }
@@ -62,6 +66,8 @@ public sealed class MekikApp
             Greeting = options.Greeting,
             Minter = options.Minter ?? new RandomMinter(),
             Now = options.Now ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
+            TurnLock = options.TurnLock ?? new LocalTurnLock(),
+            Backplane = options.Backplane ?? new NoopBackplane(),
         });
     }
 

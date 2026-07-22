@@ -23,6 +23,7 @@ import {
 } from "./protocol.ts";
 import type { ConversationStore, HistoryStore, PersistentFrame } from "./stores.ts";
 import type { Authenticator, Credential } from "./auth.ts";
+import type { Backplane, Subscription, TurnLease, TurnLock } from "./scaling.ts";
 
 /**
  * One live client connection, as the engine sees it. A transport implements this
@@ -65,6 +66,10 @@ export interface EngineConfig {
     greeting?: (conv: { conversationId: string; userId: string }) => string | undefined;
     minter: IdMinter;
     now: () => number;
+    /** Cross-node single-writer lease. Default: `LocalTurnLock` (single node). */
+    turnLock: TurnLock;
+    /** Cross-node fan-out. Default: `NoopBackplane` (single node fans out directly). */
+    backplane: Backplane;
 }
 
 interface ConnState {
@@ -77,14 +82,18 @@ interface ConnState {
 interface Live {
     seq: number;
     connections: Map<string, ConnState>;
-    /** The in-flight run's abort controller, or null when idle - this is the turn lock. */
+    /** The in-flight run's abort controller, or null when idle - this is the local turn lock. */
     turn: AbortController | null;
+    /** This node's backplane subscription for the conversation, if any (NoopBackplane: inert). */
+    sub?: Subscription;
 }
 
 export class ConversationEngine {
     private readonly cfg: EngineConfig;
     private readonly live = new Map<string, Live>();
     private readonly connIndex = new Map<string, string>();
+    /** This node's identity - stamped on published frames so we skip our own on the backplane. */
+    private readonly nodeId = `node-${randomBytes(8).toString("base64url")}`;
 
     constructor(cfg: EngineConfig) {
         this.cfg = cfg;
@@ -207,11 +216,20 @@ export class ConversationEngine {
             conn.send({ type: "error", data: { code: "busy", message: "a run is already in flight" } });
             return;
         }
-        // Acquire the lock synchronously, before the first await, so a second text
-        // arriving in the same tick sees it held (§5).
+        // Acquire the local lock synchronously, before the first await, so a second
+        // text arriving in the same tick sees it held (§5).
         const abort = new AbortController();
         live.turn = abort;
+        let lease: TurnLease | null = null;
         try {
+            // Then the cross-node lease: `null` means another node owns the turn
+            // (single-node LocalTurnLock always grants). See docs/SCALING.md.
+            lease = await this.cfg.turnLock.acquire(convId);
+            if (!lease) {
+                conn.send({ type: "error", data: { code: "busy", message: "a run is already in flight" } });
+                return;
+            }
+
             const pending = await this.cfg.adapter.pending(convId);
             if (pending.length > 0) {
                 conn.send({ type: "error", data: { code: "interrupted", message: "answer the open interrupt(s) first" } });
@@ -235,6 +253,7 @@ export class ConversationEngine {
             const input = this.cfg.input(frame);
             await this.drive(convId, live, this.cfg.adapter.run(input, { threadId: convId, meta, signal: abort.signal }));
         } finally {
+            if (lease) await lease.release();
             live.turn = null;
         }
     }
@@ -247,7 +266,14 @@ export class ConversationEngine {
         }
         const abort = new AbortController();
         live.turn = abort;
+        let lease: TurnLease | null = null;
         try {
+            lease = await this.cfg.turnLock.acquire(convId);
+            if (!lease) {
+                conn.send({ type: "error", data: { code: "busy", message: "a run is already in flight" } });
+                return;
+            }
+
             const pending = await this.cfg.adapter.pending(convId);
             if (pending.length === 0) {
                 conn.send({ type: "error", data: { code: "not_interrupted", message: "no open interrupt to resume" } });
@@ -274,6 +300,7 @@ export class ConversationEngine {
             const meta = this.buildMeta(convId, state.userId, { text: "" }, state.claims);
             await this.drive(convId, live, this.cfg.adapter.resume(frame.answers, { threadId: convId, meta, signal: abort.signal }));
         } finally {
+            if (lease) await lease.release();
             live.turn = null;
         }
     }
@@ -310,9 +337,19 @@ export class ConversationEngine {
 
     // ── plumbing ──────────────────────────────────────────────────────────────
 
-    /** Persist a persistent frame, then broadcast to every connection (optionally excluding one). */
+    /**
+     * Persist a persistent frame, fan it out to this node's connections, then hand
+     * it to the backplane for the other nodes. The producing node records once;
+     * backplane subscribers only re-fan (see `ensureLive`).
+     */
     private async dispatch(convId: string, frame: OutgoingFrame, exceptConnId?: string): Promise<void> {
         if (isPersistent(frame)) await this.cfg.history.record(convId, frame as PersistentFrame);
+        this.fanOutLocal(convId, frame, exceptConnId);
+        await this.cfg.backplane.publish(convId, { originId: this.nodeId, frame });
+    }
+
+    /** Send a frame to this node's own connections for the conversation (no record, no publish). */
+    private fanOutLocal(convId: string, frame: OutgoingFrame, exceptConnId?: string): void {
         const live = this.live.get(convId);
         if (!live) return;
         for (const { conn } of live.connections.values()) {
@@ -357,6 +394,14 @@ export class ConversationEngine {
         if (!live) {
             live = { seq: await this.cfg.history.currentSeq(convId), connections: new Map(), turn: null };
             this.live.set(convId, live);
+            // Subscribe once per conversation this node holds. Frames another node
+            // produced arrive here and fan out to our local sockets; we skip our own
+            // (originId) to avoid the pub/sub self-delivery echo. NoopBackplane never
+            // delivers, so single-node behaviour is unchanged.
+            live.sub = await this.cfg.backplane.subscribe(convId, (msg) => {
+                if (msg.originId === this.nodeId) return;
+                this.fanOutLocal(convId, msg.frame);
+            });
         }
         return live;
     }
