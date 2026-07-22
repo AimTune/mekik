@@ -101,20 +101,11 @@ A `resume` frame maps to ilmek's `resumeKeyedStream(g, answers, {threadId: conve
 
 There's a convenience path: a `genui_event{eventType:"submit", payload:{id, answer}}` whose `id` names an open interrupt is coerced by the engine to `resume{answers:{[id]: answer}}`. A form mounted by an `interrupt` frame's `ui` already knows its interrupt id, so it can either answer with a plain `resume` on submit (the ordinary path) or fire a `submit` event — no server-side stream↔interrupt binding is needed either way.
 
-## The `onCustom` extension hook
+## Extending the mapping (reserved)
 
-`custom` payloads the mapper doesn't recognise are dropped by default. `MekikOptions.onCustom(payload, emit)` can map them to extra frames — kept out of the core mapping so the golden fixtures stay closed:
+`custom` payloads the mapper doesn't recognise are **dropped** by default — the core mapping is closed so the [golden fixtures](../parity/conformance.md) stay authoritative. [`PROTOCOL.md §8`](https://github.com/AimTune/mekik/blob/main/PROTOCOL.md) reserves an `onCustom(payload, emit)` seam for mapping them to extra frames, kept deliberately outside that closed core.
 
-```ts
-const app = mekik({
-  graph: g,
-  onCustom: (payload, emit) => {
-    if (payload?.kind === "chart") emit({ /* a frame */ });
-  },
-});
-```
-
-This is the sanctioned seam for extending the wire without touching the fixture-pinned core. See [Protocol → Overview](./overview.md) and `PROTOCOL.md §8`.
+It's a documented extension point rather than a shipped option in v1. To produce custom frames today, emit a payload the mapper already recognises (`$mekik: "genui"` or `$mekik: "tool"`) from your node via the [authoring helpers](../authoring/helpers.md) — that's what `mekik.ui` / `mekik.tool` do.
 
 ## Where to go next
 
