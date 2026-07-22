@@ -51,6 +51,11 @@ public sealed class RedisTurnLock : ITurnLock
 
     private string Key(string conversationId) => $"{_opts.KeyPrefix}:lock:{conversationId}";
 
+    /// <summary>
+    /// Acquire the per-conversation turn. On success returns an <see cref="ITurnLease"/>
+    /// that heartbeats its own TTL until disposed; returns <c>null</c> if another node
+    /// already holds the turn (the caller answers <c>busy</c>).
+    /// </summary>
     public async Task<ITurnLease?> AcquireAsync(string conversationId, CancellationToken cancellationToken = default)
     {
         var key = Key(conversationId);

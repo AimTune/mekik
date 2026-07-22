@@ -38,6 +38,7 @@ public sealed class RedisBackplane : IBackplane
     private RedisChannel Channel(string conversationId) =>
         RedisChannel.Literal($"{_opts.KeyPrefix}:bp:{conversationId}");
 
+    /// <summary>Broadcast an already-recorded frame to every other node on this conversation.</summary>
     public async Task PublishAsync(
         string conversationId, BackplaneMessage message, CancellationToken cancellationToken = default)
     {
@@ -47,6 +48,10 @@ public sealed class RedisBackplane : IBackplane
         await _sub.PublishAsync(Channel(conversationId), payload).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Subscribe this node to a conversation's frames. Dispose the returned
+    /// <see cref="IAsyncDisposable"/> to remove this handler and its Redis subscription.
+    /// </summary>
     public async Task<IAsyncDisposable> SubscribeAsync(
         string conversationId, Action<BackplaneMessage> handler, CancellationToken cancellationToken = default)
     {

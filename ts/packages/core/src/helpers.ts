@@ -31,41 +31,124 @@ function emitChunk(ctx: Context<any>, chunk: AIChunk): void {
     ctx.emit({ [MEKIK_KEY]: "genui", chunk });
 }
 
-/** Stream one prose delta as a genui text chunk. */
+/**
+ * Stream one prose delta to the client as a generative-UI text chunk.
+ *
+ * @remarks
+ * Text chunks are **transient** — they render live as the run streams, but they
+ * are not the conversation's durable reply. The durable reply is the single `text`
+ * frame the mapper emits at run end from your reply selector. Use this for
+ * token-by-token model output, and return the full string as the reply.
+ *
+ * @param ctx - The ilmek node context (threaded into every node).
+ * @param content - The prose fragment to append to the current turn's stream.
+ *
+ * @example
+ * ```ts
+ * for await (const delta of model.stream(input)) mekik.text(ctx, delta);
+ * ```
+ *
+ * @see {@link ui} to mount a component; {@link event} to signal one.
+ */
 export function text(ctx: Context<any>, content: string): void {
     emitChunk(ctx, { type: "text", content });
 }
 
-/** Mount/update a GenUI component by registry name. */
+/**
+ * Mount or update a generative-UI component by its client-registry name.
+ *
+ * @remarks
+ * mekik streams the instruction to render a component the **client** (chativa) has
+ * registered — it ships no components itself. Emitting the same component again
+ * with new props updates it in place.
+ *
+ * @param ctx - The ilmek node context.
+ * @param component - The component name registered on the client.
+ * @param props - Props handed to the component; omit for one that needs none.
+ *
+ * @example
+ * ```ts
+ * mekik.ui(ctx, "order-card", { id: order.id, total: order.total });
+ * ```
+ */
 export function ui(ctx: Context<any>, component: string, props?: Record<string, unknown>): void {
     emitChunk(ctx, props === undefined ? { type: "ui", component } : { type: "ui", component, props });
 }
 
-/** Dispatch a named GenUI event to a mounted component. */
+/**
+ * Dispatch a named event to a mounted GenUI component — advance a step, highlight
+ * a row — without re-mounting it.
+ *
+ * @param ctx - The ilmek node context.
+ * @param name - The event name the component listens for.
+ * @param payload - Optional event payload.
+ *
+ * @example
+ * ```ts
+ * mekik.event(ctx, "highlight", { rowId: 3 });
+ * ```
+ */
 export function event(ctx: Context<any>, name: string, payload?: unknown): void {
     emitChunk(ctx, payload === undefined ? { type: "event", name } : { type: "event", name, payload });
 }
 
 /**
- * Emit one `tool_call` frame. The low-level primitive behind `tool()`, exported
- * so an integration that does its own execution (e.g. `@mekik/langchain`, where
- * the agent invokes the tool) can still produce the same trace without
- * re-deriving the reserved `$mekik` payload shape. Traces upsert by `call.id`,
- * so re-emitting the same id is how a running→completed pair is expressed.
+ * Emit a single `tool_call` frame — the low-level primitive behind {@link tool}.
+ *
+ * @remarks
+ * Exported so an integration that runs the tool itself (e.g. `@mekik/langchain`,
+ * where the agent invokes the tool) can produce the same trace without re-deriving
+ * the reserved `$mekik` payload shape. Traces **upsert by `call.id`**, so
+ * re-emitting the same id with a new `status` is how a running → completed/error
+ * pair is expressed. Prefer {@link tool} unless you own the tool's invocation.
+ *
+ * @param ctx - The ilmek node context.
+ * @param call - The trace record: `{ id, name, status, params?, result?, error? }`.
+ *
+ * @see {@link nextToolCallId} to mint a replay-stable `id`.
  */
 export function toolTrace(ctx: Context<any>, call: ToolCall): void {
     ctx.emit({ [MEKIK_KEY]: "tool", call });
 }
 
-/** Mint a replay-stable `tool_call` id for this ctx. See `toolTrace`. */
+/**
+ * Mint a replay-stable `tool_call` id for this context.
+ *
+ * @remarks
+ * The id is stable across an interrupt/resume — the resume pass mints the same id
+ * for the same call, so a re-emitted trace upserts instead of duplicating.
+ *
+ * @param ctx - The ilmek node context.
+ * @returns A deterministic id for the next tool call on this context.
+ * @see {@link toolTrace}
+ */
 export function nextToolCallId(ctx: Context<any>): string {
     return nextToolId(ctx);
 }
 
 /**
- * Run a tool exactly once (journaled by `ctx.step`) and emit its `tool_call`
- * running→completed/error trace. The side effect is memoized across an
- * interrupt-replay; the trace, being an upsert by id, re-emits harmlessly.
+ * Run a side effect exactly once and surface it as a `tool_call` trace.
+ *
+ * @remarks
+ * `fn` executes inside ilmek's `ctx.step`, so its result is **journaled**: on the
+ * replay pass after an interrupt the node re-runs, but `fn` is not called again —
+ * it returns the recorded value. This is what stops a paused-then-resumed node
+ * from repeating a charge or a lookup. The trace re-emits on replay, but as an
+ * upsert by id the client just updates the existing entry. An interrupt thrown by
+ * `fn` is rethrown untouched — a pause is not a failure.
+ *
+ * @typeParam T - The tool's result type. Must survive a journal round-trip
+ * (plain data, not class instances or live handles).
+ * @param ctx - The ilmek node context.
+ * @param name - Tool name; shown in the trace and used as the journal step key.
+ * @param params - Parameters, surfaced in the `running` trace.
+ * @param fn - The side effect. Runs once ever, across any number of resumes.
+ * @returns The tool's result — the recorded value on a replay pass.
+ *
+ * @example
+ * ```ts
+ * const order = await mekik.tool(ctx, "get_order", { id }, () => Orders.get(id));
+ * ```
  */
 export async function tool<T>(
     ctx: Context<any>,
@@ -100,9 +183,31 @@ export interface ApproveOptions {
 }
 
 /**
- * Pause for a human, attaching presentation metadata under the reserved
- * `$mekik` key so the mapper can build the `interrupt` frame's `ui`/`actions`
- * (PROTOCOL.md §4.2). Returns the human's answer on resume.
+ * Pause the run for a human and resume with their answer.
+ *
+ * @remarks
+ * The node **suspends** at the returned promise on the first pass — it never
+ * resolves there. The engine emits an `interrupt` frame (carrying `payload`, and
+ * the optional `ui`/`actions` under the reserved `$mekik` key, PROTOCOL.md §4.2)
+ * and ends the run `interrupted`. When the client answers with a `resume` keyed by
+ * the interrupt id, the graph re-runs the node from the top and this call resolves
+ * to the answer. Everything before it re-runs on resume, so wrap side effects in
+ * {@link tool}. Omit both `ui` and `actions` for default Approve/Cancel chips.
+ *
+ * @typeParam T - The shape of the human's answer.
+ * @param ctx - The ilmek node context.
+ * @param payload - The question, delivered to the client as `interrupt.data.payload`.
+ * @param opts - Presentation and journaling options; see {@link ApproveOptions}.
+ * @returns The human's answer, resolved on resume.
+ *
+ * @example
+ * ```ts
+ * const ok = await mekik.approve<{ approved: boolean }>(
+ *   ctx,
+ *   { title: "Deploy to production?" },
+ *   { actions: [{ label: "Approve", value: { approved: true } }] },
+ * );
+ * ```
  */
 export function approve<T = unknown>(
     ctx: Context<any>,

@@ -35,11 +35,26 @@ interface AuthVerdict {
 
 Enable it on the app:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 const app = mekik({ graph, authenticator: myAuthenticator });
 ```
 
-In .NET it's `IAuthenticator` with an `AuthenticateAsync` method; the option is `MekikOptions.Authenticator`. Same verdict shape.
+The port is `Authenticator` with an `authenticate(credential)` method returning an `AuthVerdict`.
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+var app = new MekikApp(new MekikOptions { Graph = graph, Authenticator = myAuthenticator });
+```
+
+The port is `IAuthenticator` with an `AuthenticateAsync(credential, ct)` method returning the same verdict shape.
+
+</TabItem>
+</Tabs>
 
 ## Where the credential comes from
 

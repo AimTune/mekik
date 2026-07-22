@@ -76,7 +76,8 @@ nothing if another node already owns the turn (the caller answers `busy`).
 `Backplane` carries every dispatched frame to the other nodes holding tabs of the
 same conversation; the producing node still records each frame exactly once.
 
-### TypeScript
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
 
 ```ts
 import { Redis } from "ioredis";
@@ -95,7 +96,8 @@ const app = mekik({
 });
 ```
 
-### .NET
+</TabItem>
+<TabItem value="dotnet" label=".NET">
 
 ```csharp
 using Mekik;
@@ -112,6 +114,9 @@ var app = new MekikApp(new MekikOptions
     Checkpointer = myDurableCheckpointer,
 });
 ```
+
+</TabItem>
+</Tabs>
 
 The .NET shapes are native: a lease and a subscription are `IAsyncDisposable`
 (release / unsubscribe on `await using`), acquisition returns `ITurnLease?`, and

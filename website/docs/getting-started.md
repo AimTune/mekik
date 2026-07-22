@@ -23,7 +23,10 @@ pnpm add @mekik/core @mekik/ws @ilmek/core
 
 ## Step 2 — Serve a graph
 
-The smallest useful server is a graph plus `serveWs`:
+The smallest useful server is a graph plus a WebSocket transport. Pick your language once — the choice follows you across every code sample on the site:
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
 
 ```ts
 // server.ts
@@ -51,7 +54,29 @@ console.log("mekik on ws://localhost:8800/ws");
 node server.ts
 ```
 
-`mekik({ graph })` builds a [`MekikApp`](./concepts.md#3-the-app--mekik-graph-) with in-memory defaults for everything (checkpointer, history, conversations). `serveWs` turns each socket into a connection the app drives. Omit `path` to accept the upgrade on **any** path — handy when a client points at `/chat` while you were thinking `/ws`.
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+// Program.cs
+using Mekik.Core;
+using Mekik.AspNetCore;
+
+var web = WebApplication.CreateBuilder(args).Build();
+
+web.UseWebSockets();
+web.MapMekik("/ws", new MekikApp(new MekikOptions { Graph = graph })); // your compiled ilmek graph
+web.Run();
+```
+
+```bash
+dotnet run
+```
+
+</TabItem>
+</Tabs>
+
+`mekik({ graph })` / `new MekikApp(new MekikOptions { Graph = graph })` builds a [`MekikApp`](./concepts.md#3-the-app--mekik-graph-) with in-memory defaults for everything (checkpointer, history, conversations). The transport (`serveWs` / `MapMekik`) turns each socket into a connection the app drives. Omit the path to accept the upgrade on **any** path — handy when a client points at `/chat` while you were thinking `/ws`.
 
 ### What a client sees
 
@@ -151,21 +176,7 @@ Prefer to drive it from a script? Any WebSocket client works — the wire is pla
 
 ## .NET in parallel
 
-The .NET port is the same shape. Serve a graph from ASP.NET Core:
-
-```csharp
-using Mekik.Core;
-using Mekik.AspNetCore;
-
-var builder = WebApplication.CreateBuilder(args);
-var web = builder.Build();
-
-web.UseWebSockets();
-web.MapMekik("/ws", new MekikApp(new MekikOptions { Graph = graph }));
-web.Run();
-```
-
-The authoring helpers are `Shuttle.Ui`, `Shuttle.Tool`, `Shuttle.Approve` (the class is `Shuttle`, not `Mekik`, to avoid a namespace clash — see [Parity](./parity/languages.md)). The wire is byte-identical to TypeScript's.
+The .NET port is the same shape — the **.NET** tab in Step 2 above serves a graph from ASP.NET Core with `app.MapMekik("/ws", app)`. The authoring helpers are `Shuttle.Ui`, `Shuttle.Tool`, `Shuttle.Approve` (the class is `Shuttle`, not `Mekik`, to avoid a namespace clash — see [Parity](./parity/languages.md)). The wire is byte-identical to TypeScript's, held there by the [shared golden fixtures](./parity/conformance.md).
 
 ## Try the examples
 

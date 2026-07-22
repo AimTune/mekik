@@ -108,6 +108,20 @@ export class RedisTurnLock implements TurnLock {
         return `${this.prefix}:lock:${conversationId}`;
     }
 
+    /**
+     * Acquire the per-conversation turn via `SET key token NX PX ttl`.
+     *
+     * @param conversationId - The conversation whose turn to claim.
+     * @returns A {@link TurnLease} that heartbeats its own TTL until released, or
+     * `null` if another node already holds the turn (the caller answers `busy`).
+     *
+     * @example
+     * ```ts
+     * const lease = await turnLock.acquire(conversationId);
+     * if (!lease) return sendBusy();
+     * try { await runTurn(); } finally { await lease.release(); }
+     * ```
+     */
     async acquire(conversationId: string): Promise<TurnLease | null> {
         const key = this.key(conversationId);
         const token = randomBytes(16).toString("base64url");
@@ -186,7 +200,7 @@ export class RedisBackplane implements Backplane {
         return `${this.prefix}:bp:${conversationId}`;
     }
 
-    private onMessage = (channel: string, payload: string): void => {
+    private readonly onMessage = (channel: string, payload: string): void => {
         const set = this.handlers.get(channel);
         if (!set || set.size === 0) return;
         let message: BackplaneMessage;
@@ -198,10 +212,16 @@ export class RedisBackplane implements Backplane {
         for (const handler of set) handler(message);
     };
 
+    /** Broadcast an already-recorded frame to every other node on this conversation. */
     async publish(conversationId: string, message: BackplaneMessage): Promise<void> {
         await this.pub.publish(this.channel(conversationId), JSON.stringify(message));
     }
 
+    /**
+     * Subscribe this node to a conversation's frames. The returned {@link Subscription}
+     * removes only this handler; the underlying Redis `SUBSCRIBE` is reference-counted,
+     * so it is torn down when the last handler on the conversation unsubscribes.
+     */
     async subscribe(
         conversationId: string,
         handler: (message: BackplaneMessage) => void,

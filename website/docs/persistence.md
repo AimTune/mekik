@@ -78,6 +78,9 @@ The most visible use is the **greeting**: `MekikOptions.greeting` fires a one-ti
 
 All three are constructor options on the app. Provide the ones you want durable; omit the rest to keep the in-memory default:
 
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
 ```ts
 const app = mekik({
   graph: g,
@@ -87,7 +90,23 @@ const app = mekik({
 });
 ```
 
-In .NET the same options are `MekikOptions.Checkpointer`, `MekikOptions.History`, `MekikOptions.Conversations`, typed as `IHistoryStore` / `IConversationStore` (the interface-name convention; see [Parity](./parity/languages.md)).
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+var app = new MekikApp(new MekikOptions
+{
+    Graph = graph,
+    Checkpointer  = myDurableCheckpointer, // ilmek's port — survives restart
+    History       = myHistoryStore,        // IHistoryStore
+    Conversations = myConversationStore,   // IConversationStore
+});
+```
+
+</TabItem>
+</Tabs>
+
+The .NET ports follow the interface-name convention — `IHistoryStore` / `IConversationStore` (see [Parity](./parity/languages.md)).
 
 ## What "durable" buys you, feature by feature
 

@@ -10,15 +10,39 @@ A transport turns a socket into a `Connection` the engine can drive and forwards
 
 WebSocket is the reference transport in v1. The frame shapes are transport-agnostic, so SSE / Socket.IO / SignalR profiles *could* be added later carrying identical frames — but only WebSocket ships today.
 
-## Node — `@mekik/ws`
+## Serving a MekikApp
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
 
 ```ts
 import { mekik } from "@mekik/core";
 import { serveWs } from "@mekik/ws";
 
 const app = mekik({ graph });
-const handle = serveWs(app, { port: 8800, path: "/ws" });
+const handle = serveWs(app, { port: 8800, path: "/ws" }); // omit `path` to accept any path
 ```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+using Mekik.Core;
+using Mekik.AspNetCore;
+
+var web = WebApplication.CreateBuilder(args).Build();
+
+web.UseWebSockets();
+web.MapMekik("/ws", new MekikApp(new MekikOptions { Graph = graph }));
+web.Run();
+```
+
+`MapMekik` extends `IEndpointRouteBuilder`, so it slots into ordinary ASP.NET Core routing alongside your other endpoints. Same wire, same engine behind it.
+
+</TabItem>
+</Tabs>
+
+## Node options (`@mekik/ws`)
 
 `serveWs` options:
 
@@ -50,22 +74,6 @@ server.listen(3000);
 ### Omit `path` to accept anything
 
 `path` filters which upgrade requests are accepted. Omit it and the transport accepts the upgrade on **any** path — useful when a client might point at `/chat` while you were thinking `/ws`. The repo's `refund.ts --serve` does exactly this so the demo just connects.
-
-## .NET — `Mekik.AspNetCore`
-
-```csharp
-using Mekik.Core;
-using Mekik.AspNetCore;
-
-var builder = WebApplication.CreateBuilder(args);
-var web = builder.Build();
-
-web.UseWebSockets();
-web.MapMekik("/ws", new MekikApp(new MekikOptions { Graph = graph }));
-web.Run();
-```
-
-`MapMekik` extends `IEndpointRouteBuilder`, so it slots into ordinary ASP.NET Core routing alongside your other endpoints. Same wire, same engine behind it.
 
 ## How identity reaches the engine
 
