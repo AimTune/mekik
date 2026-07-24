@@ -7,6 +7,6 @@
     "declarationMap": false,
     "rootDir": "."
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "test/**/*.ts"],
   "references": [{ "path": "../core" }]
 }
