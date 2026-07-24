@@ -1,6 +1,6 @@
 {
   "name": "@mekik/langchain",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "LangChain integration for mekik — surface agent tool calls in the UI, gate them behind human approval, and make them exactly-once across an interrupt/resume.",
   "type": "module",
   "license": "MIT",

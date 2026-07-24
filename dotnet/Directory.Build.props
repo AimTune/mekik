@@ -3,7 +3,7 @@
   <!-- Shared package metadata for every project under dotnet/. Test and example
        projects set IsPackable=false, so this is inert for them. -->
   <PropertyGroup>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Authors>AimTune</Authors>
     <Company>AimTune</Company>
     <Product>mekik</Product>

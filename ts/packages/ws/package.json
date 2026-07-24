@@ -1,6 +1,6 @@
 {
   "name": "@mekik/ws",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "WebSocket transport for mekik — serve a MekikApp over the mekik/1 wire protocol.",
   "type": "module",
   "license": "MIT",
