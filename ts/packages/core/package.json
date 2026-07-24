@@ -1,6 +1,6 @@
 {
   "name": "@mekik/core",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "mekik core — the realtime serving layer for ilmek graphs: WebSocket sessions, streaming generative UI, and durable human-in-the-loop over the mekik/1 wire protocol.",
   "type": "module",
   "license": "MIT",
