@@ -18,6 +18,46 @@ pnpm add @mekik/langchain @mekik/core
 
 `@langchain/core` is a **peer dependency** — bring your own version.
 
+## `runAgent` — the loop, packaged
+
+Most nodes don't need to hand-roll the model↔tool loop. `runAgent` drives it: it wraps your tools with [`withMekikTools`](#withmekiktools), runs each model call inside `ctx.step` (a resume replays the decision instead of re-paying for it), streams text deltas live as one growing bubble, and returns the consolidated reply for you to hand back:
+
+```ts
+import { runAgent } from "@mekik/langchain";
+
+.node("agent", async (state, ctx) => ({
+  reply: await runAgent(ctx, model, {
+    system: SYSTEM,
+    input: state.input,
+    tools: [getOrder, refundPayment, internalLookup],
+    policy: {
+      get_order:      { show: true },
+      refund_payment: { show: true, approve: true }, // pauses the graph for a human
+    },
+  }),
+}))
+```
+
+```ts
+function runAgent(
+  ctx: Context<any>,
+  model: BaseChatModel,          // any tool-calling chat model (bindTools)
+  options: {
+    system: string;
+    input: string;
+    tools?: readonly StructuredToolInterface[];
+    maxTurns?: number;           // default 6
+    policy?: Readonly<Record<string, ToolPolicy>>;
+    defaultPolicy?: ToolPolicy;
+    stream?: boolean;            // live text deltas; default true
+    emptyReply?: string;
+    budgetReply?: string;
+  },
+): Promise<string>;
+```
+
+The reply is **returned, not set** — you return it as your node's durable reply (`{ reply }`), keeping mekik's transient-stream vs durable-reply split. Reach for [`withMekikTools`](#withmekiktools) directly when you need to drive the loop yourself (a custom agent framework, a non-standard message shape).
+
 ## `withMekikTools`
 
 ```ts
@@ -130,6 +170,23 @@ const out = await agent.invoke(input, { callbacks: [mekikCallbacks(ctx, policy)]
 | human approval | ✅ | ❌ |
 | exactly-once across resume | ✅ | ❌ |
 | requires wrapping the tools | yes | no |
+
+## `route` — classify into one node
+
+The router pattern (classify the turn, then `goto` a focused expert node) is one call. `route` builds a strict classification prompt from your route names + descriptions, journals the choice (a resume replays the same route), and normalizes the model's answer to a valid route — falling back when it answers off-list:
+
+```ts
+import { route } from "@mekik/langchain";
+
+.node("router", async (state, ctx) => {
+  const target = await route(ctx, model, [
+    { name: "reporting", description: "sprint reports and metrics" },
+    { name: "billing",   description: "invoices and charges" },
+    { name: "general",   description: "everything else" },
+  ], state.input, { fallback: "general" });
+  return command(update({ route: target }), target); // set channel + goto node
+})
+```
 
 ## Where to go next
 

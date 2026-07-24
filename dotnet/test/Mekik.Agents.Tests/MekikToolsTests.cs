@@ -21,7 +21,15 @@ public class MekikToolsTests
         public string Id => "c-1";
         private readonly List<IReadOnlyDictionary<string, object?>> _sent = new();
         public IReadOnlyList<IReadOnlyDictionary<string, object?>> Sent => _sent;
-        public void Send(IReadOnlyDictionary<string, object?> frame) => _sent.Add(frame);
+        public void Send(IReadOnlyDictionary<string, object?> frame)
+        {
+            // Every frame must survive canonicalization — that is what the real
+            // transport does before it hits the wire. Asserting it here catches a
+            // JsonElement (from an AIFunctionFactory tool) that would otherwise crash
+            // only in production, never in a test that just stashes the dict.
+            Json.Canonicalize(frame);
+            _sent.Add(frame);
+        }
         public void Close(int? code = null, string? reason = null) { }
         public List<IReadOnlyDictionary<string, object?>> Drain()
         {
@@ -413,6 +421,33 @@ public class MekikToolsTests
         Assert.True(MekikTools.IsApproved(new Dictionary<string, object?> { ["approved"] = true }));
         Assert.False(MekikTools.IsApproved(new Dictionary<string, object?> { ["approved"] = false }));
         Assert.False(MekikTools.IsApproved(new Dictionary<string, object?> { ["other"] = true }));
+    }
+
+    [Fact]
+    public async Task A_json_marshalled_tool_result_reaches_the_wire_intact()
+    {
+        // AIFunctionFactory marshals return values through System.Text.Json, so this
+        // dict comes back as a JsonElement. It must still canonicalize into a frame —
+        // the crash that used to force a hand-written "canonical" wrapper.
+        var fn = Fn("get_order", "Look up an order",
+            (string id) => new Dictionary<string, object?> { ["id"] = id, ["total"] = 249.9 });
+
+        var app = MakeApp(async ctx =>
+        {
+            var tools = MekikTools.Wrap(ctx, [fn]);
+            await tools[0].InvokeAsync(new AIFunctionArguments { ["id"] = "ORD-42" });
+            return "done";
+        });
+
+        var conn = new FakeConn();
+        await app.ConnectAsync(conn);
+        conn.Drain();
+        await app.ReceiveAsync(conn, TextFrame("go")); // FakeConn.Send canonicalizes — throws pre-fix
+
+        var completed = Calls(conn.Sent, "get_order").Single(d => d["status"] as string == "completed");
+        var canonical = Json.Canonicalize(completed["result"]);
+        Assert.Contains("\"id\":\"ORD-42\"", canonical);
+        Assert.Contains("\"total\":249.9", canonical);
     }
 
     /// <summary>An AIFunction result round-trips as JSON, so read the field back out of it.</summary>

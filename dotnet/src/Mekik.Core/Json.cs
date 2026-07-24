@@ -74,6 +74,15 @@ public static class Json
                 }
                 w.WriteEndObject();
                 break;
+            case JsonElement je:
+                // Values that came back through System.Text.Json — an
+                // AIFunctionFactory tool result, a model's function-call arguments —
+                // arrive as JsonElement. Fold them into the same plain shape the rest
+                // of this writer emits, so a frame carrying one canonicalizes instead
+                // of throwing on the real transport (a test double that skips
+                // canonicalization would never notice).
+                Write(w, FromElement(je));
+                break;
             case System.Collections.IEnumerable seq:
                 w.WriteStartArray();
                 foreach (var item in seq) Write(w, item);

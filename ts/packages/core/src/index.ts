@@ -27,10 +27,10 @@
  */
 
 import { createMekikApp } from "./app.ts";
-import { approve, event, text, tool, ui } from "./helpers.ts";
+import { approve, authClaims, claimStrings, event, streamText, text, tool, ui } from "./helpers.ts";
 
 /** The app factory with the authoring helpers attached (PROTOCOL.md §6). */
-export const mekik = Object.assign(createMekikApp, { text, ui, event, tool, approve });
+export const mekik = Object.assign(createMekikApp, { text, streamText, ui, event, tool, approve, authClaims, claimStrings });
 
 export { MekikApp } from "./app.ts";
 export type { MekikOptions } from "./app.ts";
@@ -45,7 +45,7 @@ export { TurnMapper, eventToFrames, unwrapInterrupt, interruptFrameData } from "
 export type { IdMinter, TurnMapperDeps } from "./mapper.ts";
 
 // The helpers are also available as named imports, for callers who prefer them.
-export { approve, event, text, tool, ui } from "./helpers.ts";
+export { approve, authClaims, claimStrings, event, streamText, text, tool, ui } from "./helpers.ts";
 export type { ApproveOptions } from "./helpers.ts";
 
 // Low-level trace primitives, for integrations that execute tools themselves

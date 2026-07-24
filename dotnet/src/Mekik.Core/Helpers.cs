@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using Ilmek;
 
 namespace Mekik;
@@ -65,6 +66,75 @@ public static class Shuttle
     /// <param name="content">The prose fragment to append to the current turn's stream.</param>
     public static void Text(IContext ctx, string content) =>
         EmitChunk(ctx, new Dictionary<string, object?> { ["type"] = "text", ["content"] = content });
+
+    /// <summary>Stream an async sequence of prose deltas as live text chunks and return the full text —
+    /// the token-by-token pattern in a single call.</summary>
+    /// <remarks>
+    /// Each delta is emitted with <see cref="Text"/>, so consecutive deltas share one stream text-run
+    /// and a client renders a <b>single growing bubble</b>, not one bubble per token (PROTOCOL.md §4.1).
+    /// Streamed text is transient: the return value is every delta concatenated — return it from your
+    /// node as the durable <c>reply</c>, which the mapper emits as the one persistent <c>text</c> frame
+    /// at run end. Empty deltas are skipped.
+    /// </remarks>
+    /// <typeparam name="T">The element type of the source stream (e.g. a model's streaming chunk).</typeparam>
+    /// <param name="ctx">The ilmek node context.</param>
+    /// <param name="deltas">The async source, e.g. an <see cref="IAsyncEnumerable{T}"/> from a model client.</param>
+    /// <param name="select">Pulls the text fragment out of each element.</param>
+    /// <param name="ct">Cancellation for the enumeration; pass <c>ctx.CancellationToken</c>.</param>
+    /// <returns>The full text accumulated from every emitted delta.</returns>
+    /// <example><code>
+    /// var full = await Shuttle.StreamText(ctx, chat.GetStreamingResponseAsync(messages, options, ctx.CancellationToken), u => u.Text);
+    /// return Update.Of("reply", full);
+    /// </code></example>
+    public static async Task<string> StreamText<T>(
+        IContext ctx,
+        IAsyncEnumerable<T> deltas,
+        Func<T, string?> select,
+        CancellationToken ct = default)
+    {
+        var full = new StringBuilder();
+        await foreach (var delta in deltas.WithCancellation(ct).ConfigureAwait(false))
+        {
+            var piece = select(delta);
+            if (string.IsNullOrEmpty(piece)) continue;
+            Text(ctx, piece);
+            full.Append(piece);
+        }
+        return full.ToString();
+    }
+
+    /// <summary>Stream raw string deltas — the selector-free overload of <see cref="StreamText{T}"/>.</summary>
+    public static Task<string> StreamText(IContext ctx, IAsyncEnumerable<string> deltas, CancellationToken ct = default) =>
+        StreamText(ctx, deltas, static s => s, ct);
+
+    // ── auth claims (PROTOCOL.md §7) ───────────────────────────────────────────
+
+    private static readonly IReadOnlyDictionary<string, object?> EmptyClaims = new Dictionary<string, object?>();
+
+    /// <summary>
+    /// The authenticated claims for this turn — the <c>AuthVerdict.Claims</c> the
+    /// authenticator returned, which the engine places at <c>ctx.Meta["auth"]</c>. Empty
+    /// when the app runs without an authenticator or the connection is anonymous.
+    /// </summary>
+    public static IReadOnlyDictionary<string, object?> AuthClaims(IContext ctx) =>
+        ctx.Meta.GetValueOrDefault("auth") as IReadOnlyDictionary<string, object?> ?? EmptyClaims;
+
+    /// <summary>
+    /// Read a claim as a list of strings, coercing the shapes it survives a JSON round-trip
+    /// as: a string list, a single string, or a list of boxed values. Missing ⇒ empty.
+    /// </summary>
+    public static IReadOnlyList<string> ClaimStrings(IReadOnlyDictionary<string, object?> claims, string key) =>
+        claims.GetValueOrDefault(key) switch
+        {
+            IEnumerable<string> strings => strings.ToList(),
+            string one => string.IsNullOrEmpty(one) ? [] : [one],
+            System.Collections.IEnumerable seq => seq.Cast<object?>()
+                .Select(x => x?.ToString())
+                .Where(x => !string.IsNullOrEmpty(x))
+                .Select(x => x!)
+                .ToList(),
+            _ => [],
+        };
 
     /// <summary>Mount or update a generative-UI component by its client-registry name.</summary>
     /// <remarks>Emitting the same component again with new props updates it in place. mekik

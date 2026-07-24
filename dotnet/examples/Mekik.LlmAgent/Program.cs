@@ -12,11 +12,11 @@
 // Needs a real API key, so this example is deliberately outside the CI test path
 // (CI compiles it; it never runs it).
 //
-// The loop below is written by hand rather than handed to
-// `ChatClientBuilder.UseFunctionInvocation()`. That helper owns the invocation
-// and decides for itself what to do with an exception a function throws — and an
-// ilmek pause *is* an exception in flight. Driving the loop ourselves keeps the
-// interrupt propagating out of the node, which is what parks the graph.
+// The model↔tool loop is `Agent.RunAsync` (Mekik.Agents), not
+// `ChatClientBuilder.UseFunctionInvocation()`. That helper owns the invocation and
+// decides for itself what to do with an exception a function throws — and an ilmek
+// pause *is* an exception in flight. Agent.RunAsync drives the loop so the interrupt
+// propagates out of the node, which is what parks the graph.
 
 using System.Text.Json;
 
@@ -115,83 +115,17 @@ var desk = Graph.Create("llm-refund")
     .Channel("input", Channels.LastWrite(""))
     .Channel("reply", Channels.LastWrite(""))
     .Node("agent", async (State state, IContext ctx) =>
-    {
-        // Wrapping happens per run, because each wrapper closes over *this*
-        // run's ctx — that is what lets a function emit frames and journal itself.
-        var tools = MekikTools.Wrap(ctx, functions, policies);
-        var byName = tools.ToDictionary(t => t.Name);
-        var options = new ChatOptions { Tools = [.. tools] };
-
-        var messages = new List<ChatMessage>
+        // The whole model↔tool loop — journaled per turn, tools wrapped for
+        // visibility + exactly-once, text streamed live — is Agent.RunAsync. The
+        // node just supplies the prompt, the input and the functions.
+        Update.Of("reply", await Agent.RunAsync(ctx, Model(), new AgentRunOptions
         {
-            new(ChatRole.System, System),
-            new(ChatRole.User, state.Get<string>("input")),
-        };
-
-        for (var turn = 0; turn < MaxTurns; turn++)
-        {
-            // The model call is journaled too. Without this the resume pass would
-            // pay for — and could get a *different* answer to — the same
-            // question, and the replayed function keys would stop lining up.
-            var decision = await ctx.StepAsync<Dictionary<string, object?>>($"llm:{turn}", async () =>
-            {
-                var response = await Model().GetResponseAsync(messages, options);
-                var calls = response.Messages
-                    .SelectMany(m => m.Contents)
-                    .OfType<FunctionCallContent>()
-                    .Select(c => (object?)new Dictionary<string, object?>
-                    {
-                        ["id"] = c.CallId,
-                        ["name"] = c.Name,
-                        ["args"] = c.Arguments is null
-                            ? new Dictionary<string, object?>()
-                            : new Dictionary<string, object?>(c.Arguments),
-                    })
-                    .ToList();
-                return new Dictionary<string, object?> { ["text"] = response.Text, ["calls"] = calls };
-            });
-
-            var text = decision.GetValueOrDefault("text") as string ?? "";
-            var calls = ((IEnumerable<object?>)(decision.GetValueOrDefault("calls") ?? new List<object?>()))
-                .OfType<IReadOnlyDictionary<string, object?>>()
-                .ToList();
-
-            // Rebuild the assistant turn from the journal, so the replay pass
-            // presents the model with exactly the history the first pass did.
-            var contents = new List<AIContent>();
-            if (!string.IsNullOrEmpty(text)) contents.Add(new TextContent(text));
-            foreach (var call in calls)
-            {
-                contents.Add(new FunctionCallContent(
-                    (string)call["id"]!,
-                    (string)call["name"]!,
-                    ToArgs(call.GetValueOrDefault("args"))));
-            }
-            messages.Add(new ChatMessage(ChatRole.Assistant, contents));
-
-            if (calls.Count == 0)
-            {
-                return Update.Of("reply", string.IsNullOrEmpty(text) ? "(no reply)" : text);
-            }
-
-            foreach (var call in calls)
-            {
-                var callId = (string)call["id"]!;
-                var name = (string)call["name"]!;
-                // A wrapped function may throw the interrupt that parks the
-                // graph; letting it propagate is how the pause reaches the client.
-                object? result = byName.TryGetValue(name, out var fn)
-                    ? await fn.InvokeAsync(new AIFunctionArguments(ToArgs(call.GetValueOrDefault("args"))))
-                    : $"Unknown tool {name}.";
-                messages.Add(new ChatMessage(ChatRole.Tool, new List<AIContent>
-                {
-                    new FunctionResultContent(callId, result),
-                }));
-            }
-        }
-
-        return Update.Of("reply", "I could not finish that within my step budget — please try again.");
-    })
+            System = System,
+            Input = state.Get<string>("input") ?? string.Empty,
+            Tools = functions,
+            Policies = policies,
+            MaxTurns = MaxTurns,
+        })))
     .Edge(Graph.Start, "agent")
     .Edge("agent", Graph.End)
     .Compile();
@@ -285,11 +219,6 @@ static void Describe(List<IReadOnlyDictionary<string, object?>> frames)
         }
     }
 }
-
-static Dictionary<string, object?> ToArgs(object? value) =>
-    value is IReadOnlyDictionary<string, object?> d
-        ? new Dictionary<string, object?>(d)
-        : new Dictionary<string, object?>();
 
 static Dictionary<string, object?> Text(string text) => new()
 {

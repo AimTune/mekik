@@ -94,6 +94,9 @@ export class TurnMapper {
     private readonly deps: TurnMapperDeps;
     private streamId: string | null = null;
     private chunkCounter = 0;
+    // The id of the open text run, or null when none is open. Consecutive text
+    // deltas share it so the client renders one growing bubble, not one per token.
+    private textRunId: number | null = null;
 
     constructor(deps: TurnMapperDeps) {
         this.deps = deps;
@@ -178,9 +181,26 @@ export class TurnMapper {
 
     private genuiFrame(chunk: AIChunk, done: boolean): GenUIFrame {
         if (this.streamId === null) this.streamId = this.deps.mint.stream();
-        // Assign a chunk id if the emitter didn't; ids increment within the stream.
-        const withId: AIChunk = chunk.id === undefined ? { ...chunk, id: this.nextChunkId() } : chunk;
-        return { type: "genui", seq: this.deps.allocSeq(), streamId: this.streamId, done, chunk: withId };
+        return { type: "genui", seq: this.deps.allocSeq(), streamId: this.streamId, done, chunk: this.withChunkId(chunk) };
+    }
+
+    /**
+     * Give the chunk its stream-scoped id. Consecutive text deltas share ONE id, so
+     * a client keys them to a single, growing message bubble instead of rendering one
+     * bubble per token (PROTOCOL.md §4.1). A `ui`/`event` chunk — or a caller-supplied
+     * id — closes the open text run, so the next text delta starts a fresh bubble.
+     */
+    private withChunkId(chunk: AIChunk): AIChunk {
+        if (chunk.id !== undefined) {
+            this.textRunId = null; // an explicit id opts out of run coalescing
+            return chunk;
+        }
+        if (chunk.type === "text") {
+            this.textRunId ??= this.nextChunkId();
+            return { ...chunk, id: this.textRunId };
+        }
+        this.textRunId = null; // a non-text chunk ends the current text run
+        return { ...chunk, id: this.nextChunkId() };
     }
 
     private botText(text: string): TextOutFrame {

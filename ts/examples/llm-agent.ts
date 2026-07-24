@@ -13,16 +13,13 @@
 // Needs a real API key, so this example is deliberately outside the CI test path.
 
 import { channel, graph, END, START } from "@ilmek/core";
-import type { Context } from "@ilmek/core";
 import { ChatAnthropic } from "@langchain/anthropic";
-import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
-import type { BaseMessage } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import { mekik } from "@mekik/core";
 import type { Connection, OutgoingFrame } from "@mekik/core";
-import { withMekikTools } from "@mekik/langchain";
+import { runAgent } from "@mekik/langchain";
 import { serveWs } from "@mekik/ws";
 
 // ── the domain ────────────────────────────────────────────────────────────────
@@ -108,85 +105,36 @@ function model(): ChatAnthropic {
 const desk = graph("llm-refund")
     .channel("input", channel.lastWrite<string>(""))
     .channel("reply", channel.lastWrite<string>(""))
-    .node("agent", async (s, ctx) => {
-        // Wrapping happens per run, because each wrapper closes over *this*
-        // run's ctx — that is what lets a tool emit frames and journal itself.
-        const tools = withMekikTools(ctx, [getOrder, customerTier, refundPayment], {
-            get_order: { show: true },
-            // The one irreversible action: pause the graph and ask a human. The
-            // model just sees a tool that takes a while — or, on a decline, a
-            // tool result telling it the user said no.
-            refund_payment: {
-                show: true,
-                approve: {
-                    title: "Approve this refund?",
-                    ui: { component: "approval-form", props: {} },
-                    denyMessage: "The customer's refund was declined by a human reviewer. Explain that politely.",
+    .node("agent", async (s, ctx) => ({
+        // The whole model↔tool loop — journaled per turn, tools wrapped for
+        // visibility + exactly-once, text streamed live — is runAgent. The node
+        // just supplies the prompt, the input and the tools.
+        reply: await runAgent(ctx, model(), {
+            system: SYSTEM,
+            input: s.input,
+            tools: [getOrder, customerTier, refundPayment],
+            maxTurns: MAX_TURNS,
+            policy: {
+                get_order: { show: true },
+                // The one irreversible action: pause the graph and ask a human. The
+                // model just sees a tool that takes a while — or, on a decline, a
+                // tool result telling it the user said no.
+                refund_payment: {
+                    show: true,
+                    approve: {
+                        title: "Approve this refund?",
+                        ui: { component: "approval-form", props: {} },
+                        denyMessage: "The customer's refund was declined by a human reviewer. Explain that politely.",
+                    },
                 },
+                // Runs, but the customer never sees us checking their tier.
+                customer_tier: { show: false },
             },
-            // Runs, but the customer never sees us checking their tier.
-            customer_tier: { show: false },
-        });
-
-        const byName = new Map(tools.map((t) => [t.name, t]));
-        const bound = model().bindTools(tools);
-        const messages: BaseMessage[] = [new SystemMessage(SYSTEM), new HumanMessage(s.input)];
-
-        for (let turn = 0; turn < MAX_TURNS; turn++) {
-            // The model call is journaled too. Without this the resume pass would
-            // pay for — and could get a *different* answer from — the same
-            // question, and the replayed tool keys would stop lining up.
-            const decision = await ctx.step(`llm:${turn}`, async () => {
-                const ai = await bound.invoke(messages);
-                return {
-                    text: typeof ai.content === "string" ? ai.content : textOf(ai),
-                    toolCalls: (ai.tool_calls ?? []).map((c) => ({
-                        id: c.id ?? "",
-                        name: c.name,
-                        args: c.args as Record<string, unknown>,
-                    })),
-                };
-            });
-
-            messages.push(
-                new AIMessage({
-                    content: decision.text,
-                    tool_calls: decision.toolCalls.map((c) => ({ id: c.id, name: c.name, args: c.args })),
-                }),
-            );
-
-            if (decision.toolCalls.length === 0) {
-                return { reply: decision.text || "(no reply)" };
-            }
-
-            for (const call of decision.toolCalls) {
-                const t = byName.get(call.name);
-                // A wrapped tool may throw the interrupt that parks the graph;
-                // letting it propagate is how the pause reaches the client.
-                const result = t
-                    ? await t.invoke(call.args as never)
-                    : `Unknown tool ${call.name}.`;
-                messages.push(
-                    new ToolMessage({
-                        tool_call_id: call.id,
-                        content: typeof result === "string" ? result : JSON.stringify(result),
-                    }),
-                );
-            }
-        }
-
-        return { reply: "I could not finish that within my step budget — please try again." };
-    })
+        }),
+    }))
     .edge(START, "agent")
     .edge("agent", END)
     .compile();
-
-function textOf(ai: AIMessage): string {
-    const parts = ai.content as Array<{ type?: string; text?: string }>;
-    return Array.isArray(parts)
-        ? parts.filter((p) => p.type === "text" && p.text).map((p) => p.text).join("")
-        : "";
-}
 
 function makeApp() {
     return mekik({

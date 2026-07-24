@@ -37,6 +37,9 @@ public sealed class TurnMapper
     private readonly TurnMapperDeps _deps;
     private string? _streamId;
     private long _chunkCounter;
+    // The id of the open text run, or null when none is open. Consecutive text
+    // deltas share it so the client renders one growing bubble, not one per token.
+    private long? _textRunId;
 
     public TurnMapper(TurnMapperDeps deps) => _deps = deps;
 
@@ -104,9 +107,25 @@ public sealed class TurnMapper
     private Dictionary<string, object?> GenuiFrame(IReadOnlyDictionary<string, object?> chunk, bool done)
     {
         _streamId ??= _deps.Mint.Stream();
-        // Clone; assign a chunk id if the emitter didn't. Ids increment within the stream.
+        // Clone, then give the chunk its stream-scoped id. Consecutive text deltas
+        // share ONE id so a client renders one growing bubble instead of one bubble
+        // per token (PROTOCOL.md §4.1); a ui/event chunk — or a caller-supplied id —
+        // closes the open text run, so the next text delta starts a fresh bubble.
         var withId = chunk.ToDictionary(kv => kv.Key, kv => kv.Value);
-        if (withId.GetValueOrDefault("id") is null) withId["id"] = ++_chunkCounter;
+        if (withId.GetValueOrDefault("id") is not null)
+        {
+            _textRunId = null; // an explicit id opts out of run coalescing
+        }
+        else if (withId.GetValueOrDefault("type") as string == "text")
+        {
+            _textRunId ??= ++_chunkCounter;
+            withId["id"] = _textRunId.Value;
+        }
+        else
+        {
+            _textRunId = null; // a non-text chunk ends the current text run
+            withId["id"] = ++_chunkCounter;
+        }
         return new Dictionary<string, object?>
         {
             ["type"] = "genui",

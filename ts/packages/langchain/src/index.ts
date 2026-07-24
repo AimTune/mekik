@@ -33,8 +33,11 @@
  */
 
 import { DynamicStructuredTool, type StructuredToolInterface } from "@langchain/core/tools";
+import { AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
+import type { BaseMessage } from "@langchain/core/messages";
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 
-import { approve as mekikApprove, nextToolCallId, toolTrace } from "@mekik/core";
+import { approve as mekikApprove, nextToolCallId, text as emitText, toolTrace } from "@mekik/core";
 import type { MessageAction, ToolCall, UiRef } from "@mekik/core";
 import type { Context } from "@ilmek/core";
 
@@ -142,6 +145,197 @@ function wrapOne(
     });
 
     return wrapped as unknown as StructuredToolInterface;
+}
+
+// ── the agent loop ────────────────────────────────────────────────────────────
+
+/** Options for one {@link runAgent} model↔tool loop. */
+export interface RunAgentOptions {
+    /** The system prompt that frames the node's role. */
+    system: string;
+    /** The user's message for this turn (usually `state.input`). */
+    input: string;
+    /** Tools the model may call. Wrapped with {@link withMekikTools} automatically. */
+    tools?: readonly StructuredToolInterface[];
+    /** Max model↔tool round-trips before the loop gives up. Default 6. */
+    maxTurns?: number;
+    /** Per-tool policies (visibility, approval, redaction) forwarded to {@link withMekikTools}. */
+    policy?: ToolPolicyMap;
+    /** Default policy for tools with no entry in {@link policy}. */
+    defaultPolicy?: ToolPolicy;
+    /** Stream text deltas live (one growing bubble via `mekik.text`). Default true. */
+    stream?: boolean;
+    /** Reply when the model settles with neither text nor a tool call. */
+    emptyReply?: string;
+    /** Reply when `maxTurns` is exhausted without the model settling. */
+    budgetReply?: string;
+}
+
+interface AgentToolCall {
+    id: string;
+    name: string;
+    args: Record<string, unknown>;
+}
+
+/**
+ * The agentic model↔tool loop, packaged. A node hands its prompt, the user input
+ * and a tool set to `runAgent`; the model drives — calling tools until it answers —
+ * and the reply comes back as a string to return as the node's `reply`. Mirror of
+ * the .NET `Mekik.Agents.Agent.RunAsync`.
+ *
+ * What the loop owns, so callers don't re-derive it every node:
+ * - tools are wrapped with {@link withMekikTools} — each call is a visible `tool_call`
+ *   trace, gated by any approval policy, and journaled exactly-once across a resume;
+ * - each model call runs inside `ctx.step`, so a resume replays the recorded decision
+ *   instead of paying for (and possibly changing) it, and text is not re-streamed;
+ * - with `stream` (default), text deltas stream live through `mekik.text` — one growing
+ *   bubble — while the consolidated answer is the returned string.
+ *
+ * @example
+ * ```ts
+ * .node("answer", async (state, ctx) =>
+ *   ({ reply: await runAgent(ctx, model, { system, input: state.input, tools }) }))
+ * ```
+ */
+export async function runAgent(
+    ctx: Context<any>,
+    model: BaseChatModel,
+    options: RunAgentOptions,
+): Promise<string> {
+    const {
+        system,
+        input,
+        tools = [],
+        maxTurns = 6,
+        policy = {},
+        stream = true,
+        emptyReply = "(no reply)",
+        budgetReply = "I could not finish that within my step budget — please try again.",
+    } = options;
+
+    if (typeof model.bindTools !== "function") {
+        throw new TypeError("runAgent needs a tool-calling chat model (one with bindTools).");
+    }
+
+    // Wrap per run: each wrapper closes over *this* run's ctx, which is what lets a
+    // tool emit its trace frame and journal itself.
+    const wrapped = withMekikTools(ctx, tools, policy, options.defaultPolicy ? { defaultPolicy: options.defaultPolicy } : {});
+    const byName = new Map(wrapped.map((t) => [t.name, t]));
+    const bound = model.bindTools(wrapped);
+
+    const messages: BaseMessage[] = [new SystemMessage(system), new HumanMessage(input)];
+
+    for (let turn = 0; turn < maxTurns; turn++) {
+        // Journaled: a resume replays this decision instead of re-calling the model,
+        // so the replayed tool keys line up and text is not re-streamed.
+        const decision = await ctx.step(`agent:llm:${turn}`, async (): Promise<{ text: string; toolCalls: AgentToolCall[] }> => {
+            if (stream) {
+                let acc: AIMessageChunk | undefined;
+                for await (const chunk of await bound.stream(messages)) {
+                    const delta = messageText(chunk);
+                    if (delta) emitText(ctx, delta);
+                    acc = acc === undefined ? chunk : acc.concat(chunk);
+                }
+                const ai = acc ?? new AIMessageChunk({ content: "" });
+                return { text: messageText(ai), toolCalls: toolCallsOf(ai) };
+            }
+            const ai = await bound.invoke(messages);
+            return { text: messageText(ai), toolCalls: toolCallsOf(ai) };
+        });
+
+        // Rebuild the assistant turn from the journal so the replay pass presents the
+        // model with exactly the history the first pass did.
+        messages.push(
+            new AIMessage({
+                content: decision.text,
+                tool_calls: decision.toolCalls.map((c) => ({ id: c.id, name: c.name, args: c.args })),
+            }),
+        );
+
+        if (decision.toolCalls.length === 0) {
+            return decision.text || emptyReply;
+        }
+
+        for (const call of decision.toolCalls) {
+            const t = byName.get(call.name);
+            // A wrapped tool may throw the interrupt that parks the graph; letting it
+            // propagate is how the pause reaches the client.
+            const result = t ? await t.invoke(call.args as never) : `Unknown tool ${call.name}.`;
+            messages.push(
+                new ToolMessage({
+                    tool_call_id: call.id,
+                    content: typeof result === "string" ? result : JSON.stringify(result),
+                }),
+            );
+        }
+    }
+
+    return budgetReply;
+}
+
+/** One classification target for {@link route}: a node name and what it handles. */
+export interface RouteChoice {
+    name: string;
+    description: string;
+}
+
+/**
+ * Classify `input` into exactly one of `routes` and return the chosen route name — the
+ * router-node pattern (classify → goto expert node) in one call. The classification is
+ * journaled (a resume replays the same route) and normalized to a valid route name, falling
+ * back to `options.fallback` (or the last route) when the model answers off-list.
+ *
+ * @example
+ * ```ts
+ * const r = await route(ctx, model, routes, state.input);
+ * return command(update({ route: r }), r); // ilmek: set channel + goto node r
+ * ```
+ */
+export async function route(
+    ctx: Context<any>,
+    model: BaseChatModel,
+    routes: readonly RouteChoice[],
+    input: string,
+    options: { fallback?: string; stepKey?: string } = {},
+): Promise<string> {
+    if (routes.length === 0) throw new Error("route needs at least one route.");
+    const choice = await ctx.step(options.stepKey ?? "route", async () => {
+        const ai = await model.invoke([new SystemMessage(routePrompt(routes)), new HumanMessage(input)]);
+        return messageText(ai);
+    });
+    return normalizeRoute(choice, routes, options.fallback);
+}
+
+function routePrompt(routes: readonly RouteChoice[]): string {
+    return (
+        "Assign the user's message to EXACTLY ONE category and reply with only the category name (one word):\n" +
+        routes.map((r) => `- ${r.name}: ${r.description}`).join("\n") +
+        "\nReply with only the category name — no explanation or punctuation."
+    );
+}
+
+function normalizeRoute(modelOutput: string, routes: readonly RouteChoice[], fallback?: string): string {
+    const text = modelOutput.trim().toLowerCase();
+    for (const r of routes) if (text.includes(r.name.toLowerCase())) return r.name;
+    return fallback ?? routes.at(-1)!.name;
+}
+
+/** The text of a message or streamed chunk — string content, or the text parts of an array. */
+function messageText(ai: { content: unknown }): string {
+    const c = ai.content;
+    if (typeof c === "string") return c;
+    if (Array.isArray(c)) {
+        return c
+            .filter((p): p is { type?: string; text?: string } => typeof p === "object" && p !== null)
+            .filter((p) => p.type === "text" && typeof p.text === "string")
+            .map((p) => p.text as string)
+            .join("");
+    }
+    return "";
+}
+
+function toolCallsOf(ai: { tool_calls?: Array<{ id?: string; name: string; args?: Record<string, unknown> }> }): AgentToolCall[] {
+    return (ai.tool_calls ?? []).map((c) => ({ id: c.id ?? "", name: c.name, args: c.args ?? {} }));
 }
 
 async function askApproval(

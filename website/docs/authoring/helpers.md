@@ -91,17 +91,18 @@ Shuttle.Ui(ctx, "card", new Dictionary<string, object?>()); // helper — called
 </TabItem>
 </Tabs>
 
-## The five helpers
+## The helpers
 
 | TypeScript | .NET | Emits | Awaits? | Guide |
 |---|---|---|---|---|
 | `mekik.text(ctx, content)` | `Shuttle.Text(ctx, content)` | a `genui` **text** chunk | no | [Generative UI](./generative-ui.md) |
+| `mekik.streamText(ctx, deltas, select?)` | `Shuttle.StreamText(ctx, deltas, …)` | one `genui` **text** chunk per delta | **yes** — returns the joined text | [Generative UI](./generative-ui.md#a-streaming-reply-end-to-end) |
 | `mekik.ui(ctx, component, props?)` | `Shuttle.Ui(ctx, component, props?)` | a `genui` **ui** chunk | no | [Generative UI](./generative-ui.md) |
 | `mekik.event(ctx, name, payload?)` | `Shuttle.Event(ctx, name, payload?)` | a `genui` **event** chunk | no | [Generative UI](./generative-ui.md) |
 | `mekik.tool(ctx, name, params, fn)` | `Shuttle.Tool(ctx, name, params, fn)` | a `tool_call` trace + runs `fn` once | **yes** — returns the result | [Tools](./tools.md) |
 | `mekik.approve(ctx, payload, opts?)` | `Shuttle.Approve(ctx, payload, …)` | an `interrupt` frame; the run pauses | **yes** — returns the answer | [Human-in-the-loop](./human-in-the-loop.md) |
 
-The first three are fire-and-forget: they emit a chunk and return. The last two `await` because they wrap ilmek machinery (`ctx.step` / `ctx.StepAsync` for `tool`, `ctx.interrupt` / `ctx.InterruptAsync` for `approve`).
+`text`, `ui` and `event` are fire-and-forget: they emit a chunk and return. `streamText` is the token-by-token convenience — it drives an async delta source through `text` and returns the joined string to hand back as the reply. `tool` and `approve` `await` because they wrap ilmek machinery (`ctx.step` / `ctx.StepAsync` for `tool`, `ctx.interrupt` / `ctx.InterruptAsync` for `approve`).
 
 ### text / ui / event
 

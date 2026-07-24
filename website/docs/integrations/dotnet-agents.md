@@ -8,6 +8,28 @@ description: "Mekik.Agents — wrap a tool-calling chat client's functions so ea
 
 `Mekik.Agents` is the [Microsoft.Extensions.AI](https://www.nuget.org/packages/Microsoft.Extensions.AI.Abstractions) integration — the .NET mirror of [`@mekik/langchain`](./langchain.md). Run a tool-calling chat client inside an ilmek node and get, per function: a `tool_call` trace, optional human approval, and exactly-once across a pause/resume. The wrappers are `DelegatingAIFunction`s, so name, description, and JSON schema are preserved and the model sees exactly the same tools.
 
+## `Agent.RunAsync` — the loop, packaged
+
+Most nodes don't need to hand-roll the model↔tool loop. `Agent.RunAsync` drives it: it wraps your functions with [`MekikTools`](#mekiktoolswrap), runs each model call inside `ctx.StepAsync` (a resume replays the decision instead of re-paying for it), streams text deltas live as one growing bubble, and returns the consolidated reply:
+
+```csharp
+using Mekik.Agents;
+
+.Node("agent", async (State state, IContext ctx) =>
+    Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
+    {
+        System = SYSTEM,
+        Input  = state.Get<string>("input") ?? string.Empty,
+        Tools  = functions,                       // raw AIFunctions — wrapped for you
+        Policies = new Dictionary<string, ToolPolicy>
+        {
+            ["refund_payment"] = new() { Approve = new ApproveSpec() }, // pauses for a human
+        },
+    })))
+```
+
+The reply is **returned, not set** — you return it as your node's durable reply (`Update.Of("reply", …)`), keeping mekik's transient-stream vs durable-reply split. Reach for [`MekikTools.Wrap`](#mekiktoolswrap) directly when you need to drive the loop yourself. When streaming, a model's function-call arguments and results (which `AIFunctionFactory` marshals through `System.Text.Json` as `JsonElement`) are canonicalized into the trace automatically — no plain-value converter needed.
+
 ## `MekikTools.Wrap`
 
 ```csharp
@@ -62,6 +84,35 @@ Notes:
 - A declined function is never executed and returns `DenyMessage` (default `"The user declined to run <name>."`) so the model's loop can continue.
 - Each function gets a stable interrupt key, so several approvals in one node stay separately addressable.
 - Journaled results must survive a serializer round-trip, like any ilmek step.
+
+## `Agent.RouteAsync` — classify into one node
+
+The router pattern (classify the turn, then `goto` a focused expert node) is one call. It builds a strict classification prompt from your route names + descriptions, journals the choice (a resume replays the same route), runs at temperature 0, and normalizes the answer to a valid route — falling back when the model answers off-list:
+
+```csharp
+var target = await Agent.RouteAsync(ctx, chat,
+    [
+        new Route("reporting", "sprint reports and metrics"),
+        new Route("billing",   "invoices and charges"),
+        new Route("general",   "everything else"),
+    ],
+    state.Get<string>("input") ?? string.Empty,
+    fallback: "general");
+
+return Command.Create(Update.Of("route", target), target); // set channel + goto node
+```
+
+## Reading auth claims
+
+A node reads the authenticated claims (the `AuthVerdict.Claims` from your [authenticator](../authentication.md)) with `Shuttle.AuthClaims(ctx)` — no `ctx.Meta["auth"]` dance — and coerces a claim to a string list, whatever JSON shape it survived as, with `Shuttle.ClaimStrings`:
+
+```csharp
+var claims   = Shuttle.AuthClaims(ctx);
+var userName = claims.GetValueOrDefault("userName") as string;
+var roles    = Shuttle.ClaimStrings(claims, "roles");
+```
+
+Both are in `Mekik.Core` (`Shuttle`), mirrored in TypeScript as `mekik.authClaims` / `mekik.claimStrings`.
 
 ## Where to go next
 

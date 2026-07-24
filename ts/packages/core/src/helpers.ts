@@ -55,6 +55,75 @@ export function text(ctx: Context<any>, content: string): void {
 }
 
 /**
+ * Stream an async sequence of prose deltas as live text chunks and return the
+ * full text — the token-by-token pattern in a single call.
+ *
+ * @remarks
+ * Each delta is emitted with {@link text}, so consecutive deltas share one stream
+ * text-run and a client renders a **single growing bubble**, not one bubble per
+ * token (PROTOCOL.md §4.1). Streamed text is **transient**: the returned string is
+ * every delta concatenated — return it from your node as the durable `reply`, and
+ * the mapper emits that as the one persistent `text` frame at run end. Empty or
+ * `undefined` deltas are skipped.
+ *
+ * @typeParam T - The element type of the source stream (e.g. a model's streaming chunk).
+ * @param ctx - The ilmek node context.
+ * @param deltas - The async source, e.g. `model.stream(input)`.
+ * @param select - Pulls the text fragment out of each element; omit when the source yields raw strings.
+ * @returns The full text accumulated from every emitted delta.
+ *
+ * @example
+ * ```ts
+ * const full = await mekik.streamText(ctx, model.stream(state.input), (u) => u.text);
+ * return { reply: full };
+ * ```
+ *
+ * @see {@link text} to emit one delta yourself.
+ */
+export async function streamText<T = string>(
+    ctx: Context<any>,
+    deltas: AsyncIterable<T>,
+    select: (delta: T) => string | undefined = (d) => d as unknown as string,
+): Promise<string> {
+    let full = "";
+    for await (const delta of deltas) {
+        const piece = select(delta);
+        if (!piece) continue;
+        text(ctx, piece);
+        full += piece;
+    }
+    return full;
+}
+
+/**
+ * The authenticated claims for this turn — the `AuthVerdict.claims` the authenticator
+ * returned, which the engine places at `ctx.meta.auth` (PROTOCOL.md §7). Empty when the
+ * app runs without an authenticator or the connection is anonymous.
+ *
+ * @param ctx - The ilmek node context.
+ * @returns The claims record, or `{}` when unauthenticated.
+ */
+export function authClaims(ctx: Context<any>): Record<string, unknown> {
+    const auth = (ctx.meta as Record<string, unknown> | undefined)?.auth;
+    return typeof auth === "object" && auth !== null ? (auth as Record<string, unknown>) : {};
+}
+
+/**
+ * Read a claim as a list of strings, coercing the shapes it survives a JSON round-trip
+ * as: a string list, a single string, or a list of boxed values. Missing ⇒ empty.
+ *
+ * @param claims - A claims record, e.g. from {@link authClaims}.
+ * @param key - The claim to read (e.g. `"roles"`).
+ */
+export function claimStrings(claims: Record<string, unknown>, key: string): string[] {
+    const value = claims[key];
+    if (Array.isArray(value)) {
+        return value.map((x) => (typeof x === "string" ? x : String(x))).filter((x) => x.length > 0);
+    }
+    return typeof value === "string" && value.length > 0 ? [value] : [];
+}
+
+/**
  * Mount or update a generative-UI component by its client-registry name.
  *
  * @remarks
