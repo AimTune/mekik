@@ -118,7 +118,7 @@ describe("runAgent", () => {
         assert.equal(reply, "Your order total is 249.9.");
     });
 
-    test("streams text deltas as one growing bubble and returns the joined text", async () => {
+    test("streams the answer live as one bubble without a duplicate reply", async () => {
         const model = scriptedModel([{ text: "Hello, world." }]);
 
         const app = makeApp((input, ctx) => runAgent(ctx, model, { system: "sys", input, tools: [] }));
@@ -127,16 +127,16 @@ describe("runAgent", () => {
         await app.connect(c);
         await app.receive(c, { type: "text", data: { text: "hi" } });
 
-        const textChunkIds = c.sent
+        const textChunks = c.sent
             .filter((f): f is GenUIFrame => f.type === "genui")
             .map((f) => f.chunk)
-            .filter((ch) => ch.type === "text")
-            .map((ch) => ch.id);
-        assert.ok(textChunkIds.length >= 2, "streamed in more than one delta");
-        assert.equal(new Set(textChunkIds).size, 1, "all deltas share one text-run id → one bubble");
-
-        const reply = c.sent.filter((f) => f.type === "text").map((f) => data(f).text).at(-1);
-        assert.equal(reply, "Hello, world.");
+            .filter((ch) => ch.type === "text");
+        // Streamed in >1 delta, all sharing one text-run id → one growing bubble…
+        assert.ok(textChunks.length >= 2, "streamed in more than one delta");
+        assert.equal(new Set(textChunks.map((ch) => ch.id)).size, 1, "one text-run id → one bubble");
+        assert.equal(textChunks.map((ch) => (ch as { content: string }).content).join(""), "Hello, world.");
+        // …and it is NOT re-sent as a consolidated bot text frame (no duplicate).
+        assert.equal(c.sent.filter((f) => f.type === "text").length, 0, "no duplicate consolidated reply");
     });
 });
 

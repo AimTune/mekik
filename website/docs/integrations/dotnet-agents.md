@@ -28,7 +28,7 @@ using Mekik.Agents;
     })))
 ```
 
-The reply is **returned, not set** — you return it as your node's durable reply (`Update.Of("reply", …)`), keeping mekik's transient-stream vs durable-reply split. Reach for [`MekikTools.Wrap`](#mekiktoolswrap) directly when you need to drive the loop yourself. When streaming, a model's function-call arguments and results (which `AIFunctionFactory` marshals through `System.Text.Json` as `JsonElement`) are canonicalized into the trace automatically — no plain-value converter needed.
+You return the result as your node's reply (`Update.Of("reply", …)`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `RunAsync` returns an **empty string** — `Update.Of("reply", "")` emits nothing extra, no duplicate. With `Stream = false`, it returns the full text for the consolidated `text` reply. A model's function-call arguments and results (which `AIFunctionFactory` marshals through `System.Text.Json` as `JsonElement`) are canonicalized into the trace automatically — no plain-value converter needed. Reach for [`MekikTools.Wrap`](#mekiktoolswrap) directly when you need to drive the loop yourself.
 
 ## `MekikTools.Wrap`
 

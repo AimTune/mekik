@@ -66,23 +66,24 @@ At `run_end{done}` the mapper **auto-closes** the stream with a terminal event c
 
 You never emit `stream_done` yourself — the mapper does it whenever a stream was opened during the run. (Fixture `tokens` pins this auto-close.)
 
-## Streamed text is not the reply
+## Stream the answer, or return it — not both
 
-A subtlety that trips people up:
+Streamed `genui` **text** chunks are **persisted and replayed** like any other persistent frame (PROTOCOL.md §2): the streamed bubble is durable, not a throwaway preview. So a streamed answer *is* the turn's message — you do **not** also return it as a consolidated `text` reply. Doing both shows the answer **twice** (and both replay on reconnect).
 
-> `mekik.text` chunks are **transient** generative UI. They are **not** the conversation's durable reply.
+Pick one shape per turn:
 
-The durable reply is the single consolidated `bot` `text` frame the mapper emits at run end from your `MekikOptions.reply` selector. So a node that streams prose *and* returns a reply produces both — live `genui` text chunks during the run, one persistent `text` bubble at the end. On reconnect, only the bubble replays.
+- **Stream it** — `mekik.streamText` / `Shuttle.StreamText` drive an async delta source through `text`/`Text`. The growing bubble is the durable message; return **no** separate reply. (The higher-level `runAgent` / `Agent.RunAsync` do exactly this — they stream and return an empty reply.)
+- **Return it** — don't stream; return the full string and the mapper emits it as one `text` frame from your `reply` selector (see [the app's reply option](../getting-started.md)).
 
-The pattern for streaming model output — `mekik.streamText` / `Shuttle.StreamText` drives the source through `text`/`Text` for you and returns the joined string to hand back as the reply:
+Streaming shape:
 
 <Tabs groupId="lang">
 <TabItem value="ts" label="TypeScript">
 
 ```ts
 .node("answer", async (state, ctx) => {
-  const full = await mekik.streamText(ctx, model.stream(state.input)); // live, transient
-  return { reply: full };                                             // durable — what replay shows
+  await mekik.streamText(ctx, model.stream(state.input)); // the stream IS the durable message
+  return {};                                              // no separate reply → no duplicate
 })
 ```
 
@@ -92,17 +93,15 @@ The pattern for streaming model output — `mekik.streamText` / `Shuttle.StreamT
 ```csharp
 .Node("answer", async (State state, IContext ctx) =>
 {
-    var full = await Shuttle.StreamText(ctx, Model.StreamAsync(state.Get<string>("input")), ctx.CancellationToken);
-    return Update.Of("reply", full);   // durable — what replay shows
+    await Shuttle.StreamText(ctx, Model.StreamAsync(state.Get<string>("input")), ctx.CancellationToken);
+    return new Dictionary<string, object?>(); // no separate reply → no duplicate
 })
 ```
 
 </TabItem>
 </Tabs>
 
-When the source yields structured chunks rather than raw strings, pass a selector — `mekik.streamText(ctx, model.stream(input), (u) => u.text)` / `Shuttle.StreamText(ctx, chat.GetStreamingResponseAsync(…), u => u.Text)`. For full control you can still emit each delta yourself with `mekik.text` / `Shuttle.Text` and accumulate the reply by hand — `streamText` is just that loop.
-
-If you *only* stream and never return a reply, the run has no persistent text — the genui chunks were the whole answer, and there's nothing for replay to show as a bubble. That's a valid choice for a purely visual turn (a card, a chart), less so for prose.
+When the source yields structured chunks rather than raw strings, pass a selector — `mekik.streamText(ctx, model.stream(input), (u) => u.text)` / `Shuttle.StreamText(ctx, chat.GetStreamingResponseAsync(…), u => u.Text)`. `streamText` also **returns** the joined string, so you can keep it for logging or state — just don't hand it back as the reply while streaming. For full manual control, emit each delta yourself with `mekik.text` / `Shuttle.Text`.
 
 ## A streaming reply, end to end
 
@@ -121,13 +120,13 @@ const g = graph("assistant")
   .channel("input", channel.lastWrite<string>(""))
   .channel("reply", channel.lastWrite<string>(""))
   .node("answer", async (s, ctx) => {
-    const full = await mekik.streamText(ctx, model.stream(s.input)); // one genui text chunk per delta — transient
-    return { reply: full };                                         // the durable bubble replay shows
+    await mekik.streamText(ctx, model.stream(s.input)); // the stream IS the durable message
+    return {};                                          // no separate reply → no duplicate
   })
   .edge(START, "answer").edge("answer", END)
   .compile();
 
-const app = mekik({ graph: g, reply: (s) => s.reply as string });
+const app = mekik({ graph: g });
 serveWs(app, { port: 8800, path: "/ws" });
 ```
 
@@ -145,9 +144,9 @@ var g = Graph.Create("assistant")
     .Channel("reply", Channels.LastWrite(""))
     .Node("answer", async (State state, IContext ctx) =>
     {
-        // one genui text chunk per delta — transient; the return value is the durable reply.
-        var full = await Shuttle.StreamText(ctx, Model.StreamAsync(state.Get<string>("input")), ctx.CancellationToken);
-        return Update.Of("reply", full);
+        // The stream IS the durable message — return no separate reply (no duplicate).
+        await Shuttle.StreamText(ctx, Model.StreamAsync(state.Get<string>("input")), ctx.CancellationToken);
+        return new Dictionary<string, object?>();
     })
     .Edge(Graph.Start, "answer")
     .Edge("answer", Graph.End)
@@ -155,11 +154,7 @@ var g = Graph.Create("assistant")
 
 var web = WebApplication.CreateBuilder(args).Build();
 web.UseWebSockets();
-web.MapMekik("/ws", new MekikApp(new MekikOptions
-{
-    Graph = g,
-    Reply = s => s.GetValueOrDefault("reply") as string,
-}));
+web.MapMekik("/ws", new MekikApp(new MekikOptions { Graph = g }));
 web.Run();
 ```
 
@@ -174,11 +169,10 @@ Streaming `"Hel"`, `"lo, "`, `"how can I help?"` puts this on the wire:
 { "type": "genui", "seq": 4, "streamId": "stream-1", "done": false, "chunk": { "type": "text", "content": "lo, ", "id": 1 } }
 { "type": "genui", "seq": 5, "streamId": "stream-1", "done": false, "chunk": { "type": "text", "content": "how can I help?", "id": 1 } }
 { "type": "genui", "seq": 6, "streamId": "stream-1", "done": true,  "chunk": { "type": "event", "name": "stream_done", "id": 2 } }
-{ "type": "text",  "seq": 7, "id": "msg-1", "from": "bot", "data": { "text": "Hello, how can I help?" }, "timestamp": 1750000000000 }
 { "type": "run",   "data": { "status": "finished" } }
 ```
 
-Every text delta carries the **same** `id: 1`: the mapper keeps one open text run, so a client concatenates them into a single growing bubble instead of three. The `stream_done` event and the durable `text` reply each take their own id/frame. (Fixture [`tokens`](https://github.com/AimTune/mekik/blob/main/conformance/fixtures/tokens.json) pins exactly this.)
+Every text delta carries the **same** `id: 1`: the mapper keeps one open text run, so a client concatenates them into a single growing bubble instead of three. That streamed bubble is the durable message (it replays on reconnect), so there is **no** separate consolidated `text` frame — returning one too would show the answer twice. The `stream_done` event closes the stream. (Fixture [`tokens`](https://github.com/AimTune/mekik/blob/main/conformance/fixtures/tokens.json) pins the id-sharing.)
 
 ## The component contract
 

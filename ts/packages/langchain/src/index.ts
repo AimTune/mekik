@@ -253,7 +253,12 @@ export async function runAgent(
         );
 
         if (decision.toolCalls.length === 0) {
-            return decision.text || emptyReply;
+            if (!decision.text) return emptyReply;
+            // When streaming, the answer was already delivered live as the durable message
+            // (streamed chunks are persisted and replayed). Returning it again would emit a
+            // second, consolidated `text` frame — the client would show it twice. So the
+            // stream IS the reply: return nothing.
+            return stream ? "" : decision.text;
         }
 
         for (const call of decision.toolCalls) {

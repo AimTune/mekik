@@ -56,7 +56,7 @@ function runAgent(
 ): Promise<string>;
 ```
 
-The reply is **returned, not set** — you return it as your node's durable reply (`{ reply }`), keeping mekik's transient-stream vs durable-reply split. Reach for [`withMekikTools`](#withmekiktools) directly when you need to drive the loop yourself (a custom agent framework, a non-standard message shape).
+You return the result as your node's reply (`{ reply }`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `runAgent` returns an **empty string** — `{ reply: "" }` emits nothing extra, no duplicate. With `stream: false`, it returns the full text for the consolidated `text` reply. Reach for [`withMekikTools`](#withmekiktools) directly when you need to drive the loop yourself (a custom agent framework, a non-standard message shape).
 
 ## `withMekikTools`
 

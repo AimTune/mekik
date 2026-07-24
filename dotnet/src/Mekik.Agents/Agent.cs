@@ -144,7 +144,14 @@ public static class Agent
             messages.Add(new ChatMessage(ChatRole.Assistant, contents));
 
             if (calls.Count == 0)
-                return string.IsNullOrEmpty(text) ? options.EmptyReply : text;
+            {
+                if (string.IsNullOrEmpty(text)) return options.EmptyReply;
+                // When streaming, the answer was already delivered live as the durable
+                // genui message (streamed chunks are persisted and replayed). Returning
+                // it again would emit a second, consolidated `text` frame — the client
+                // would show the message twice. So the stream IS the reply: return nothing.
+                return options.Stream ? string.Empty : text;
+            }
 
             foreach (var call in calls)
             {

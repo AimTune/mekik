@@ -65,7 +65,7 @@ public class AgentTests
     private static IReadOnlyDictionary<string, object?> Data(IReadOnlyDictionary<string, object?> f) =>
         (IReadOnlyDictionary<string, object?>)f["data"]!;
 
-    private static MekikApp AgentApp(IChatClient chat, AIFunction[] tools)
+    private static MekikApp AgentApp(IChatClient chat, AIFunction[] tools, bool stream = true)
     {
         var g = Graph.Create("agent")
             .Channel("input", Channels.LastWrite(""))
@@ -76,6 +76,7 @@ public class AgentTests
                     System = "You are a test agent.",
                     Input = state.Get<string>("input") ?? string.Empty,
                     Tools = tools,
+                    Stream = stream,
                 })))
             .Edge(Graph.Start, "agent")
             .Edge("agent", Graph.End)
@@ -89,8 +90,24 @@ public class AgentTests
         });
     }
 
+    private static string GenuiText(FakeConn conn) => string.Concat(conn.Sent
+        .Where(f => Type(f) == "genui")
+        .Select(f => (IReadOnlyDictionary<string, object?>)f["chunk"]!)
+        .Where(c => c.GetValueOrDefault("type") as string == "text")
+        .Select(c => c["content"] as string));
+
+    private static IReadOnlyList<int> GenuiTextIds(FakeConn conn) => conn.Sent
+        .Where(f => Type(f) == "genui")
+        .Select(f => (IReadOnlyDictionary<string, object?>)f["chunk"]!)
+        .Where(c => c.GetValueOrDefault("type") as string == "text")
+        .Select(c => Convert.ToInt32(c["id"]))
+        .Distinct()
+        .ToList();
+
+    private static int BotTextFrameCount(FakeConn conn) => conn.Sent.Count(f => Type(f) == "text");
+
     [Fact]
-    public async Task Runs_the_tool_the_model_calls_then_streams_the_final_answer()
+    public async Task Streams_the_answer_live_as_one_bubble_without_a_duplicate_reply()
     {
         // Returns a dict → AIFunctionFactory marshals it to a JsonElement, exercising the
         // canonicalize path (FakeConn.Send would throw otherwise).
@@ -102,7 +119,7 @@ public class AgentTests
             [CallUpdate("c1", "get_order", new Dictionary<string, object?> { ["id"] = "ORD-42" })],
             [TextUpdate("Order total is "), TextUpdate("249.9.")]);
 
-        var app = AgentApp(chat, [getOrder]);
+        var app = AgentApp(chat, [getOrder]); // stream: true (default)
         var conn = new FakeConn();
         await app.ConnectAsync(conn);
         await app.ReceiveAsync(conn, TextFrame("what's my order total?"));
@@ -115,32 +132,25 @@ public class AgentTests
             .ToList();
         Assert.Equal(["running", "completed"], statuses);
 
-        // Live text streamed as genui text chunks that share ONE text-run id (one bubble).
-        var textChunkIds = conn.Sent.Where(f => Type(f) == "genui")
-            .Select(f => (IReadOnlyDictionary<string, object?>)f["chunk"]!)
-            .Where(c => c.GetValueOrDefault("type") as string == "text")
-            .Select(c => c["id"])
-            .Distinct()
-            .ToList();
-        Assert.Single(textChunkIds);
-
-        // The consolidated reply is the final text, as one durable bot text frame.
-        var reply = conn.Sent.Where(f => Type(f) == "text")
-            .Select(f => Data(f).GetValueOrDefault("text") as string)
-            .LastOrDefault();
-        Assert.Equal("Order total is 249.9.", reply);
+        // The answer streamed as genui text under ONE text-run id (one growing bubble)…
+        Assert.Equal("Order total is 249.9.", GenuiText(conn));
+        Assert.Single(GenuiTextIds(conn));
+        // …and it is NOT re-sent as a consolidated bot `text` frame (no duplicate).
+        Assert.Equal(0, BotTextFrameCount(conn));
     }
 
     [Fact]
-    public async Task Returns_text_directly_when_the_model_calls_no_tools()
+    public async Task Without_streaming_the_answer_is_one_consolidated_text_reply()
     {
         var chat = new ScriptedChat([TextUpdate("Hello there.")]);
 
-        var app = AgentApp(chat, []);
+        var app = AgentApp(chat, [], stream: false);
         var conn = new FakeConn();
         await app.ConnectAsync(conn);
         await app.ReceiveAsync(conn, TextFrame("hi"));
 
+        // Not streamed → no genui text, one durable bot text frame.
+        Assert.Equal("", GenuiText(conn));
         var reply = conn.Sent.Where(f => Type(f) == "text")
             .Select(f => Data(f).GetValueOrDefault("text") as string)
             .LastOrDefault();
