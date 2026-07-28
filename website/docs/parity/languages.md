@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: TypeScript ↔ .NET
-description: The naming map between @mekik/core and Mekik.Core, and the four deliberate divergences — the Shuttle helper name, dictionary frames, cancellation, and the interrupt rethrow rule.
+description: The naming map between @mekik/core and Mekik.Core, and the five deliberate divergences — the Shuttle helper name, dictionary frames, cancellation, Choose's answer type, and the interrupt rethrow rule.
 ---
 
 # TypeScript ↔ .NET
@@ -20,6 +20,11 @@ mekik ships two implementations that speak the identical `mekik/1` wire: **TypeS
 | canonical JSON | `canonicalize` | `Json.Canonicalize` |
 | parse inbound | `parseIncoming` | `Protocol.ParseIncoming` |
 | authoring helpers | `mekik.text / ui / event / tool / approve` | `Shuttle.Text / Ui / Event / Tool / Approve` |
+| button chips | `mekik.action` / `mekik.choose` | `Shuttle.Action` / `Shuttle.Choose<T>` |
+| managed ui instance | `mekik.mount` → `UiHandle` | `Shuttle.Mount` → `UiHandle` |
+| typed component | `mekik.component<P>(name)` | pass the name to `Shuttle.Ui` / `Shuttle.Mount` |
+| built-in components | `mekik.genui.*` | `GenUI.*` (+ `GenUI.Names.*`) |
+| rich messages | `mekik.message` / `mekik.messageKind` / `mekik.messages.*` | `Shuttle.Message` / `Messages.*` |
 | ilmek seam | `IlmekAdapter` | `IlmekAdapter` |
 | history port | `HistoryStore` / `InMemoryHistoryStore` | `IHistoryStore` / `InMemoryHistoryStore` |
 | conversation port | `ConversationStore` / `InMemoryConversationStore` | `IConversationStore` / `InMemoryConversationStore` |
@@ -30,9 +35,9 @@ mekik ships two implementations that speak the identical `mekik/1` wire: **TypeS
 
 The pattern is mechanical: a TS interface `Foo` becomes .NET `IFoo`; a TS free function `foo()` becomes a `PascalCase` method, `Async`-suffixed where it awaits. If you know one side, you can read the other.
 
-## The four deliberate divergences
+## The five deliberate divergences
 
-Where the two can't be mechanically identical, they diverge on purpose. Four cases:
+Where the two can't be mechanically identical, they diverge on purpose. Five cases:
 
 ### 1. The helper class is `Shuttle`, not `Mekik`
 
@@ -55,7 +60,22 @@ The TS side has structural frame *types*; the .NET mapper builds `Dictionary<str
 
 An `abort` frame cancels via an `AbortController`/`AbortSignal` in TS and a `CancellationTokenSource`/`CancellationToken` in .NET — which is exactly what ilmek's .NET run loop already takes. Same behaviour, each language's idiom.
 
-### 4. The interrupt rethrow rule
+### 4. `Choose`'s answer type
+
+TypeScript infers it from the options themselves — a `const` type parameter turns `["S", "M", "L"]` into `"S" | "M" | "L"`, so a `choose` call site needs no generic at all. C# has no literal-type inference, so `Shuttle.Choose<T>` takes the answer type explicitly. Same contract, stated instead of inferred.
+
+```ts
+// TS — inferred
+const size = await mekik.choose(ctx, "Pick a size", ["S", "M", "L"]); // "S" | "M" | "L"
+```
+```csharp
+// .NET — stated
+var size = await Shuttle.Choose<string>(ctx, "Pick a size", ["S", "M", "L"]);
+```
+
+The same asymmetry explains why TS has a per-component factory (`mekik.component<Props>(name)`, whose props type flows into every call) while .NET passes the name to `Shuttle.Ui` with a props dictionary: a typed wrapper would buy nothing over the dictionary the wire path already uses (divergence 2).
+
+### 5. The interrupt rethrow rule
 
 This one is load-bearing. In .NET, an interrupt propagates as an `InterruptSignalException`, so any `try/catch` in the adapter or helpers that wraps node execution **must rethrow** when `InterruptSignalException.IsInterrupt(ex)` — a blanket `catch (Exception)` would swallow the pause and turn a human-in-the-loop into a silently-dropped run. `Shuttle.Tool` does this.
 

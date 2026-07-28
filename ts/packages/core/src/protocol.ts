@@ -12,11 +12,35 @@ export const PROTOCOL_VERSION = "mekik/1";
 /**
  * Server→client frame types that get a per-conversation `seq`, are appended to
  * the transcript, and are replayed on reconnect (PROTOCOL.md §2). Everything
- * else is transient: live-only, never stored, never replayed.
+ * else is transient: live-only, never stored, never replayed — except the open
+ * *rich message frame* family (PROTOCOL.md §4.5): frames whose `type` is a
+ * client message-renderer name are persistent too; see {@link isMessageFrame}.
  */
 export const PERSISTENT_FRAME_TYPES = ["text", "tool_call", "genui", "interrupt", "interrupt_resolved"] as const;
 
 export type PersistentFrameType = (typeof PERSISTENT_FRAME_TYPES)[number];
+
+/**
+ * Frame types the protocol itself owns, in either direction — a rich message
+ * frame (PROTOCOL.md §4.5) may use any `type` EXCEPT these (`"text"` is the one
+ * deliberate overlap: a text message frame IS the `text` frame). `"typing"` is
+ * reserved defensively: chativa's shared frame parser claims it.
+ */
+export const RESERVED_FRAME_TYPES: ReadonlySet<string> = new Set([
+    "hello",
+    "welcome",
+    "text",
+    "resume",
+    "genui_event",
+    "abort",
+    "tool_call",
+    "genui",
+    "interrupt",
+    "interrupt_resolved",
+    "run",
+    "error",
+    "typing",
+]);
 
 /** WS close code for an auth rejection (PROTOCOL.md §7). */
 export const AUTH_CLOSE_CODE = 4401;
@@ -106,6 +130,23 @@ export interface TextOutFrame {
     timestamp: number;
 }
 
+/**
+ * A rich message frame (PROTOCOL.md §4.5): the `text` frame's envelope with an
+ * open `type` naming a client message renderer (`"image"`, `"card"`,
+ * `"carousel"`, …) and that renderer's payload as `data`. Persistent — same
+ * seq/replay/watermark rules as `text`. A client without a renderer for the
+ * `type` ignores the frame (the additive-change rule, PROTOCOL.md preamble).
+ */
+export interface MessageOutFrame {
+    /** A client message-renderer name; never one of {@link RESERVED_FRAME_TYPES}. */
+    type: string;
+    id: string;
+    seq: number;
+    from: "bot" | "user";
+    data: Record<string, unknown>;
+    timestamp: number;
+}
+
 export type ToolStatus = "running" | "completed" | "error";
 
 export interface ToolCall {
@@ -160,6 +201,7 @@ export interface ErrorFrame {
 export type OutgoingFrame =
     | WelcomeFrame
     | TextOutFrame
+    | MessageOutFrame
     | ToolCallFrame
     | GenUIFrame
     | InterruptFrame
@@ -169,9 +211,25 @@ export type OutgoingFrame =
 
 export type Frame = IncomingFrame | OutgoingFrame;
 
+/**
+ * True for a rich message frame (PROTOCOL.md §4.5): the `text` envelope under a
+ * non-reserved `type`. Only the mapper mints these, so the shape check is a
+ * guard against misclassifying, not a validator.
+ */
+export function isMessageFrame(frame: OutgoingFrame): frame is MessageOutFrame {
+    return (
+        typeof frame.type === "string" &&
+        !RESERVED_FRAME_TYPES.has(frame.type) &&
+        typeof (frame as MessageOutFrame).id === "string" &&
+        typeof (frame as MessageOutFrame).seq === "number"
+    );
+}
+
 /** True for the server→client frames that carry `seq` and are transcript-persisted. */
-export function isPersistent(frame: OutgoingFrame): frame is TextOutFrame | ToolCallFrame | GenUIFrame | InterruptFrame | InterruptResolvedFrame {
-    return (PERSISTENT_FRAME_TYPES as readonly string[]).includes(frame.type);
+export function isPersistent(
+    frame: OutgoingFrame,
+): frame is TextOutFrame | MessageOutFrame | ToolCallFrame | GenUIFrame | InterruptFrame | InterruptResolvedFrame {
+    return (PERSISTENT_FRAME_TYPES as readonly string[]).includes(frame.type) || isMessageFrame(frame);
 }
 
 // ── parsing ───────────────────────────────────────────────────────────────────

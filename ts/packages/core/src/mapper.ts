@@ -9,11 +9,13 @@
 
 import { isToken, type IlmekEvent, type Pending } from "@ilmek/core";
 
+import { RESERVED_FRAME_TYPES } from "./protocol.ts";
 import type {
     AIChunk,
     GenUIFrame,
     InterruptFrame,
     MessageAction,
+    MessageOutFrame,
     OutgoingFrame,
     TextOutFrame,
     ToolCall,
@@ -53,6 +55,12 @@ interface MekikToolPayload {
     [MEKIK_KEY]: "tool";
     call: ToolCall;
 }
+interface MekikMessagePayload {
+    [MEKIK_KEY]: "message";
+    messageType: string;
+    data: Record<string, unknown>;
+    id?: string;
+}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
     return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -62,6 +70,9 @@ function isGenUIPayload(v: unknown): v is MekikGenUIPayload {
 }
 function isToolPayload(v: unknown): v is MekikToolPayload {
     return isRecord(v) && v[MEKIK_KEY] === "tool" && isRecord(v.call);
+}
+function isMessagePayload(v: unknown): v is MekikMessagePayload {
+    return isRecord(v) && v[MEKIK_KEY] === "message" && typeof v.messageType === "string" && isRecord(v.data);
 }
 
 /** Split an interrupt payload into its client-facing parts (PROTOCOL.md §4.2). */
@@ -138,6 +149,22 @@ export class TurnMapper {
         }
         if (isToolPayload(payload)) {
             const frame: ToolCallFrame = { type: "tool_call", seq: this.deps.allocSeq(), data: payload.call };
+            return [frame];
+        }
+        if (isMessagePayload(payload)) {
+            // `"text"` is the one deliberate overlap: it produces a regular text
+            // frame (identical envelope). Any other reserved type would collide
+            // with the protocol's own frames — drop it (the helper throws before
+            // it gets here; this guards hand-built payloads).
+            if (RESERVED_FRAME_TYPES.has(payload.messageType) && payload.messageType !== "text") return [];
+            const frame: MessageOutFrame = {
+                type: payload.messageType,
+                id: payload.id ?? this.deps.mint.message(),
+                seq: this.deps.allocSeq(),
+                from: "bot",
+                data: payload.data,
+                timestamp: this.deps.now(),
+            };
             return [frame];
         }
         // Unrecognised customs are dropped here; an extension hook (MekikOptions

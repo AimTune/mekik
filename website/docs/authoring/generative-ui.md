@@ -203,6 +203,8 @@ Two things can happen with it:
 
 ## Where to go next
 
+- [**Typed components**](./components.md) — bind a component name once so its props are compiler-checked, update an instance in place, and a worked example of all 13 components chativa registers out of the box.
+- [**Rich messages**](./messages.md) — the other rendering path: standalone transcript entries (image, card, carousel, file…) rather than chunks of one evolving message.
 - [**Human-in-the-loop**](./human-in-the-loop.md) — mounting a form as an interrupt's `ui` and answering it.
 - [**Protocol → Frames**](../protocol/frames.md#persistent-frames) — the `genui` frame shape.
 - [**Protocol → Event mapping**](../protocol/event-mapping.md) — how token and `$mekik:"genui"` customs become `genui` frames.

@@ -66,6 +66,29 @@ public sealed class TurnMapper
 
             if (d.GetValueOrDefault(MekikKey) is "tool" && d.GetValueOrDefault("call") is IReadOnlyDictionary<string, object?> call)
                 return [new Dictionary<string, object?> { ["type"] = "tool_call", ["seq"] = _deps.AllocSeq(), ["data"] = call }];
+
+            if (d.GetValueOrDefault(MekikKey) is "message" &&
+                d.GetValueOrDefault("messageType") is string messageType &&
+                d.GetValueOrDefault("data") is IReadOnlyDictionary<string, object?> data)
+            {
+                // "text" is the one deliberate overlap (a regular text frame); any
+                // other reserved type would collide with the protocol's own frames —
+                // drop it (Shuttle.Message throws before it gets here; this guards
+                // hand-built payloads). PROTOCOL.md §4.5.
+                if (Protocol.ReservedFrameTypes.Contains(messageType) && messageType != "text") return [];
+                return
+                [
+                    new Dictionary<string, object?>
+                    {
+                        ["type"] = messageType,
+                        ["id"] = d.GetValueOrDefault("id") as string ?? _deps.Mint.Message(),
+                        ["seq"] = _deps.AllocSeq(),
+                        ["from"] = "bot",
+                        ["data"] = data,
+                        ["timestamp"] = _deps.Now(),
+                    },
+                ];
+            }
         }
 
         // Unrecognised customs are dropped here (an extension hook maps them outside this closed core).

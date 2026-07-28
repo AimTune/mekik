@@ -69,9 +69,20 @@ That last split has a consequence you can see on the wire: resuming replays **on
 
 > **The takeaway:** the graph structure isn't cosmetic — it changes what a resume replays, and therefore what the client sees. When a pause should replay as little as possible, give it its own node.
 
+## The rendering showcase
+
+`storefront.ts` is the counterpart to the refund desk: instead of one flow in depth, it emits **every** typed GenUI component and **every** rich message type in three turns — including a progress bar and a step tracker that update *in place*, and a `mekik.choose` button pause.
+
+```bash
+node ts/examples/storefront.ts            # self-test: asserts all 13 components + 8 message types on the wire
+node ts/examples/storefront.ts --serve    # ws://localhost:8802 — then type "components" or "messages"
+```
+
+Its self-test is the executable version of the two authoring guides — [Typed components](./authoring/components.md) and [Rich messages](./authoring/messages.md) — right down to asserting that the three progress-bar emissions share **one** chunk id (an in-place update, not three bars) and that messages replay from the transcript on reconnect.
+
 ## Rendering end-to-end
 
-The GenUI components these emit — `data-table`, `weather-card`, `approval-form`, `order-card` — are registered in [chativa's sandbox](https://github.com/AimTune/chativa), so `--serve` renders end to end against a real client. To see the full loop: run an example with `--serve`, point chativa's `MekikConnector` at `ws://localhost:8800`, and type an order number (`ORD-42` in the refund example) to trigger the approval flow.
+The GenUI components these emit — `data-table`, `weather-card`, `approval-form`, `order-card`, plus the `genui-*` built-ins `storefront` uses — are registered in [chativa's sandbox](https://github.com/AimTune/chativa), so `--serve` renders end to end against a real client. To see the full loop: run an example with `--serve`, point chativa's `MekikConnector` at `ws://localhost:8800`, and type an order number (`ORD-42` in the refund example) to trigger the approval flow.
 
 ## Running the suites
 

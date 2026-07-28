@@ -58,10 +58,9 @@ const refund = graph("refund")
             { title: `Refund $${order.total} for ${order.id}?` },
             {
                 ui: { component: "approval-form", props: { orderId: order.id, amount: order.total } },
-                actions: [
-                    { label: "Approve", value: { approved: true } },
-                    { label: "Reject", value: { approved: false } },
-                ],
+                // Typed chip constructors — same wire shape as hand-written
+                // `{ label, value }` JSON (see also `mekik.choose` for chips-only pauses).
+                actions: [mekik.action("Approve", { approved: true }), mekik.action("Reject", { approved: false })],
             },
         );
         return answer.approved

@@ -27,10 +27,29 @@
  */
 
 import { createMekikApp } from "./app.ts";
-import { approve, authClaims, claimStrings, event, streamText, text, tool, ui } from "./helpers.ts";
+import { component, genui } from "./genui.ts";
+import { message, messageKind, messages } from "./messages.ts";
+import { action, approve, authClaims, choose, claimStrings, event, mount, streamText, text, tool, ui } from "./helpers.ts";
 
 /** The app factory with the authoring helpers attached (PROTOCOL.md §6). */
-export const mekik = Object.assign(createMekikApp, { text, streamText, ui, event, tool, approve, authClaims, claimStrings });
+export const mekik = Object.assign(createMekikApp, {
+    text,
+    streamText,
+    ui,
+    mount,
+    event,
+    tool,
+    approve,
+    action,
+    choose,
+    component,
+    genui,
+    message,
+    messageKind,
+    messages,
+    authClaims,
+    claimStrings,
+});
 
 export { MekikApp } from "./app.ts";
 export type { MekikOptions } from "./app.ts";
@@ -45,8 +64,54 @@ export { TurnMapper, eventToFrames, unwrapInterrupt, interruptFrameData } from "
 export type { IdMinter, TurnMapperDeps } from "./mapper.ts";
 
 // The helpers are also available as named imports, for callers who prefer them.
-export { approve, authClaims, claimStrings, event, streamText, text, tool, ui } from "./helpers.ts";
-export type { ApproveOptions } from "./helpers.ts";
+export { action, approve, authClaims, choose, claimStrings, event, mount, streamText, text, tool, ui } from "./helpers.ts";
+export type { ActionOf, ApproveOptions, ChoiceOption, ChoiceValue, ChooseOptions, ChunkOptions, UiHandle } from "./helpers.ts";
+
+// Typed rich messages: the factory and chativa's built-in message types.
+export { message, messageKind, messages } from "./messages.ts";
+export type {
+    ButtonsMessageData,
+    CardMessageData,
+    CarouselCard,
+    CarouselMessageData,
+    FileMessageData,
+    ImageMessageData,
+    MessageButton,
+    MessageKind,
+    MessageOptions,
+    QuickReplyMessageData,
+    TextMessageData,
+    VideoMessageData,
+} from "./messages.ts";
+
+// Typed GenUI components: the factory and chativa's built-in catalog.
+export { component, genui } from "./genui.ts";
+export type {
+    GenUIAlertProps,
+    GenUIAlertVariant,
+    GenUICardAction,
+    GenUICardProps,
+    GenUIChartDataset,
+    GenUIChartProps,
+    GenUIDatePickerProps,
+    GenUIFormField,
+    GenUIFormProps,
+    GenUIImage,
+    GenUIImageGalleryProps,
+    GenUIListItem,
+    GenUIListProps,
+    GenUIProgressProps,
+    GenUIProgressVariant,
+    GenUIQuickRepliesProps,
+    GenUIQuickReplyItem,
+    GenUIRatingProps,
+    GenUIStep,
+    GenUIStepsProps,
+    GenUITableProps,
+    GenUITextProps,
+    TypedUiHandle,
+    UiComponent,
+} from "./genui.ts";
 
 // Low-level trace primitives, for integrations that execute tools themselves
 // (see @mekik/langchain).
@@ -55,11 +120,13 @@ export { nextToolCallId, toolTrace } from "./helpers.ts";
 export {
     AUTH_CLOSE_CODE,
     canonicalize,
+    isMessageFrame,
     isPersistent,
     parseIncoming,
     PERSISTENT_FRAME_TYPES,
     PROTOCOL_VERSION,
     ProtocolError,
+    RESERVED_FRAME_TYPES,
 } from "./protocol.ts";
 export type {
     AIChunk,
@@ -72,6 +139,7 @@ export type {
     InterruptFrame,
     InterruptResolvedFrame,
     MessageAction,
+    MessageOutFrame,
     OutgoingFrame,
     PendingView,
     ResumeFrame,

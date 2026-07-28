@@ -10,7 +10,7 @@ import { channel, command, END, graph, send, START } from "@ilmek/core";
 
 import { mekik } from "../src/index.ts";
 import type { Connection } from "../src/engine.ts";
-import type { OutgoingFrame, RunStatus } from "../src/protocol.ts";
+import type { MessageOutFrame, OutgoingFrame, RunStatus } from "../src/protocol.ts";
 import { StaticTokenAuthenticator } from "../src/auth.ts";
 
 // ── test doubles ──────────────────────────────────────────────────────────────
@@ -159,6 +159,43 @@ describe("a basic turn (§4, §5)", () => {
         // The sender received all but its own un-echoed turn (seq 1).
         const received = c.sent.filter((f): f is Extract<OutgoingFrame, { seq: number }> => "seq" in f).map((f) => f.seq);
         assert.deepEqual(received, [2, 3, 4]);
+    });
+});
+
+describe("rich message frames (§4.5)", () => {
+    /** Emits an image and an id-keyed card message, then replies. */
+    const publisher = graph("publisher")
+        .channel("input", channel.lastWrite<string>(""))
+        .channel("reply", channel.lastWrite<string>(""))
+        .node("show", (s, ctx) => {
+            mekik.messages.image(ctx, { src: "https://x/receipt.png", caption: "Your receipt" });
+            mekik.messages.card(ctx, { title: s.input, buttons: [{ label: "Track" }] }, { id: `card-${s.input}` });
+            return { reply: "sent" };
+        })
+        .edge(START, "show")
+        .edge("show", END)
+        .compile();
+
+    test("messages persist with the text envelope and replay on reconnect", async () => {
+        const app = mekik({ graph: publisher, reply: (s) => s.reply as string });
+        const c = conn();
+        await app.connect(c);
+        const { conversationId, userId } = welcomeOf(c);
+        await app.receive(c, { type: "text", data: { text: "ORD-1" } });
+
+        const image = c.sent.find((f) => f.type === "image") as MessageOutFrame | undefined;
+        assert.ok(image, "image frame present");
+        assert.equal(image.from, "bot");
+        assert.equal(typeof image.seq, "number");
+        assert.deepEqual(image.data, { src: "https://x/receipt.png", caption: "Your receipt" });
+        const card = c.sent.find((f) => f.type === "card") as MessageOutFrame | undefined;
+        assert.equal(card?.id, "card-ORD-1", "caller-supplied message id wins");
+
+        // A reconnecting tab replays them from the transcript, in seq order.
+        const again = conn();
+        await app.connect(again, { hello: { conversationId, userId, watermark: 0 } });
+        const replayed = again.sent.map((f) => f.type);
+        assert.ok(replayed.includes("image") && replayed.includes("card"), `replay carries the messages, got: ${replayed.join(",")}`);
     });
 });
 

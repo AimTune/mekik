@@ -36,6 +36,52 @@ the graph re-runs the node from the top and the `await` returns the human's answ
 - The question `payload` is arbitrary; whatever you pass reaches the client as
   `interrupt.data.payload` (with mekik's reserved `$mekik` metadata stripped).
 
+## Buttons, typed (no hand-written JSON)
+
+When the pause is really just "pick one of these buttons", skip `approve`'s
+generic + `actions` JSON and use `mekik.choose` (`Shuttle.Choose` in .NET) with
+`mekik.action` (`Shuttle.Action`) chip constructors:
+
+```ts
+// Bare strings: the answer IS the picked label — and the type is inferred.
+const size = await mekik.choose(ctx, "Pick a size", ["S", "M", "L"]);
+//    ^? "S" | "M" | "L"
+
+// Valued chips: the answer is the picked action's value.
+const verdict = await mekik.choose(ctx, { title: `Refund ${order.total}?` }, [
+    mekik.action("Approve", { approved: true }),
+    mekik.action("Reject", { approved: false }),
+]);
+if (verdict.approved) { /* … */ }
+```
+
+```csharp
+var size = await Shuttle.Choose<string>(ctx, "Pick a size", ["S", "M", "L"]);
+var verdict = await Shuttle.Choose<Dictionary<string, object?>>(ctx, "Refund?",
+    [Shuttle.Action("Approve", new Dictionary<string, object?> { ["approved"] = true }),
+     Shuttle.Action("Reject",  new Dictionary<string, object?> { ["approved"] = false })]);
+```
+
+On the wire this is a plain `interrupt` frame whose `actions` are the options —
+nothing new for a client to learn; chativa renders the same chips it always has.
+The rules:
+
+- A **string payload** is shorthand for `{ title }`; pass a record to shape the
+  payload yourself.
+- A **bare string option** is both label and answer. An option built with
+  `mekik.action(label, value)` resolves to its `value`; with no value, to its label
+  (the protocol's `MessageAction` rule).
+- In TypeScript the answer type is **inferred from the options** — no manual
+  generic. As with `approve<T>`, it is a contract with your client, not a wire
+  guarantee.
+- `opts.ui` still mounts a form alongside (chips remain the fallback), and
+  `opts.key` disambiguates a node that pauses more than once.
+
+`choose` **parks the run** until someone picks. For buttons that merely offer a
+shortcut — the user may tap one or type something else entirely — send a buttons
+or quick-reply *message* instead ([GENUI.md](GENUI.md#2-rich-messages)); the tap
+arrives as the next user turn rather than as a resume.
+
 ## Answering
 
 The client answers with a `resume` frame keyed by the **thread-scoped interrupt

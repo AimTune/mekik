@@ -27,6 +27,8 @@ const sidebars: SidebarsConfig = {
       link: { type: "doc", id: "authoring/helpers" },
       items: [
         "authoring/generative-ui",
+        "authoring/components",
+        "authoring/messages",
         "authoring/tools",
         "authoring/human-in-the-loop",
       ],

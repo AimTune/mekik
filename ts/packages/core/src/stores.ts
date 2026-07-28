@@ -7,7 +7,7 @@
 // (Redis, Postgres) can drop in later without touching the engine.
 
 import type { OutgoingFrame } from "./protocol.ts";
-import { PERSISTENT_FRAME_TYPES } from "./protocol.ts";
+import { isPersistent } from "./protocol.ts";
 
 /** A persistent server→client frame (carries `seq`). */
 export type PersistentFrame = Extract<OutgoingFrame, { seq: number }>;
@@ -30,8 +30,10 @@ export class InMemoryHistoryStore implements HistoryStore {
     private readonly byConversation = new Map<string, PersistentFrame[]>();
 
     async record(conversationId: string, frame: PersistentFrame): Promise<void> {
-        if (!(PERSISTENT_FRAME_TYPES as readonly string[]).includes(frame.type)) {
-            throw new Error(`refusing to record a transient ${frame.type} frame in the transcript`);
+        // isPersistent, not the closed type list: rich message frames (PROTOCOL.md
+        // §4.5) carry an open renderer-named type and belong in the transcript too.
+        if (!isPersistent(frame)) {
+            throw new Error(`refusing to record a transient ${(frame as OutgoingFrame).type} frame in the transcript`);
         }
         const list = this.byConversation.get(conversationId) ?? [];
         list.push(frame);
