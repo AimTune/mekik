@@ -138,12 +138,13 @@ The `MekikApp` it returns exposes three methods a transport calls — `connect(c
 
 A **frame** is a JSON object with a `type` discriminator. That's the entire wire. Frames split two ways.
 
-**By direction.** Client→server frames are `hello`, `text`, `resume`, `genui_event`, `abort`. Server→client frames are `welcome`, `text`, `tool_call`, `genui`, `interrupt`, `interrupt_resolved`, `run`, `error`.
+**By direction.** Client→server frames are `hello`, `text`, `resume`, `genui_event`, `abort`. Server→client frames are `welcome`, `text`, `tool_call`, `genui`, `interrupt`, `interrupt_resolved`, `run`, `error` — plus [rich message frames](./authoring/messages.md), whose `type` is a client message-renderer name rather than a protocol-owned one.
 
 **By persistence** — this is the important axis:
 
 ```
 PERSISTENT_FRAME_TYPES = ["text", "tool_call", "genui", "interrupt", "interrupt_resolved"]
+                       + any rich message frame (an open, renderer-named type)
 ```
 
 - **Persistent** frames carry a per-conversation, strictly monotonic `seq`. They are appended to the transcript and are exactly what a reconnecting client replays. They *are* the durable record of the conversation.

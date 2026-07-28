@@ -47,7 +47,7 @@ The checkpointer is ilmek's contract, not mekik's — mekik only threads it into
 
 ## HistoryStore — the transcript
 
-The `HistoryStore` holds the persistent frames (`text`, `tool_call`, `genui`, `interrupt`, `interrupt_resolved`) in `seq` order. It is exactly what reconnect replays: the engine reads "every frame with `seq > watermark`" from it. Transient frames (`welcome`, `run`, `error`) are never written here — they're live-only.
+The `HistoryStore` holds the persistent frames (`text`, `tool_call`, `genui`, `interrupt`, `interrupt_resolved`, and any [rich message frame](./authoring/messages.md)) in `seq` order. It is exactly what reconnect replays: the engine reads "every frame with `seq > watermark`" from it. Transient frames (`welcome`, `run`, `error`) are never written here — they're live-only.
 
 ```ts
 interface HistoryStore {

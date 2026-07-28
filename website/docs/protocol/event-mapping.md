@@ -37,6 +37,7 @@ Most of these produce **nothing** in v1. The mapper cares about four: `run_start
 | `custom` | `isToken(payload)` (ilmek `{type:"token",text,meta?}`) | a `genui` text chunk `{type:"text", content: payload.text, id: nextChunkId}`, `done:false` |
 | `custom` | `payload.$mekik == "genui"` | a `genui` frame with `chunk = payload.chunk`; assign `chunk.id = nextChunkId` if absent; `done:false` |
 | `custom` | `payload.$mekik == "tool"` | a `tool_call` frame `{data: payload.call}` (upsert by `call.id`) |
+| `custom` | `payload.$mekik == "message"` | a [rich message frame](../authoring/messages.md) `{type: payload.messageType, id: payload.id ?? mint(), from:"bot", data: payload.data, timestamp}` — **dropped** if `messageType` is a reserved protocol frame type (except `"text"`) |
 | `custom` | otherwise | nothing (reserved for the `onCustom` extension hook) |
 | `node_*`, `step_start`, `state`, `checkpoint` | — | nothing in v1 |
 | `interrupt` | for each `p` in `pending` | one `interrupt` frame `{id: p.id, data: unwrapInterrupt(p.payload)}` |
@@ -56,8 +57,11 @@ You never write those `custom` payloads by hand. The [authoring helpers](../auth
 | `mekik.text(ctx, content)` | ilmek token event | `genui` text chunk |
 | `mekik.ui(ctx, component, props)` | `{$mekik:"genui", chunk:{type:"ui",…}}` | `genui` ui chunk |
 | `mekik.event(ctx, name, payload)` | `{$mekik:"genui", chunk:{type:"event",…}}` | `genui` event chunk |
+| `mekik.mount(ctx, component, props)` | `{$mekik:"genui", chunk:{type:"ui",…, id}}` (same id on every `update`) | `genui` ui chunk, updated in place |
 | `mekik.tool(ctx, name, params, fn)` | `{$mekik:"tool", call:{…}}` (running → completed/error) | `tool_call` upsert |
 | `mekik.approve(ctx, payload, opts)` | `ctx.interrupt` with `$mekik:{ui,actions}` | `interrupt` frame |
+| `mekik.choose(ctx, payload, options)` | `ctx.interrupt` with `$mekik:{actions}` built from the options | `interrupt` frame |
+| `mekik.message(ctx, type, data)` | `{$mekik:"message", messageType, data, id?}` | rich message frame |
 
 The `$mekik` key is the reserved namespace the mapper keys on. It's an implementation detail of the helpers — but knowing it exists explains the fixtures.
 
