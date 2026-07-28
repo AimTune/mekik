@@ -68,6 +68,7 @@ and committed; both suites then treat them as read-only goldens.
 | `run-error`            | `run_end{error}` → `⚠️` `text` + `run{error}`                                               |
 | `run-aborted`          | `run_end{aborted}` → `run{aborted}` only, no text                                           |
 | `mixed-turn`           | ui + tokens + tool + reply in one run (ordering + seq monotonicity)                         |
+| `rich-message`         | `mekik.message` customs → persistent rich message frames (§4.5); caller id wins over the minted one; a reserved frame type is dropped |
 
 ## Scenario suites (behavioural)
 

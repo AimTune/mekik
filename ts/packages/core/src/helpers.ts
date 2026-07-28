@@ -27,8 +27,31 @@ function nextToolId(ctx: Context<any>): string {
     return `${ctx.taskId || "task"}:tool:${n}`;
 }
 
+/** Per-ctx ui counter — same replay-stability story as {@link nextToolId}. */
+const uiCounters = new WeakMap<object, number>();
+
+function nextUiId(ctx: Context<any>): string {
+    const n = uiCounters.get(ctx) ?? 0;
+    uiCounters.set(ctx, n + 1);
+    return `${ctx.taskId || "task"}:ui:${n}`;
+}
+
 function emitChunk(ctx: Context<any>, chunk: AIChunk): void {
     ctx.emit({ [MEKIK_KEY]: "genui", chunk });
+}
+
+/**
+ * Presentation options for a streamed chunk.
+ *
+ * @remarks
+ * A caller-supplied `id` is the chunk's client-side key: emitting another chunk
+ * with the **same id updates that element in place** instead of appending a new
+ * one, and an explicit id opts the chunk out of the mapper's text-run coalescing
+ * (PROTOCOL.md §4.1). Omit it and mekik manages the id for you.
+ */
+export interface ChunkOptions {
+    /** Client-side chunk key; same id ⇒ update in place. */
+    id?: string | number;
 }
 
 /**
@@ -42,6 +65,7 @@ function emitChunk(ctx: Context<any>, chunk: AIChunk): void {
  *
  * @param ctx - The ilmek node context (threaded into every node).
  * @param content - The prose fragment to append to the current turn's stream.
+ * @param opts - Optional chunk key; see {@link ChunkOptions}.
  *
  * @example
  * ```ts
@@ -50,8 +74,8 @@ function emitChunk(ctx: Context<any>, chunk: AIChunk): void {
  *
  * @see {@link ui} to mount a component; {@link event} to signal one.
  */
-export function text(ctx: Context<any>, content: string): void {
-    emitChunk(ctx, { type: "text", content });
+export function text(ctx: Context<any>, content: string, opts: ChunkOptions = {}): void {
+    emitChunk(ctx, opts.id === undefined ? { type: "text", content } : { type: "text", content, id: opts.id });
 }
 
 /**
@@ -129,19 +153,75 @@ export function claimStrings(claims: Record<string, unknown>, key: string): stri
  * @remarks
  * mekik streams the instruction to render a component the **client** (chativa) has
  * registered — it ships no components itself. Emitting the same component again
- * with new props updates it in place.
+ * with new props updates it in place. Pass `opts.id` to key the instance yourself —
+ * that is how two instances of the *same* component (two order cards) stay
+ * distinct and individually updatable; see also {@link mount} for the managed form.
  *
  * @param ctx - The ilmek node context.
  * @param component - The component name registered on the client.
  * @param props - Props handed to the component; omit for one that needs none.
+ * @param opts - Optional chunk key; see {@link ChunkOptions}.
  *
  * @example
  * ```ts
  * mekik.ui(ctx, "order-card", { id: order.id, total: order.total });
  * ```
  */
-export function ui(ctx: Context<any>, component: string, props?: Record<string, unknown>): void {
-    emitChunk(ctx, props === undefined ? { type: "ui", component } : { type: "ui", component, props });
+export function ui(ctx: Context<any>, component: string, props?: Record<string, unknown>, opts: ChunkOptions = {}): void {
+    const chunk: AIChunk = props === undefined ? { type: "ui", component } : { type: "ui", component, props };
+    emitChunk(ctx, opts.id === undefined ? chunk : { ...chunk, id: opts.id });
+}
+
+/**
+ * A managed handle to one mounted GenUI component instance — mekik owns the
+ * chunk id, the author just calls {@link UiHandle.update}.
+ *
+ * @see {@link mount}
+ */
+export interface UiHandle {
+    /** The chunk id keying this instance on the client. */
+    readonly id: string | number;
+    /** Re-emit the component with new props — the client updates it in place. */
+    update(props: Record<string, unknown>): void;
+}
+
+/**
+ * Mount a GenUI component and get a {@link UiHandle} for updating it in place —
+ * ids managed for you.
+ *
+ * @remarks
+ * The handle's id is minted replay-stable (like tool ids: `taskId` + call order),
+ * so the resume pass after an interrupt re-emits the same id and the client
+ * updates the existing element instead of duplicating it. Pass `opts.id` to pick
+ * the key yourself (e.g. `order.id`, so the same order always maps to the same card).
+ *
+ * @param ctx - The ilmek node context.
+ * @param component - The component name registered on the client.
+ * @param props - Initial props; omit for a component that needs none.
+ * @param opts - Optional explicit chunk key; see {@link ChunkOptions}.
+ * @returns A handle whose `update(props)` re-renders this same instance.
+ *
+ * @example
+ * ```ts
+ * const card = mekik.mount(ctx, "order-card", { id: order.id, status: "loading" });
+ * const details = await mekik.tool(ctx, "get_details", { id: order.id }, () => Orders.details(order.id));
+ * card.update({ id: order.id, status: "ready", total: details.total });
+ * ```
+ */
+export function mount(
+    ctx: Context<any>,
+    component: string,
+    props?: Record<string, unknown>,
+    opts: ChunkOptions = {},
+): UiHandle {
+    const id = opts.id ?? nextUiId(ctx);
+    ui(ctx, component, props, { id });
+    return {
+        id,
+        update(next: Record<string, unknown>): void {
+            ui(ctx, component, next, { id });
+        },
+    };
 }
 
 /**
@@ -151,14 +231,16 @@ export function ui(ctx: Context<any>, component: string, props?: Record<string, 
  * @param ctx - The ilmek node context.
  * @param name - The event name the component listens for.
  * @param payload - Optional event payload.
+ * @param opts - Optional chunk key; see {@link ChunkOptions}.
  *
  * @example
  * ```ts
  * mekik.event(ctx, "highlight", { rowId: 3 });
  * ```
  */
-export function event(ctx: Context<any>, name: string, payload?: unknown): void {
-    emitChunk(ctx, payload === undefined ? { type: "event", name } : { type: "event", name, payload });
+export function event(ctx: Context<any>, name: string, payload?: unknown, opts: ChunkOptions = {}): void {
+    const chunk: AIChunk = payload === undefined ? { type: "event", name } : { type: "event", name, payload };
+    emitChunk(ctx, opts.id === undefined ? chunk : { ...chunk, id: opts.id });
 }
 
 /**
@@ -291,6 +373,100 @@ export function approve<T = unknown>(
         opts.ui !== undefined || opts.actions !== undefined ? { ...payload, [MEKIK_KEY]: meta } : payload;
 
     return ctx.interrupt<T>(wrapped, opts.key);
+}
+
+// ── buttons, typed (no hand-written action JSON) ──────────────────────────────
+
+/** A {@link action}-built chip whose `value` type is carried for {@link choose} inference. */
+export interface ActionOf<V> extends MessageAction {
+    label: string;
+    value: V;
+}
+
+/**
+ * Build one quick-reply button (a `MessageAction`) — the typed constructor that
+ * replaces hand-written `{ label, value }` JSON.
+ *
+ * @remarks
+ * With no `value` the answer is the `label` string itself (protocol rule,
+ * PROTOCOL.md §3.2). With a `value`, {@link choose} infers the answer type from it.
+ *
+ * @example
+ * ```ts
+ * mekik.action("Approve", { approved: true })
+ * mekik.action("Cancel") // answer === "Cancel"
+ * ```
+ */
+export function action(label: string): MessageAction;
+export function action<const V>(label: string, value: V): ActionOf<V>;
+export function action(label: string, value?: unknown): MessageAction {
+    return value === undefined ? { label } : { label, value };
+}
+
+/** What one {@link choose} option can be: a bare label string, or a built action. */
+export type ChoiceOption = string | MessageAction;
+
+/** The answer type one option resolves to: its `value`, else its label string. */
+export type ChoiceValue<O extends ChoiceOption> = O extends string
+    ? O
+    : O extends { value: infer V }
+      ? V
+      : O extends { label: infer L extends string }
+        ? L
+        : never;
+
+export interface ChooseOptions {
+    /** Also mount a form component; the chips remain as fallback. */
+    ui?: UiRef;
+    /** Journal key, when a node pauses more than once (ilmek MODEL.md §5.4). */
+    key?: string;
+}
+
+/**
+ * Pause the run on a set of buttons and resolve to the one the human picked —
+ * the typed, no-JSON way to put chips in the chat.
+ *
+ * @remarks
+ * Sugar over {@link approve}: emits an `interrupt` frame whose `actions` are the
+ * given options, and resolves on `resume` with the chosen action's `value` (or its
+ * label string when the option has no value — a bare string option is both). The
+ * answer type is **inferred from the options**, so the call site needs no manual
+ * generic and no hand-written `{ label, value }` objects:
+ *
+ * ```ts
+ * const size = await mekik.choose(ctx, "Pick a size", ["S", "M", "L"]);
+ * //    ^? "S" | "M" | "L"
+ *
+ * const verdict = await mekik.choose(ctx, { title: `Refund ${order.total}?` }, [
+ *     mekik.action("Approve", { approved: true }),
+ *     mekik.action("Reject", { approved: false }),
+ * ]);
+ * //    ^? { approved: true } | { approved: false }
+ * ```
+ *
+ * The inferred type is a contract with your own client, not a guarantee — the
+ * wire cannot stop a hand-rolled `resume` from carrying something else, same as
+ * {@link approve}'s `T`.
+ *
+ * @param ctx - The ilmek node context.
+ * @param payload - The question. A string is shorthand for `{ title }`; a record
+ * passes through as `interrupt.data.payload`.
+ * @param options - The buttons: bare strings and/or {@link action}-built chips.
+ * @param opts - Optional form mount and journal key; see {@link ChooseOptions}.
+ * @returns The picked option's value (its label string when it has no value).
+ */
+export function choose<const O extends readonly [ChoiceOption, ...ChoiceOption[]]>(
+    ctx: Context<any>,
+    payload: string | Record<string, unknown>,
+    options: O,
+    opts: ChooseOptions = {},
+): Promise<ChoiceValue<O[number]>> {
+    const actions: MessageAction[] = options.map((o) => (typeof o === "string" ? { label: o } : o));
+    return approve<ChoiceValue<O[number]>>(ctx, typeof payload === "string" ? { title: payload } : payload, {
+        actions,
+        ...(opts.ui !== undefined ? { ui: opts.ui } : {}),
+        ...(opts.key !== undefined ? { key: opts.key } : {}),
+    });
 }
 
 // `index.ts` attaches these to the callable `mekik` factory, so both

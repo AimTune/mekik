@@ -80,6 +80,11 @@ Transient frames (`welcome`, `run`, `error`) are live-only: never stored, never
 replayed. On (re)connect the server sends `welcome`, then replays every persistent
 frame with `seq > watermark` in order, then resumes live delivery.
 
+`PERSISTENT_FRAME_TYPES` is the closed list; **rich message frames** (§4.5) are
+the one open extension to it: a frame whose `type` is a client message-renderer
+name (not one of the protocol's own types) and that carries the `text` frame's
+envelope is persistent under the same rules.
+
 > **Two seq spaces - do not conflate.** ilmek stamps every `IlmekEvent` with its
 > own per-_run_ `seq` (internal, resets each run). mekik's persistent-frame `seq`
 > is per-_conversation_ and spans every run of that conversation; it is the
@@ -114,6 +119,7 @@ stays open).
 | `genui`              | yes        | `{type, seq, streamId, done, chunk: AIChunk}`                                                                          |
 | `interrupt`          | yes        | `{type, seq, id, data:{payload, ui?, actions?}}`                                                                       |
 | `interrupt_resolved` | yes        | `{type, seq, id, data:{answer?}}`                                                                                      |
+| _rich message_ (§4.5) | yes       | `{type: <rendererName>, id, seq, from:"bot"\|"user", data, timestamp}` - `type` is a client message-renderer name      |
 | `run`                | no         | `{type, data:{status:"started"\|"finished"\|"interrupted"\|"error"\|"aborted"}}`                                       |
 | `error`              | no         | `{type, data:{code, message}}`                                                                                         |
 
@@ -227,6 +233,45 @@ carried it), so the ordinary path is for the client to answer with a plain
 interrupt is coerced by the engine to `resume{answers:{[id]: answer}}` — no
 server-side stream↔interrupt binding is needed.
 
+### 4.5 Rich message frames
+
+A chativa conversation is rendered out of *messages*, each dispatched to a
+renderer by its `type` (`"image"`, `"card"`, `"buttons"`, `"carousel"`, … —
+chativa's `MessageTypeRegistry`). mekik/1 carries one as a **rich message
+frame**: the `text` frame's envelope under the renderer's name, with the
+renderer's payload as `data`:
+
+```jsonc
+{ "type": "image", "id": "msg-7", "seq": 12, "from": "bot",
+  "data": { "src": "https://…/receipt.png", "caption": "Your receipt" },
+  "timestamp": 1750000000000 }
+```
+
+Authors emit them with `mekik.message(ctx, type, data, {id?})` /
+`Shuttle.Message` (or the typed `mekik.messages.*` / `Messages.*` catalog, see
+[`docs/GENUI.md`](docs/GENUI.md)); the mapper recognises the reserved
+`{$mekik:"message", messageType, data, id?}` custom payload and mints the frame
+(id from the `IdMinter` unless the author supplied one).
+
+The rules:
+
+- **Persistent.** Same `seq`, transcript, replay, and watermark treatment as
+  `text`. This is the one open extension to `PERSISTENT_FRAME_TYPES` (§2).
+- **Additive.** A client with no renderer for the `type` ignores the frame — the
+  standard unknown-frame rule from the preamble. chativa's mekik connector
+  routes any frame it does not itself handle to the message layer, so
+  registered renderers pick these up with no connector change.
+- **Reserved types.** The `type` MUST NOT be one of the protocol's own frame
+  types (either direction), with a single deliberate overlap: `"text"` is
+  allowed and produces a regular `text` frame (its `data` may then carry the
+  text renderer's extras, e.g. `urls` for link previews). The helpers throw on
+  a reserved type; a hand-built payload naming one is dropped by the mapper.
+  `"typing"` is also reserved (chativa's shared frame parser claims it).
+- **Interaction comes back as input, not as a special frame.** A tapped button,
+  chip, or card action arrives as the next user `text` turn (the action's
+  `value` — or label — as `data.text`), or as the `resume` answer when the run
+  is parked on an interrupt. `mekik.choose` is the interrupt-bound form.
+
 ---
 
 ## 5. Turn lifecycle & concurrency (§5)
@@ -267,17 +312,34 @@ conversation without the graph knowing anything about mekik.
 **Author helpers** (`@mekik/core`, `Mekik.Core`) - all take ilmek `ctx`, so no
 ambient storage is needed (ilmek already threads `ctx` everywhere):
 
-| helper                                                             | effect                                                                                      |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| `mekik.text(ctx, content)` / `Mekik.Text`                        | emit a `genui` text chunk (streaming prose)                                                 |
-| `mekik.ui(ctx, component, props)` / `Mekik.Ui`                   | emit a `genui` ui chunk (mount a component)                                                 |
-| `mekik.event(ctx, name, payload?)` / `Mekik.Event`               | emit a `genui` event chunk                                                                  |
-| `mekik.tool(ctx, name, params, fn)` / `Mekik.Tool`               | `ctx.step(name, fn)` (exactly-once) **and** emit `tool_call` running→completed/error traces |
-| `mekik.approve(ctx, payload, {ui?, actions?})` / `Mekik.Approve` | `ctx.interrupt` with `$mekik:{ui,actions}` attached                                        |
+| helper                                                                | effect                                                                                      |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `mekik.text(ctx, content, {id?})` / `Shuttle.Text`                   | emit a `genui` text chunk (streaming prose)                                                 |
+| `mekik.ui(ctx, component, props, {id?})` / `Shuttle.Ui`              | emit a `genui` ui chunk (mount a component)                                                 |
+| `mekik.mount(ctx, component, props, {id?})` / `Shuttle.Mount`        | mount a ui chunk and return a handle whose `update(props)` re-emits the **same** chunk id  |
+| `mekik.event(ctx, name, payload?, {id?})` / `Shuttle.Event`          | emit a `genui` event chunk                                                                  |
+| `mekik.tool(ctx, name, params, fn)` / `Shuttle.Tool`                 | `ctx.step(name, fn)` (exactly-once) **and** emit `tool_call` running→completed/error traces |
+| `mekik.approve(ctx, payload, {ui?, actions?})` / `Shuttle.Approve`   | `ctx.interrupt` with `$mekik:{ui,actions}` attached                                        |
+| `mekik.action(label, value?)` / `Shuttle.Action`                     | build one `MessageAction` chip (typed constructor; no hand-written JSON)                    |
+| `mekik.choose(ctx, payload, options, {ui?, key?})` / `Shuttle.Choose` | `approve` sugar: options become `actions` chips; resolves to the picked option's `value` (its label string when it has none) |
+| `mekik.message(ctx, type, data, {id?})` / `Shuttle.Message`          | emit a rich message frame (§4.5)                                                            |
+| `mekik.component<P>(name)` / `GenUI.*`, `GenUI.Names.*`              | bind a GenUI component name once, typed — chativa's built-ins are `mekik.genui.*`          |
+| `mekik.messageKind<D>(type)` / `Messages.*`                          | bind a message type once, typed — chativa's built-ins are `mekik.messages.*`               |
 
 `mekik.tool` is the important one: the side effect is journaled by `ctx.step`, so
 on an interrupt-replay pass it is **not** re-run, while the `tool_call` trace it
 emits is idempotent (upsert by id) so re-emitting on replay is harmless.
+
+The optional `{id}` on the chunk emitters is the chunk's client-side key: emitting
+another chunk with the **same id updates that element in place** (and an explicit
+id opts the chunk out of text-run coalescing, §4.1). Omitted, the mapper assigns
+stream-scoped ids; `mekik.mount` mints replay-stable ones (`taskId` + call order,
+like tool ids) so a resume pass upserts instead of duplicating.
+
+The typed catalogs (`component`/`genui`, `messageKind`/`messages`, `action`) add
+**nothing** to the wire — a component or message is always a client-registered
+name plus a JSON payload, and these only bind the name and check the payload.
+See [`docs/GENUI.md`](docs/GENUI.md).
 
 ---
 

@@ -118,6 +118,75 @@ public class ShuttleTests
     }
 
     [Fact]
+    public void Action_builds_a_chip_with_and_without_a_value()
+    {
+        Assert.Equal(new Dictionary<string, object?> { ["label"] = "Cancel" }, Shuttle.Action("Cancel"));
+        Assert.Equal(
+            new Dictionary<string, object?> { ["label"] = "Approve", ["value"] = true },
+            Shuttle.Action("Approve", true));
+    }
+
+    [Fact]
+    public async Task Choose_interrupts_with_the_options_as_actions_and_resolves_the_picked_value()
+    {
+        var app = StreamerApp(async ctx =>
+            await Shuttle.Choose<string>(ctx, "Pick a size", ["S", "M", Shuttle.Action("Large", "L")]));
+
+        var conn = new FakeConn();
+        await app.ConnectAsync(conn);
+        await app.ReceiveAsync(conn, TextFrame("go"));
+
+        // The pause carries the question as {title} and the options as actions —
+        // bare strings become label-only chips, built actions pass through.
+        var interrupt = Assert.Single(conn.Sent, f => f.GetValueOrDefault("type") as string == "interrupt");
+        var data = (IReadOnlyDictionary<string, object?>)interrupt["data"]!;
+        var payload = (IReadOnlyDictionary<string, object?>)data["payload"]!;
+        Assert.Equal("Pick a size", payload["title"]);
+        var actions = ((System.Collections.IEnumerable)data["actions"]!).Cast<IReadOnlyDictionary<string, object?>>().ToList();
+        Assert.Equal(["S", "M", "Large"], actions.Select(a => a["label"] as string));
+        Assert.Equal("L", actions[2]["value"]);
+
+        // Resuming with the picked value resolves the Choose and finishes the turn.
+        await app.ReceiveAsync(conn, new Dictionary<string, object?>
+        {
+            ["type"] = "resume",
+            ["answers"] = new Dictionary<string, object?> { [(string)interrupt["id"]!] = "L" },
+        });
+        Assert.Equal("L", Reply(conn));
+    }
+
+    [Fact]
+    public async Task Ui_and_Mount_key_chunks_by_id_for_in_place_updates()
+    {
+        var app = StreamerApp(ctx =>
+        {
+            Shuttle.Ui(ctx, "order-card", new Dictionary<string, object?> { ["total"] = 1 }, "ORD-42");
+            var card = Shuttle.Mount(ctx, "status-card", new Dictionary<string, object?> { ["state"] = "loading" });
+            card.Update(new Dictionary<string, object?> { ["state"] = "ready" });
+            return new ValueTask<string>("done");
+        });
+
+        var conn = new FakeConn();
+        await app.ConnectAsync(conn);
+        await app.ReceiveAsync(conn, TextFrame("go"));
+
+        var chunks = conn.Sent
+            .Where(f => f.GetValueOrDefault("type") as string == "genui")
+            .Select(f => (IReadOnlyDictionary<string, object?>)f["chunk"]!)
+            .Where(c => c.GetValueOrDefault("type") as string == "ui")
+            .ToList();
+        Assert.Equal(3, chunks.Count);
+
+        // The explicit id passes through; the mounted card's minted id is
+        // replay-stable and shared by the mount and its update.
+        Assert.Equal("ORD-42", chunks[0]["id"]);
+        var mintedId = Assert.IsType<string>(chunks[1]["id"]);
+        Assert.EndsWith(":ui:0", mintedId);
+        Assert.Equal(mintedId, chunks[2]["id"]);
+        Assert.Equal("ready", ((IReadOnlyDictionary<string, object?>)chunks[2]["props"]!)["state"]);
+    }
+
+    [Fact]
     public void ClaimStrings_coerces_a_string_list_a_single_string_and_a_boxed_list()
     {
         Assert.Equal(["a", "b"], Shuttle.ClaimStrings(new Dictionary<string, object?> { ["roles"] = new[] { "a", "b" } }, "roles"));

@@ -15,6 +15,8 @@ mekik ships two implementations that speak the identical `mekik/1` wire
 | canonical JSON | `canonicalize` | `Json.Canonicalize` |
 | parse inbound | `parseIncoming` | `Protocol.ParseIncoming` |
 | authoring helpers | `mekik.text / ui / event / tool / approve` | `Shuttle.Text / Ui / Event / Tool / Approve` |
+| button chips | `mekik.action` / `mekik.choose` | `Shuttle.Action` / `Shuttle.Choose` |
+| managed ui instance | `mekik.mount` → `UiHandle` (`id`, `update`) | `Shuttle.Mount` → `UiHandle` (`Id`, `Update`) |
 | ilmek seam | `IlmekAdapter` | `IlmekAdapter` |
 | history port | `HistoryStore` / `InMemoryHistoryStore` | `IHistoryStore` / `InMemoryHistoryStore` |
 | conversation port | `ConversationStore` / `InMemoryConversationStore` | `IConversationStore` / `InMemoryConversationStore` |
@@ -43,7 +45,12 @@ mekik ships two implementations that speak the identical `mekik/1` wire
    in TS and a `CancellationTokenSource`/`CancellationToken` in .NET (which is what
    ilmek's .NET run loop already takes).
 
-4. **The interrupt rethrow rule.** In .NET, any `try/catch` in the adapter or
+4. **`Choose`'s answer type.** TypeScript infers it from the options themselves (a
+   `const` type parameter turns `["S", "M", "L"]` into `"S" | "M" | "L"`). C# has no
+   literal-type inference, so `Shuttle.Choose<T>` takes the answer type explicitly —
+   same contract, stated instead of inferred.
+
+5. **The interrupt rethrow rule.** In .NET, any `try/catch` in the adapter or
    helpers that wraps node execution MUST rethrow when the exception is an
    `InterruptSignalException` — a blanket `catch (Exception)` would swallow the
    pause. `Shuttle.Tool` does this. (In TS the pause is a thrown non-`Error` value, so

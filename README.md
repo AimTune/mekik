@@ -70,6 +70,7 @@ mekik/
   docs/
     LANGUAGES.md         # TS ↔ .NET naming parity
     HITL.md              # human-in-the-loop authoring guide
+    GENUI.md             # rendering: typed components and rich messages
   ts/
     packages/core/       # @mekik/core — protocol, mapper, engine, helpers, stores, auth
     packages/ws/         # @mekik/ws — WebSocket transport
@@ -81,6 +82,7 @@ mekik/
     examples/weather-agent.ts # chained network tools, fan-out, recovery
     examples/concierge.ts # all three tool groups in one agent (single node)
     examples/routed-desk.ts # the same desk as a real graph: router + per-domain nodes
+    examples/storefront.ts # rendering showcase: every typed component + message type
   dotnet/
     src/Mekik.Core/            # mirror of @mekik/core
     src/Mekik.AspNetCore/      # app.MapMekik("/ws", app)
@@ -187,8 +189,10 @@ The two implementations are held to the same wire two ways:
    fan-out, resume routing, the turn lock, auth), written as ordinary tests in
    each language against the identical observable wire.
 
-See [`docs/LANGUAGES.md`](docs/LANGUAGES.md) for the naming map and
-[`docs/HITL.md`](docs/HITL.md) for the human-in-the-loop authoring rules.
+See [`docs/LANGUAGES.md`](docs/LANGUAGES.md) for the naming map,
+[`docs/HITL.md`](docs/HITL.md) for the human-in-the-loop authoring rules, and
+[`docs/GENUI.md`](docs/GENUI.md) for the two rendering paths (typed GenUI
+components and rich messages).
 
 ## Non-goals (v1)
 

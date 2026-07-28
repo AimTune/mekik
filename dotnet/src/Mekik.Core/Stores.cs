@@ -25,7 +25,9 @@ public sealed class InMemoryHistoryStore : IHistoryStore
 
     public Task RecordAsync(string conversationId, Frame frame)
     {
-        if (frame.GetValueOrDefault("type") is not string t || !Protocol.PersistentFrameTypes.Contains(t))
+        // IsPersistent, not the closed type list: rich message frames (PROTOCOL.md
+        // §4.5) carry an open renderer-named type and belong in the transcript too.
+        if (!Protocol.IsPersistent(frame))
             throw new InvalidOperationException($"refusing to record a transient {frame.GetValueOrDefault("type")} frame");
         lock (_lock)
         {

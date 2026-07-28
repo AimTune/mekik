@@ -53,6 +53,16 @@ public static class Shuttle
     /// <seealso cref="ToolTrace"/>
     public static string NextToolCallId(IContext ctx) => NextToolId(ctx);
 
+    // Per-ctx ui counter — same replay-stability story as the tool counter.
+    private static readonly ConditionalWeakTable<IContext, StrongBox<int>> UiCounters = new();
+
+    private static string NextUiId(IContext ctx)
+    {
+        var box = UiCounters.GetValue(ctx, _ => new StrongBox<int>(0));
+        var n = box.Value++;
+        return $"{(string.IsNullOrEmpty(ctx.TaskId) ? "task" : ctx.TaskId)}:ui:{n}";
+    }
+
     private static void EmitChunk(IContext ctx, Dictionary<string, object?> chunk) =>
         ctx.Emit(new Dictionary<string, object?> { [MekikKey] = "genui", ["chunk"] = chunk });
 
@@ -61,11 +71,18 @@ public static class Shuttle
     /// Text chunks are transient — they render live as the run streams, but they are not
     /// the conversation's durable reply (that is the single <c>text</c> frame emitted at
     /// run end from the reply selector). Use this for token-by-token model output.
+    /// A non-null <paramref name="id"/> is the chunk's client-side key — the same id
+    /// updates that element in place, and opts out of text-run coalescing (PROTOCOL.md §4.1).
     /// </remarks>
     /// <param name="ctx">The ilmek node context (threaded into every node).</param>
     /// <param name="content">The prose fragment to append to the current turn's stream.</param>
-    public static void Text(IContext ctx, string content) =>
-        EmitChunk(ctx, new Dictionary<string, object?> { ["type"] = "text", ["content"] = content });
+    /// <param name="id">Optional client-side chunk key; omit and mekik manages it.</param>
+    public static void Text(IContext ctx, string content, object? id = null)
+    {
+        var chunk = new Dictionary<string, object?> { ["type"] = "text", ["content"] = content };
+        if (id is not null) chunk["id"] = id;
+        EmitChunk(ctx, chunk);
+    }
 
     /// <summary>Stream an async sequence of prose deltas as live text chunks and return the full text —
     /// the token-by-token pattern in a single call.</summary>
@@ -138,16 +155,43 @@ public static class Shuttle
 
     /// <summary>Mount or update a generative-UI component by its client-registry name.</summary>
     /// <remarks>Emitting the same component again with new props updates it in place. mekik
-    /// ships no components — it streams the instruction to render one the client has registered.</remarks>
+    /// ships no components — it streams the instruction to render one the client has registered.
+    /// Pass <paramref name="id"/> to key the instance yourself — that is how two instances of
+    /// the <i>same</i> component stay distinct and individually updatable; see
+    /// <see cref="Mount"/> for the managed form.</remarks>
     /// <param name="ctx">The ilmek node context.</param>
     /// <param name="component">The component name registered on the client (chativa).</param>
     /// <param name="props">Props handed to the component; omit for one that needs none.</param>
+    /// <param name="id">Optional client-side chunk key; omit and mekik manages it.</param>
     /// <example><code>Shuttle.Ui(ctx, "order-card", new Dictionary&lt;string, object?&gt; { ["id"] = order.Id });</code></example>
-    public static void Ui(IContext ctx, string component, IReadOnlyDictionary<string, object?>? props = null)
+    public static void Ui(IContext ctx, string component, IReadOnlyDictionary<string, object?>? props = null, object? id = null)
     {
         var chunk = new Dictionary<string, object?> { ["type"] = "ui", ["component"] = component };
         if (props is not null) chunk["props"] = props;
+        if (id is not null) chunk["id"] = id;
         EmitChunk(ctx, chunk);
+    }
+
+    /// <summary>
+    /// Mount a GenUI component and get a <see cref="UiHandle"/> for updating it in
+    /// place — chunk ids managed for you. Mirror of TypeScript <c>mekik.mount</c>.
+    /// </summary>
+    /// <remarks>
+    /// The handle's id is minted replay-stable (like tool ids: <c>TaskId</c> + call order),
+    /// so the resume pass after an interrupt re-emits the same id and the client updates the
+    /// existing element instead of duplicating it. Pass <paramref name="id"/> to pick the key
+    /// yourself (e.g. the order id, so the same order always maps to the same card).
+    /// </remarks>
+    /// <param name="ctx">The ilmek node context.</param>
+    /// <param name="component">The component name registered on the client.</param>
+    /// <param name="props">Initial props; omit for a component that needs none.</param>
+    /// <param name="id">Optional explicit chunk key.</param>
+    /// <returns>A handle whose <see cref="UiHandle.Update"/> re-renders this same instance.</returns>
+    public static UiHandle Mount(IContext ctx, string component, IReadOnlyDictionary<string, object?>? props = null, object? id = null)
+    {
+        var key = id ?? NextUiId(ctx);
+        Ui(ctx, component, props, key);
+        return new UiHandle(ctx, component, key);
     }
 
     /// <summary>Dispatch a named event to a mounted GenUI component — advance a step,
@@ -155,10 +199,12 @@ public static class Shuttle
     /// <param name="ctx">The ilmek node context.</param>
     /// <param name="name">The event name the component listens for.</param>
     /// <param name="payload">Optional event payload.</param>
-    public static void Event(IContext ctx, string name, object? payload = null)
+    /// <param name="id">Optional client-side chunk key; omit and mekik manages it.</param>
+    public static void Event(IContext ctx, string name, object? payload = null, object? id = null)
     {
         var chunk = new Dictionary<string, object?> { ["type"] = "event", ["name"] = name };
         if (payload is not null) chunk["payload"] = payload;
+        if (id is not null) chunk["id"] = id;
         EmitChunk(ctx, chunk);
     }
 
@@ -241,4 +287,111 @@ public static class Shuttle
         wrapped[MekikKey] = meta;
         return ctx.InterruptAsync<T>(wrapped, key);
     }
+
+    // ── rich messages (PROTOCOL.md §4.5) ──────────────────────────────────────
+
+    /// <summary>
+    /// Emit one rich message — message type + JSON data, the low-level form.
+    /// Mirror of TypeScript <c>mekik.message</c>.
+    /// </summary>
+    /// <remarks>
+    /// The type names a message renderer on the client (chativa's
+    /// <c>MessageTypeRegistry</c>: <c>image</c>, <c>card</c>, <c>carousel</c>, …); the
+    /// data is that renderer's payload, delivered as a persistent rich message frame.
+    /// Prefer the typed <see cref="Messages"/> catalog for chativa's built-ins.
+    /// <c>"text"</c> is allowed (it emits a regular text frame); the protocol's other
+    /// frame types are reserved and throw.
+    /// </remarks>
+    /// <param name="ctx">The ilmek node context.</param>
+    /// <param name="type">The client message-renderer name.</param>
+    /// <param name="data">The renderer's payload.</param>
+    /// <param name="id">Optional stable message id; omit and mekik mints one.</param>
+    public static void Message(IContext ctx, string type, IReadOnlyDictionary<string, object?> data, string? id = null)
+    {
+        if (Protocol.ReservedFrameTypes.Contains(type) && type != "text")
+            throw new ArgumentException($"\"{type}\" is a reserved protocol frame type, not a message type", nameof(type));
+        var payload = new Dictionary<string, object?> { [MekikKey] = "message", ["messageType"] = type, ["data"] = data };
+        if (id is not null) payload["id"] = id;
+        ctx.Emit(payload);
+    }
+
+    // ── buttons, typed (no hand-written action JSON) ──────────────────────────
+
+    /// <summary>
+    /// Build one quick-reply button (a <c>MessageAction</c>) — the constructor that
+    /// replaces hand-written <c>{ label, value }</c> dictionaries. Mirror of
+    /// TypeScript <c>mekik.action</c>.
+    /// </summary>
+    /// <remarks>With no <paramref name="value"/> the answer is the <paramref name="label"/>
+    /// string itself (protocol rule, PROTOCOL.md §3.2).</remarks>
+    /// <example><code>Shuttle.Action("Approve", new Dictionary&lt;string, object?&gt; { ["approved"] = true })</code></example>
+    public static IReadOnlyDictionary<string, object?> Action(string label, object? value = null) =>
+        value is null
+            ? new Dictionary<string, object?> { ["label"] = label }
+            : new Dictionary<string, object?> { ["label"] = label, ["value"] = value };
+
+    /// <summary>
+    /// Pause the run on a set of buttons and resume with the one the human picked —
+    /// the no-JSON way to put chips in the chat. Mirror of TypeScript <c>mekik.choose</c>.
+    /// </summary>
+    /// <remarks>
+    /// Sugar over <see cref="Approve{T}"/>: emits an <c>interrupt</c> frame whose
+    /// <c>actions</c> are the given options, and resolves on <c>resume</c> with the chosen
+    /// action's <c>value</c> (its label string when the option has no value — a bare string
+    /// option is both). <typeparamref name="T"/> is a contract with your own client, not a
+    /// wire guarantee — same as <see cref="Approve{T}"/>.
+    /// </remarks>
+    /// <typeparam name="T">The answer type the chosen option's value resolves to.</typeparam>
+    /// <param name="ctx">The ilmek node context.</param>
+    /// <param name="payload">The question, delivered as <c>interrupt.data.payload</c>.</param>
+    /// <param name="options">The buttons: bare strings and/or <see cref="Action"/>-built chips.</param>
+    /// <param name="ui">Optional: also mount a form component; the chips remain as fallback.</param>
+    /// <param name="key">Journal key, when a node pauses more than once.</param>
+    /// <returns>The picked option's value, on resume.</returns>
+    public static ValueTask<T> Choose<T>(
+        IContext ctx,
+        IReadOnlyDictionary<string, object?> payload,
+        IReadOnlyList<object> options,
+        IReadOnlyDictionary<string, object?>? ui = null,
+        string key = "interrupt")
+    {
+        var actions = options
+            .Select(o => o is string label ? Action(label) : o)
+            .ToList<object>();
+        return Approve<T>(ctx, payload, ui, actions, key);
+    }
+
+    /// <summary>String-question overload of <see cref="Choose{T}(IContext, IReadOnlyDictionary{string, object?}, IReadOnlyList{object}, IReadOnlyDictionary{string, object?}?, string)"/> —
+    /// the question becomes <c>{ title }</c>, matching the TypeScript shorthand.</summary>
+    public static ValueTask<T> Choose<T>(
+        IContext ctx,
+        string title,
+        IReadOnlyList<object> options,
+        IReadOnlyDictionary<string, object?>? ui = null,
+        string key = "interrupt") =>
+        Choose<T>(ctx, new Dictionary<string, object?> { ["title"] = title }, options, ui, key);
+}
+
+/// <summary>
+/// A managed handle to one mounted GenUI component instance — mekik owns the chunk
+/// id, the author just calls <see cref="Update"/>. Mirror of TypeScript <c>UiHandle</c>.
+/// </summary>
+/// <seealso cref="Shuttle.Mount"/>
+public sealed class UiHandle
+{
+    private readonly IContext _ctx;
+    private readonly string _component;
+
+    /// <summary>The chunk id keying this instance on the client.</summary>
+    public object Id { get; }
+
+    internal UiHandle(IContext ctx, string component, object id)
+    {
+        _ctx = ctx;
+        _component = component;
+        Id = id;
+    }
+
+    /// <summary>Re-emit the component with new props — the client updates it in place.</summary>
+    public void Update(IReadOnlyDictionary<string, object?> props) => Shuttle.Ui(_ctx, _component, props, Id);
 }

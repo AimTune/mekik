@@ -8,13 +8,26 @@ import assert from "node:assert/strict";
 
 import type { Context } from "@ilmek/core";
 
-import { authClaims, claimStrings, streamText } from "../src/helpers.ts";
+import { action, authClaims, choose, claimStrings, event, mount, streamText, text, ui } from "../src/helpers.ts";
 
 /** A ctx stand-in that records what the helper emits — all `streamText` touches. */
 function recordingCtx() {
     const emitted: Array<Record<string, unknown>> = [];
     const ctx = { emit: (p: unknown) => emitted.push(p as Record<string, unknown>) } as unknown as Context<any>;
     return { ctx, emitted };
+}
+
+/** A ctx stand-in that also captures `ctx.interrupt` calls — what `choose` touches. */
+function interruptingCtx(answer: unknown = undefined) {
+    const interrupts: Array<{ payload: unknown; key: string | undefined }> = [];
+    const ctx = {
+        emit: () => {},
+        interrupt: (payload: unknown, key?: string) => {
+            interrupts.push({ payload, key });
+            return Promise.resolve(answer);
+        },
+    } as unknown as Context<any>;
+    return { ctx, interrupts };
 }
 
 async function* stream<T>(items: T[]): AsyncIterable<T> {
@@ -51,6 +64,128 @@ describe("mekik.streamText", () => {
 
         assert.equal(full, "");
         assert.equal(emitted.length, 0);
+    });
+});
+
+describe("mekik.action / choose", () => {
+    test("action builds a chip with and without a value", () => {
+        assert.deepEqual(action("Cancel"), { label: "Cancel" });
+        assert.deepEqual(action("Approve", { approved: true }), { label: "Approve", value: { approved: true } });
+    });
+
+    test("choose interrupts with the options as $mekik actions and resolves the answer", async () => {
+        const { ctx, interrupts } = interruptingCtx({ approved: true });
+
+        const answer = await choose(ctx, { title: "Refund?" }, [
+            action("Approve", { approved: true }),
+            action("Reject", { approved: false }),
+        ]);
+
+        assert.deepEqual(answer, { approved: true });
+        assert.deepEqual(interrupts, [
+            {
+                payload: {
+                    title: "Refund?",
+                    $mekik: {
+                        actions: [
+                            { label: "Approve", value: { approved: true } },
+                            { label: "Reject", value: { approved: false } },
+                        ],
+                    },
+                },
+                key: undefined,
+            },
+        ]);
+    });
+
+    test("a string payload becomes {title}; bare string options become label-only chips", async () => {
+        const { ctx, interrupts } = interruptingCtx("M");
+
+        const size = await choose(ctx, "Pick a size", ["S", "M", "L"]);
+
+        assert.equal(size, "M");
+        assert.deepEqual(interrupts[0]?.payload, {
+            title: "Pick a size",
+            $mekik: { actions: [{ label: "S" }, { label: "M" }, { label: "L" }] },
+        });
+    });
+
+    test("choose infers the answer type from the options — no manual generic", async () => {
+        const { ctx } = interruptingCtx("M");
+        const size = await choose(ctx, "Pick a size", ["S", "M", "L"]);
+        // Compile-time contract: the annotation below only typechecks if the
+        // inferred type is the option union, not `unknown`.
+        const sized: "S" | "M" | "L" = size;
+        assert.equal(sized, "M");
+
+        const { ctx: ctx2 } = interruptingCtx({ ok: true });
+        const verdict = await choose(ctx2, "Deploy?", [action("Go", { ok: true }), "skip"]);
+        const typed: { ok: boolean } | "skip" = verdict;
+        assert.deepEqual(typed, { ok: true });
+    });
+
+    test("choose forwards ui and the journal key", async () => {
+        const { ctx, interrupts } = interruptingCtx();
+
+        await choose(ctx, { title: "Deploy?" }, ["Yes", "No"], {
+            ui: { component: "deploy-form", props: { env: "prod" } },
+            key: "second-gate",
+        });
+
+        assert.equal(interrupts[0]?.key, "second-gate");
+        const payload = interrupts[0]?.payload as Record<string, unknown>;
+        assert.deepEqual(payload.$mekik, {
+            ui: { component: "deploy-form", props: { env: "prod" } },
+            actions: [{ label: "Yes" }, { label: "No" }],
+        });
+    });
+});
+
+describe("chunk ids (mekik.text / ui / event / mount)", () => {
+    test("text, ui, and event carry a caller-supplied id; omit it and the chunk has none", () => {
+        const { ctx, emitted } = recordingCtx();
+
+        text(ctx, "hi", { id: "bubble-1" });
+        ui(ctx, "order-card", { total: 1 }, { id: "card-1" });
+        event(ctx, "highlight", { rowId: 3 }, { id: 7 });
+        ui(ctx, "order-card");
+
+        assert.deepEqual(emitted, [
+            { $mekik: "genui", chunk: { type: "text", content: "hi", id: "bubble-1" } },
+            { $mekik: "genui", chunk: { type: "ui", component: "order-card", props: { total: 1 }, id: "card-1" } },
+            { $mekik: "genui", chunk: { type: "event", name: "highlight", payload: { rowId: 3 }, id: 7 } },
+            { $mekik: "genui", chunk: { type: "ui", component: "order-card" } },
+        ]);
+    });
+
+    test("mount mints replay-stable ids per ctx and update re-emits the same id", () => {
+        const { ctx, emitted } = recordingCtx();
+        (ctx as unknown as { taskId: string }).taskId = "node:approve#0";
+
+        const first = mount(ctx, "order-card", { status: "loading" });
+        const second = mount(ctx, "order-card");
+        first.update({ status: "ready" });
+
+        assert.equal(first.id, "node:approve#0:ui:0");
+        assert.equal(second.id, "node:approve#0:ui:1");
+        assert.deepEqual(emitted, [
+            { $mekik: "genui", chunk: { type: "ui", component: "order-card", props: { status: "loading" }, id: "node:approve#0:ui:0" } },
+            { $mekik: "genui", chunk: { type: "ui", component: "order-card", id: "node:approve#0:ui:1" } },
+            { $mekik: "genui", chunk: { type: "ui", component: "order-card", props: { status: "ready" }, id: "node:approve#0:ui:0" } },
+        ]);
+    });
+
+    test("mount honours an explicit id instead of minting one", () => {
+        const { ctx, emitted } = recordingCtx();
+
+        const card = mount(ctx, "order-card", { total: 9 }, { id: "ORD-42" });
+        card.update({ total: 10 });
+
+        assert.equal(card.id, "ORD-42");
+        assert.deepEqual(
+            emitted.map((e) => (e.chunk as { id?: unknown }).id),
+            ["ORD-42", "ORD-42"],
+        );
     });
 });
 

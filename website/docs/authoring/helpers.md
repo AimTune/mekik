@@ -63,7 +63,7 @@ using Ilmek;
 
 ## The one name, two ways
 
-In TypeScript the single `mekik` export is both the **app factory** and the **helpers** — `index.ts` folds the helper functions onto the callable factory, so both read naturally. In .NET they split: the app is `MekikApp`, and the helpers live on a static `Shuttle` class (a static class named `Mekik` would clash with the namespace — see [Parity](../parity/languages.md#the-four-deliberate-divergences)).
+In TypeScript the single `mekik` export is both the **app factory** and the **helpers** — `index.ts` folds the helper functions onto the callable factory, so both read naturally. In .NET they split: the app is `MekikApp`, and the helpers live on a static `Shuttle` class (a static class named `Mekik` would clash with the namespace — see [Parity](../parity/languages.md#the-five-deliberate-divergences)).
 
 <Tabs groupId="lang">
 <TabItem value="ts" label="TypeScript">
@@ -99,10 +99,15 @@ Shuttle.Ui(ctx, "card", new Dictionary<string, object?>()); // helper — called
 | `mekik.streamText(ctx, deltas, select?)` | `Shuttle.StreamText(ctx, deltas, …)` | one `genui` **text** chunk per delta | **yes** — returns the joined text | [Generative UI](./generative-ui.md#a-streaming-reply-end-to-end) |
 | `mekik.ui(ctx, component, props?)` | `Shuttle.Ui(ctx, component, props?)` | a `genui` **ui** chunk | no | [Generative UI](./generative-ui.md) |
 | `mekik.event(ctx, name, payload?)` | `Shuttle.Event(ctx, name, payload?)` | a `genui` **event** chunk | no | [Generative UI](./generative-ui.md) |
+| `mekik.mount(ctx, component, props?)` | `Shuttle.Mount(ctx, component, props?)` | a `genui` **ui** chunk + an update handle | no | [Typed components](./components.md#chunk-ids-updating-in-place) |
+| `mekik.message(ctx, type, data)` | `Shuttle.Message(ctx, type, data)` | a persistent **rich message** frame | no | [Rich messages](./messages.md) |
 | `mekik.tool(ctx, name, params, fn)` | `Shuttle.Tool(ctx, name, params, fn)` | a `tool_call` trace + runs `fn` once | **yes** — returns the result | [Tools](./tools.md) |
 | `mekik.approve(ctx, payload, opts?)` | `Shuttle.Approve(ctx, payload, …)` | an `interrupt` frame; the run pauses | **yes** — returns the answer | [Human-in-the-loop](./human-in-the-loop.md) |
+| `mekik.choose(ctx, payload, options)` | `Shuttle.Choose<T>(ctx, payload, options)` | an `interrupt` frame whose `actions` are the options | **yes** — returns the pick | [HITL → Buttons](./human-in-the-loop.md#buttons-typed-no-hand-written-json) |
 
-`text`, `ui` and `event` are fire-and-forget: they emit a chunk and return. `streamText` is the token-by-token convenience — it drives an async delta source through `text` and returns the joined string to hand back as the reply. `tool` and `approve` `await` because they wrap ilmek machinery (`ctx.step` / `ctx.StepAsync` for `tool`, `ctx.interrupt` / `ctx.InterruptAsync` for `approve`).
+`text`, `ui`, `event` and `message` are fire-and-forget: they emit and return. `streamText` is the token-by-token convenience — it drives an async delta source through `text` and returns the joined string to hand back as the reply. `tool`, `approve` and `choose` `await` because they wrap ilmek machinery (`ctx.step` / `ctx.StepAsync` for `tool`, `ctx.interrupt` / `ctx.InterruptAsync` for the other two).
+
+On top of these sit the **typed catalogs**, which bind a component or message name once so the payload is compiler-checked: `mekik.component` / `mekik.genui` for [components](./components.md), `mekik.messageKind` / `mekik.messages` for [messages](./messages.md), and `mekik.action` for chips. They add nothing to the wire — same frames, fewer hand-written object literals.
 
 ### text / ui / event
 
@@ -298,5 +303,7 @@ Helpers *emit*; to *read* per-conversation data (a user id, a locale, auth claim
 ## Where to go next
 
 - [**Generative UI**](./generative-ui.md) — the chunk model and the component contract.
+- [**Typed components**](./components.md) — bind a component name once; every chativa built-in, worked through.
+- [**Rich messages**](./messages.md) — standalone transcript entries: images, cards, carousels, files.
 - [**Tools**](./tools.md) — exactly-once, redaction, and the trace lifecycle.
 - [**Human-in-the-loop**](./human-in-the-loop.md) — the durable-pause authoring rules.

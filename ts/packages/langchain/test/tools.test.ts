@@ -10,7 +10,7 @@ import { z } from "zod";
 import { channel, END, graph, InMemoryCheckpointer, START } from "@ilmek/core";
 
 import { mekik } from "@mekik/core";
-import type { Connection, OutgoingFrame } from "@mekik/core";
+import type { Connection, InterruptFrame, OutgoingFrame } from "@mekik/core";
 
 import { REDACTED, withMekikTools } from "../src/index.ts";
 
@@ -203,8 +203,10 @@ describe("withMekikTools — approval + exactly-once", () => {
         assert.deepEqual(named(t1, "get_order").map((f) => f.data.status), ["running", "completed"]);
         assert.equal(named(t1, "refund_payment").length, 0, "refund has not run yet");
 
-        const interrupt = t1.find((f) => f.type === "interrupt");
-        assert.ok(interrupt && interrupt.type === "interrupt");
+        // The cast pins the narrowing: `type === "interrupt"` alone no longer
+        // excludes the open-typed rich message frame member of OutgoingFrame.
+        const interrupt = t1.find((f) => f.type === "interrupt") as InterruptFrame | undefined;
+        assert.ok(interrupt);
         assert.equal((interrupt.data.payload as { tool: string }).tool, "refund_payment");
         assert.deepEqual(interrupt.data.actions?.map((a) => a.label), ["Approve", "Reject"]);
         assert.equal(tools.calls.refund_payment, 0, "the effect is gated behind the pause");

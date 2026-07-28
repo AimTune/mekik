@@ -20,11 +20,35 @@ public static class Protocol
     public static readonly IReadOnlySet<string> PersistentFrameTypes =
         new HashSet<string> { "text", "tool_call", "genui", "interrupt", "interrupt_resolved" };
 
+    /// <summary>
+    /// Frame types the protocol itself owns, in either direction. A rich message
+    /// frame (PROTOCOL.md §4.5) may use any type EXCEPT these — <c>"text"</c> is the
+    /// one deliberate overlap (a text message frame IS the text frame). <c>"typing"</c>
+    /// is reserved defensively: chativa's shared frame parser claims it.
+    /// </summary>
+    public static readonly IReadOnlySet<string> ReservedFrameTypes = new HashSet<string>
+    {
+        "hello", "welcome", "text", "resume", "genui_event", "abort",
+        "tool_call", "genui", "interrupt", "interrupt_resolved", "run", "error", "typing",
+    };
+
     private static readonly IReadOnlySet<string> IncomingTypes =
         new HashSet<string> { "hello", "text", "resume", "genui_event", "abort" };
 
+    /// <summary>
+    /// True for a rich message frame (PROTOCOL.md §4.5): the text envelope under a
+    /// non-reserved type. Only the mapper mints these, so the shape check guards
+    /// against misclassifying, not validity. Mirror of TS <c>isMessageFrame</c>.
+    /// </summary>
+    public static bool IsMessageFrame(IReadOnlyDictionary<string, object?> frame) =>
+        frame.GetValueOrDefault("type") is string type &&
+        !ReservedFrameTypes.Contains(type) &&
+        frame.GetValueOrDefault("id") is string &&
+        frame.GetValueOrDefault("seq") is long or int or double;
+
     public static bool IsPersistent(IReadOnlyDictionary<string, object?> frame) =>
-        frame.TryGetValue("type", out var t) && t is string s && PersistentFrameTypes.Contains(s);
+        (frame.TryGetValue("type", out var t) && t is string s && PersistentFrameTypes.Contains(s)) ||
+        IsMessageFrame(frame);
 
     /// <summary>
     /// Parse one client→server message (a JSON string or an already-parsed object)

@@ -1,5 +1,5 @@
 ---
-sidebar_position: 4
+sidebar_position: 6
 title: Human-in-the-loop
 description: mekik's headline feature — durable, interactive human-in-the-loop. Pause a graph node for a person, survive a restart, resume exactly where you stopped, without re-running side effects.
 ---
@@ -72,6 +72,63 @@ sequenceDiagram
   Note over N2: mekik.approve returns {approved:true} this time
   N2->>E: continues past the await
 ```
+
+## Buttons, typed (no hand-written JSON)
+
+When the pause really is "pick one of these buttons", skip `approve`'s generic and its `actions` JSON: `mekik.choose` / `Shuttle.Choose` take the options directly, and `mekik.action` / `Shuttle.Action` build the chips.
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
+```ts
+// Bare strings: the answer IS the picked label — and the type is inferred.
+const size = await mekik.choose(ctx, "Pick a size", ["S", "M", "L"]);
+//    ^? "S" | "M" | "L"
+
+// Valued chips: the answer is the picked action's value.
+const verdict = await mekik.choose(ctx, { title: `Refund $${order.total}?` }, [
+  mekik.action("Approve", { approved: true }),
+  mekik.action("Reject", { approved: false }),
+]);
+if (verdict.approved) { /* … */ }
+
+// A form alongside the chips, and a journal key for a node that pauses twice:
+await mekik.choose(ctx, "Deploy to production?", ["Yes", "No"], {
+  ui: mekik.genui.form.ref({ fields: [{ name: "reason", label: "Reason", type: "text" }] }),
+  key: "second-gate",
+});
+```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+var size = await Shuttle.Choose<string>(ctx, "Pick a size", ["S", "M", "L"]);
+
+var verdict = await Shuttle.Choose<Dictionary<string, object?>>(ctx, $"Refund ${order.Total}?",
+[
+    Shuttle.Action("Approve", new Dictionary<string, object?> { ["approved"] = true }),
+    Shuttle.Action("Reject",  new Dictionary<string, object?> { ["approved"] = false }),
+]);
+
+// A form alongside the chips, and a journal key for a node that pauses twice:
+await Shuttle.Choose<string>(ctx, "Deploy to production?", ["Yes", "No"],
+    ui: GenUI.FormRef([GenUI.Field("reason", "Reason", "text")]),
+    key: "second-gate");
+```
+
+</TabItem>
+</Tabs>
+
+On the wire this is an ordinary `interrupt` frame whose `actions` are the options — nothing new for a client to learn. The rules:
+
+- A **string payload** is shorthand for `{ title }`; pass a record to shape the payload yourself.
+- A **bare string option** is both label and answer. An option built with `action(label, value)` resolves to its `value`; with no value, to its label (the protocol's `MessageAction` rule).
+- In TypeScript the answer type is **inferred from the options** — no manual generic. C# has no literal-type inference, so `Shuttle.Choose<T>` states the type instead ([Parity → Languages](../parity/languages.md)). Either way it's a contract with your client, not a wire guarantee — same as `approve<T>`.
+
+:::tip Buttons that *don't* pause
+`choose` parks the run until someone picks. For buttons that just offer a shortcut — the user may tap one or type something else entirely — send a [buttons or quick-reply **message**](./messages.md#buttons) instead; the tap arrives as the next user turn.
+:::
 
 ## Answering
 
@@ -210,7 +267,7 @@ The pause is an ordinary `interrupt` frame — chativa renders chips or a form, 
 
 ## .NET note
 
-In .NET the pause propagates as an `InterruptSignalException`. Any `try/catch` around node work **must rethrow** it (`Shuttle.Tool` does) — a blanket `catch (Exception)` would swallow the pause. See [Parity](../parity/languages.md#the-four-deliberate-divergences).
+In .NET the pause propagates as an `InterruptSignalException`. Any `try/catch` around node work **must rethrow** it (`Shuttle.Tool` does) — a blanket `catch (Exception)` would swallow the pause. See [Parity](../parity/languages.md#the-five-deliberate-divergences).
 
 ## Where to go next
 

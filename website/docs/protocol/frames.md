@@ -61,6 +61,7 @@ Answering by `id` (not ilmek's `key`) and covering *every* open interrupt are bo
 | `genui` | **yes** | `{type, seq, streamId, done, chunk: AIChunk}` |
 | `interrupt` | **yes** | `{type, seq, id, data:{payload, ui?, actions?}}` |
 | `interrupt_resolved` | **yes** | `{type, seq, id, data:{answer?}}` |
+| *rich message* | **yes** | `{type: <rendererName>, id, seq, from:"bot"\|"user", data, timestamp}` |
 | `run` | no | `{type, data:{status:"started"\|"finished"\|"interrupted"\|"error"\|"aborted"}}` |
 | `error` | no | `{type, data:{code, message}}` |
 
@@ -107,6 +108,16 @@ These carry `seq` and are the durable transcript — exactly what reconnect repl
 { "type": "interrupt_resolved", "seq": 10, "id": "gate:interrupt#0",
   "data": { "answer": { "approved": true } } }
 ```
+
+**Rich message** — the `text` envelope under a client message-renderer name, with that renderer's payload as `data`. This is the one **open** entry in the persistent list: the `type` is any name the client registered (`"image"`, `"card"`, `"carousel"`, …), never one of the protocol's own frame types:
+
+```jsonc
+{ "type": "image", "id": "msg-7", "seq": 12, "from": "bot",
+  "data": { "src": "https://…/receipt.png", "caption": "Your receipt" },
+  "timestamp": 1750000000000 }
+```
+
+A client with no renderer for the `type` ignores the frame — the standard unknown-frame rule. Authoring guide: [Rich messages](../authoring/messages.md).
 
 ### Transient frames
 
