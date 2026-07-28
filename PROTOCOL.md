@@ -253,6 +253,13 @@ Authors emit them with `mekik.message(ctx, type, data, {id?})` /
 `{$mekik:"message", messageType, data, id?}` custom payload and mints the frame
 (id from the `IdMinter` unless the author supplied one).
 
+The **greeting** emits them too. It fires on connect, outside any run, so it has
+no `ctx` to emit from — instead the app *describes* the messages
+(`mekik.messages.card.spec(…)` / `Messages.CardSpec(…)`, the value form
+`{type, data, id?}`) and the engine mints the frames itself, in order, before any
+turn. A greeting is a string, one description, or a list mixing both. GenUI
+chunks are not available there: a chunk belongs to a turn's stream.
+
 The rules:
 
 - **Persistent.** Same `seq`, transcript, replay, and watermark treatment as

@@ -197,7 +197,19 @@ function makeApp() {
         graph: storefront,
         input: (frame) => ({ input: frame.data.text }),
         reply: (state) => state.reply as string,
-        greeting: () => 'Try "components" or "messages" — or anything else for a button prompt.',
+        // A greeting is not limited to a paragraph: it takes a list of described
+        // messages, each landing as its own persistent frame (and replaying on
+        // reconnect), so the first impression can be a card with buttons.
+        greeting: () => [
+            "Welcome to the storefront demo.",
+            mekik.messages.buttons.spec({
+                text: "What would you like to see?",
+                buttons: [
+                    { label: "Components", value: "components" },
+                    { label: "Messages", value: "messages" },
+                ],
+            }),
+        ],
     });
 }
 
@@ -235,8 +247,16 @@ async function selftest(): Promise<number> {
     const app = makeApp();
     const c = new Collector();
     await app.connect(c);
-    const welcome = c.drain().find((f) => f.type === "welcome") as Extract<OutgoingFrame, { type: "welcome" }>;
+    const connectFrames = c.drain();
+    const welcome = connectFrames.find((f) => f.type === "welcome") as Extract<OutgoingFrame, { type: "welcome" }>;
     const { conversationId, userId } = welcome.data;
+
+    // The greeting is a list, so it arrives as two persistent frames — prose and
+    // a button message — before any turn has run.
+    console.log("greeting frames:", connectFrames.map((f) => f.type).join(" → "));
+    check(connectFrames.some((f) => f.type === "text"), "the greeting's prose");
+    const chips = connectFrames.find((f) => f.type === "buttons") as MessageOutFrame | undefined;
+    check(chips?.from === "bot" && Array.isArray(chips.data.buttons), "…and its button message, as its own frame");
 
     // ── turn 1: every component ───────────────────────────────────────────────
     await app.receive(c, { type: "text", data: { text: "components" } });

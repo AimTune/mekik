@@ -73,8 +73,9 @@ interface MekikOptions {
   /** Allowlist client-supplied meta into ctx.meta.client. Default: drop everything. */
   acceptClientMeta?: (meta: Record<string, unknown>) => Record<string, unknown> | undefined;
 
-  /** A one-time bot message when a fresh conversation first connects. */
-  greeting?: (conv: { conversationId: string; userId: string }) => string | undefined;
+  /** A one-time bot message when a fresh conversation first connects — text,
+   *  a described rich message, or a list of both. */
+  greeting?: (conv: { conversationId: string; userId: string }) => Greeting | undefined;
 
   /** Enable connect-time auth. */
   authenticator?: Authenticator;
@@ -113,8 +114,9 @@ public sealed record MekikOptions
     /// <summary>Allowlist client-supplied meta into ctx.Meta["client"]. Default: drop everything.</summary>
     public Func<IReadOnlyDictionary<string, object?>, IReadOnlyDictionary<string, object?>?>? AcceptClientMeta { get; init; }
 
-    /// <summary>A one-time bot message when a fresh conversation first connects.</summary>
-    public Func<(string ConversationId, string UserId), string?>? Greeting { get; init; }
+    /// <summary>A one-time bot message when a fresh conversation first connects — a string,
+    /// a described rich message (Messages.…Spec), or a list of both.</summary>
+    public Func<(string ConversationId, string UserId), object?>? Greeting { get; init; }
 
     public IAuthenticator? Authenticator { get; init; }
     public IHistoryStore? History { get; init; }

@@ -17,8 +17,29 @@ public sealed record MekikOptions
     public Func<(string ConversationId, string UserId), (string Text, IReadOnlyDictionary<string, object?>? Meta), IReadOnlyDictionary<string, object?>>? Context { get; init; }
     /// <summary>Allowlist client-supplied meta into `ctx.Meta["client"]`. Default: drop everything.</summary>
     public Func<IReadOnlyDictionary<string, object?>, IReadOnlyDictionary<string, object?>?>? AcceptClientMeta { get; init; }
-    /// <summary>A one-time bot greeting sent when a fresh conversation first connects (PROTOCOL.md §1).</summary>
-    public Func<(string ConversationId, string UserId), string?>? Greeting { get; init; }
+    /// <summary>
+    /// What the bot sends once when a fresh conversation first connects (before any turn)
+    /// — a greeting / instructions. Not sent on reconnect (the transcript already has it).
+    /// Return <c>null</c> for no greeting.
+    /// </summary>
+    /// <remarks>
+    /// A <see cref="string"/> is one <c>text</c> frame. It may also be a <b>described rich
+    /// message</b> (<see cref="Messages.Spec"/> or a <c>…Spec</c> builder, PROTOCOL.md §4.5),
+    /// or an <see cref="System.Collections.IEnumerable"/> mixing both, delivered in order —
+    /// so a first impression can be a card with buttons rather than a paragraph. Each item
+    /// lands as its own persistent frame and replays on reconnect like any other.
+    ///
+    /// <para>GenUI components are deliberately not accepted here: a chunk belongs to a turn's
+    /// stream, and the greeting fires outside any run. Send the same thing as a message.</para>
+    /// </remarks>
+    /// <example><code>
+    /// Greeting = conv => new object[]
+    /// {
+    ///     $"Hi {conv.UserId}! What can I do for you?",
+    ///     Messages.ButtonsSpec([Messages.Button("Track an order", "/track")]),
+    /// },
+    /// </code></example>
+    public Func<(string ConversationId, string UserId), object?>? Greeting { get; init; }
     public IAuthenticator? Authenticator { get; init; }
     public IHistoryStore? History { get; init; }
     public IConversationStore? Conversations { get; init; }

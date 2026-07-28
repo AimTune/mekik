@@ -16,14 +16,46 @@ import {
     parseIncoming,
     PROTOCOL_VERSION,
     ProtocolError,
+    RESERVED_FRAME_TYPES,
     type OutgoingFrame,
     type PendingView,
     type ResumeFrame,
     type TextInFrame,
 } from "./protocol.ts";
+import type { MessageSpec } from "./messages.ts";
 import type { ConversationStore, HistoryStore, PersistentFrame } from "./stores.ts";
 import type { Authenticator, Credential } from "./auth.ts";
 import type { Backplane, Subscription, TurnLease, TurnLock } from "./scaling.ts";
+
+/**
+ * What a greeting may be: a bare string (one `text` frame — the original form),
+ * a described rich message, or a list mixing both, delivered in order.
+ *
+ * @see {@link EngineConfig.greeting}
+ */
+export type Greeting = string | MessageSpec | ReadonlyArray<string | MessageSpec>;
+
+/**
+ * Normalize a greeting into the frames to send. A bare string becomes a `text`
+ * frame; empty strings are skipped (an app that computes "no greeting" as `""`
+ * means it). Reserved frame types can't reach here through `messageSpec`, which
+ * throws — but a hand-built spec is dropped rather than allowed to collide with
+ * the protocol's own frames.
+ */
+function greetingFrames(greeting: Greeting | undefined): MessageSpec[] {
+    if (greeting === undefined) return [];
+    const items = Array.isArray(greeting) ? greeting : [greeting as string | MessageSpec];
+    const out: MessageSpec[] = [];
+    for (const item of items) {
+        if (typeof item === "string") {
+            if (item.length > 0) out.push({ type: "text", data: { text: item } });
+            continue;
+        }
+        if (RESERVED_FRAME_TYPES.has(item.type) && item.type !== "text") continue;
+        out.push(item);
+    }
+    return out;
+}
 
 /**
  * One live client connection, as the engine sees it. A transport implements this
@@ -63,7 +95,7 @@ export interface EngineConfig {
     /** Allowlist for client-supplied meta → `ctx.meta.client`. Default: drop everything. */
     acceptClientMeta?: (meta: Record<string, unknown>) => Record<string, unknown> | undefined;
     /** A one-time bot greeting sent when a fresh conversation first connects (PROTOCOL.md §1). */
-    greeting?: (conv: { conversationId: string; userId: string }) => string | undefined;
+    greeting?: (conv: { conversationId: string; userId: string }) => Greeting | undefined;
     minter: IdMinter;
     now: () => number;
     /** Cross-node single-writer lease. Default: `LocalTurnLock` (single node). */
@@ -148,19 +180,18 @@ export class ConversationEngine {
         for (const frame of tail) conn.send(frame);
 
         // A fresh conversation (nothing in the transcript yet) gets a one-time bot
-        // greeting. Persisted like any bot text, so a later reconnect replays it
+        // greeting. Persisted like any bot frame, so a later reconnect replays it
         // instead of greeting twice.
         if (this.cfg.greeting && live.seq === 0) {
-            const text = this.cfg.greeting({ conversationId, userId });
-            if (text) {
+            for (const spec of greetingFrames(this.cfg.greeting({ conversationId, userId }))) {
                 await this.dispatch(conversationId, {
-                    type: "text",
-                    id: this.cfg.minter.message(),
+                    type: spec.type,
+                    id: spec.id ?? this.cfg.minter.message(),
                     seq: ++live.seq,
                     from: "bot",
-                    data: { text },
+                    data: spec.data,
                     timestamp: this.cfg.now(),
-                });
+                } as OutgoingFrame);
             }
         }
     }

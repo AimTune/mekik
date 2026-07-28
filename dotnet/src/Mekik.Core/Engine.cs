@@ -41,8 +41,12 @@ public sealed record EngineConfig
     public Func<IReadOnlyDictionary<string, object?>, string?>? Reply { get; init; }
     public Func<(string ConversationId, string UserId), (string Text, IReadOnlyDictionary<string, object?>? Meta), IReadOnlyDictionary<string, object?>>? Context { get; init; }
     public Func<IReadOnlyDictionary<string, object?>, IReadOnlyDictionary<string, object?>?>? AcceptClientMeta { get; init; }
-    /// <summary>A one-time bot greeting sent when a fresh conversation first connects (PROTOCOL.md §1).</summary>
-    public Func<(string ConversationId, string UserId), string?>? Greeting { get; init; }
+    /// <summary>
+    /// A one-time bot greeting sent when a fresh conversation first connects (PROTOCOL.md §1).
+    /// Returns a <see cref="string"/> (one <c>text</c> frame), a described rich message
+    /// (<see cref="Messages.Spec"/>), or a list mixing both — see <see cref="MekikOptions.Greeting"/>.
+    /// </summary>
+    public Func<(string ConversationId, string UserId), object?>? Greeting { get; init; }
     public required IIdMinter Minter { get; init; }
     public required Func<long> Now { get; init; }
     /// <summary>Cross-node single-writer lease. Default: <see cref="LocalTurnLock"/> (single node).</summary>
@@ -144,23 +148,63 @@ public sealed class ConversationEngine
             conn.Send(frame);
 
         // A fresh conversation gets a one-time bot greeting, persisted like any
-        // bot text so a later reconnect replays it instead of greeting twice.
+        // bot frame so a later reconnect replays it instead of greeting twice.
         if (_cfg.Greeting is not null && Interlocked.Read(ref live.Seq) == 0)
         {
-            var text = _cfg.Greeting((conversationId, userId));
-            if (!string.IsNullOrEmpty(text))
+            foreach (var spec in GreetingFrames(_cfg.Greeting((conversationId, userId))))
             {
                 await DispatchAsync(conversationId, new Frame
                 {
-                    ["type"] = "text",
-                    ["id"] = _cfg.Minter.Message(),
+                    ["type"] = spec.GetValueOrDefault("type"),
+                    ["id"] = spec.GetValueOrDefault("id") as string ?? _cfg.Minter.Message(),
                     ["seq"] = Interlocked.Increment(ref live.Seq),
                     ["from"] = "bot",
-                    ["data"] = new Frame { ["text"] = text },
+                    ["data"] = spec.GetValueOrDefault("data"),
                     ["timestamp"] = _cfg.Now(),
                 }).ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>
+    /// Normalize a greeting into the message specs to send. A bare string becomes a
+    /// <c>text</c> spec; empty strings are skipped (an app that computes "no greeting"
+    /// as <c>""</c> means it). A reserved frame type can't get here through
+    /// <see cref="Messages.Spec"/>, which throws — but a hand-built spec naming one is
+    /// dropped rather than allowed to collide with the protocol's own frames.
+    /// Mirror of the TypeScript <c>greetingFrames</c>.
+    /// </summary>
+    private static List<IReadOnlyDictionary<string, object?>> GreetingFrames(object? greeting)
+    {
+        var items = greeting switch
+        {
+            null => [],
+            string or IReadOnlyDictionary<string, object?> => new List<object?> { greeting },
+            System.Collections.IEnumerable seq => seq.Cast<object?>().ToList(),
+            _ => new List<object?> { greeting },
+        };
+
+        var specs = new List<IReadOnlyDictionary<string, object?>>();
+        foreach (var item in items)
+        {
+            if (item is string text)
+            {
+                if (!string.IsNullOrEmpty(text))
+                {
+                    specs.Add(new Dictionary<string, object?>
+                    {
+                        ["type"] = "text",
+                        ["data"] = new Dictionary<string, object?> { ["text"] = text },
+                    });
+                }
+                continue;
+            }
+            if (item is not IReadOnlyDictionary<string, object?> spec) continue;
+            if (spec.GetValueOrDefault("type") is not string type) continue;
+            if (Protocol.ReservedFrameTypes.Contains(type) && type != "text") continue;
+            specs.Add(spec);
+        }
+        return specs;
     }
 
     public void Disconnect(IConnection conn)

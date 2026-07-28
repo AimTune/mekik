@@ -28,7 +28,7 @@
 
 import { createMekikApp } from "./app.ts";
 import { component, genui } from "./genui.ts";
-import { message, messageKind, messages } from "./messages.ts";
+import { message, messageKind, messageSpec, messages } from "./messages.ts";
 import { action, approve, authClaims, choose, claimStrings, event, mount, streamText, text, tool, ui } from "./helpers.ts";
 
 /** The app factory with the authoring helpers attached (PROTOCOL.md §6). */
@@ -46,6 +46,7 @@ export const mekik = Object.assign(createMekikApp, {
     genui,
     message,
     messageKind,
+    messageSpec,
     messages,
     authClaims,
     claimStrings,
@@ -55,7 +56,7 @@ export { MekikApp } from "./app.ts";
 export type { MekikOptions } from "./app.ts";
 
 export { ConversationEngine, randomMinter } from "./engine.ts";
-export type { Connection, ConnectParams, EngineConfig } from "./engine.ts";
+export type { Connection, ConnectParams, EngineConfig, Greeting } from "./engine.ts";
 
 export { IlmekAdapter } from "./adapter.ts";
 export type { RunContext } from "./adapter.ts";
@@ -68,7 +69,7 @@ export { action, approve, authClaims, choose, claimStrings, event, mount, stream
 export type { ActionOf, ApproveOptions, ChoiceOption, ChoiceValue, ChooseOptions, ChunkOptions, UiHandle } from "./helpers.ts";
 
 // Typed rich messages: the factory and chativa's built-in message types.
-export { message, messageKind, messages } from "./messages.ts";
+export { message, messageKind, messageSpec, messages } from "./messages.ts";
 export type {
     ButtonsMessageData,
     CardMessageData,
@@ -79,6 +80,7 @@ export type {
     MessageButton,
     MessageKind,
     MessageOptions,
+    MessageSpec,
     QuickReplyMessageData,
     TextMessageData,
     VideoMessageData,
