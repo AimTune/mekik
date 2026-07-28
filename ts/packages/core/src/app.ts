@@ -5,7 +5,7 @@
 import { InMemoryCheckpointer, type Checkpointer, type CompiledGraph } from "@ilmek/core";
 
 import { IlmekAdapter } from "./adapter.ts";
-import { ConversationEngine, randomMinter, type ConnectParams, type Connection, type EngineConfig } from "./engine.ts";
+import { ConversationEngine, randomMinter, type ConnectParams, type Connection, type EngineConfig, type Greeting } from "./engine.ts";
 import type { IdMinter } from "./mapper.ts";
 import type { TextInFrame } from "./protocol.ts";
 import type { Authenticator } from "./auth.ts";
@@ -34,11 +34,32 @@ export interface MekikOptions {
     /** Allowlist client-supplied meta into `ctx.meta.client`. Default: drop everything. */
     acceptClientMeta?: (meta: Record<string, unknown>) => Record<string, unknown> | undefined;
     /**
-     * A bot message sent once when a fresh conversation first connects (before any
+     * What the bot sends once when a fresh conversation first connects (before any
      * turn) — a greeting / instructions. Not sent on reconnect (the transcript
      * already has it). Return undefined for no greeting.
+     *
+     * @remarks
+     * A string is one `text` frame. It may also be a **described rich message**
+     * (`mekik.messages.card.spec({…})`, PROTOCOL.md §4.5) or a list mixing both,
+     * delivered in order — so a first impression can be a card with buttons
+     * rather than a paragraph. Each item lands as its own persistent frame and
+     * replays on reconnect like any other.
+     *
+     * GenUI components are deliberately not accepted here: a chunk belongs to a
+     * turn's stream, and the greeting fires outside any run. Send the same thing
+     * as a message instead.
+     *
+     * @example
+     * ```ts
+     * greeting: (conv) => [
+     *     `Hi ${conv.userId}! What can I do for you?`,
+     *     mekik.messages.buttons.spec({
+     *         buttons: [{ label: "Track an order", value: "/track" }, { label: "Start a return", value: "/return" }],
+     *     }),
+     * ]
+     * ```
      */
-    greeting?: (conv: { conversationId: string; userId: string }) => string | undefined;
+    greeting?: (conv: { conversationId: string; userId: string }) => Greeting | undefined;
     /** Enable connect-time auth (PROTOCOL.md §7). */
     authenticator?: Authenticator;
     history?: HistoryStore;

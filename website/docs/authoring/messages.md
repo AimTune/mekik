@@ -68,6 +68,58 @@ Two rules to know before reaching for a message:
 - **Reserved types are refused.** The `type` may not be one of the protocol's own frame types (`genui`, `interrupt`, `run`, `welcome`, `typing`, …) — the helper throws. `"text"` is the deliberate exception: it emits a regular `text` frame, so the text renderer's extras (like `urls` for link previews) go in `data`.
 - **Interaction comes back as input, not as a special frame.** A tapped button, chip, or card action arrives as the **next user turn** — the action's `value`, or its label when there is none. To pause the run *on* the buttons and resume with the pick, use [`mekik.choose`](./human-in-the-loop.md#buttons-typed-no-hand-written-json) instead.
 
+## Describing one without a node: the greeting
+
+Emitting needs a node's `ctx`. Some places that send a message have none — the **greeting** is the standing example: it fires on connect, before any run. So a message can also be *described* as a value and handed to mekik, which turns it into the frame:
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
+```ts
+const app = mekik({
+  graph: g,
+  greeting: (conv) => [
+    `Hi ${conv.userId}! What can I do for you?`,
+    mekik.messages.buttons.spec({
+      buttons: [
+        { label: "Track an order", value: "/track" },
+        { label: "Start a return", value: "/return" },
+      ],
+    }),
+  ],
+});
+```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+var app = new MekikApp(new MekikOptions
+{
+    Graph = g,
+    Greeting = conv => new object[]
+    {
+        $"Hi {conv.UserId}! What can I do for you?",
+        Messages.ButtonsSpec(
+        [
+            Messages.Button("Track an order", "/track"),
+            Messages.Button("Start a return", "/return"),
+        ]),
+    },
+});
+```
+
+</TabItem>
+</Tabs>
+
+Every message type has this second form: `messages.card.spec(data, opts?)` in TypeScript, `Messages.CardSpec(…)` in .NET — same parameters as the emitter, minus the `ctx`, returning `{ type, data, id? }`. For a custom type, `mekik.messageSpec(type, data)` / `Messages.Spec(type, data)`, or `messageKind("receipt").spec({…})`.
+
+The greeting takes a bare string (one `text` frame — the original form), one spec, or a list mixing both, delivered in order. Each item lands as its own persistent frame, so all of them replay on reconnect and the conversation is never greeted twice.
+
+:::note Why not a GenUI component here?
+A GenUI chunk belongs to a turn's stream, and the greeting fires outside any run — there's no stream to attach it to. Send the same thing as a message instead; that's exactly the distinction in the table above.
+:::
+
 ## chativa's built-in message types
 
 `mekik.messages.*` / `Messages.*` bind the types chativa renders out of the box.

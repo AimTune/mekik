@@ -17,6 +17,10 @@ mekik ships two implementations that speak the identical `mekik/1` wire
 | authoring helpers | `mekik.text / ui / event / tool / approve` | `Shuttle.Text / Ui / Event / Tool / Approve` |
 | button chips | `mekik.action` / `mekik.choose` | `Shuttle.Action` / `Shuttle.Choose` |
 | managed ui instance | `mekik.mount` → `UiHandle` (`id`, `update`) | `Shuttle.Mount` → `UiHandle` (`Id`, `Update`) |
+| typed component | `mekik.component<P>(name)` | pass the name to `Shuttle.Ui` / `Shuttle.Mount` |
+| built-in components | `mekik.genui.*` | `GenUI.*` (+ `GenUI.Names.*`) |
+| rich messages | `mekik.message` / `mekik.messageKind` / `mekik.messages.*` | `Shuttle.Message` / `Messages.*` |
+| described (unemitted) message | `mekik.messageSpec` / `messages.card.spec(…)` | `Messages.Spec` / `Messages.CardSpec(…)` |
 | ilmek seam | `IlmekAdapter` | `IlmekAdapter` |
 | history port | `HistoryStore` / `InMemoryHistoryStore` | `IHistoryStore` / `InMemoryHistoryStore` |
 | conversation port | `ConversationStore` / `InMemoryConversationStore` | `IConversationStore` / `InMemoryConversationStore` |

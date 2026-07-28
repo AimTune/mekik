@@ -230,6 +230,37 @@ var app = new MekikApp(new MekikOptions
 </TabItem>
 </Tabs>
 
+The greeting isn't limited to a paragraph. It also takes a described [rich message](./authoring/messages.md), or a list mixing both — so a first impression can be a card with buttons, each item landing as its own persistent frame:
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
+```ts
+greeting: (conv) => [
+  `Hi ${conv.userId}! What can I do for you?`,
+  mekik.messages.buttons.spec({
+    buttons: [
+      { label: "Track an order", value: "/track" },
+      { label: "Start a return", value: "/return" },
+    ],
+  }),
+],
+```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+Greeting = conv => new object[]
+{
+    $"Hi {conv.UserId}! What can I do for you?",
+    Messages.ButtonsSpec([Messages.Button("Track an order", "/track"), Messages.Button("Start a return", "/return")]),
+},
+```
+
+</TabItem>
+</Tabs>
+
 The full option list, with types, is in [Concepts → The app](./concepts.md#3-the-app--mekik-graph-). For durability, swap the in-memory checkpointer for a real one (see [Persistence](./persistence.md)) — an interrupt lives in the checkpoint, so an in-memory one loses parked pauses on restart.
 
 ## Step 5 — Connect a real client

@@ -103,6 +103,31 @@ Shuttle.Message(ctx, "image", new Dictionary<string, object?> { ["src"] = receip
 Again, every one is worked through in
 [Authoring → Messages](../website/docs/authoring/messages.md).
 
+Every type also has a **describe** form for the places that send a message
+without a node's `ctx` — the greeting being the standing example, since it fires
+on connect, outside any run:
+
+```ts
+mekik({ graph, greeting: (conv) => [
+    `Hi ${conv.userId}!`,
+    mekik.messages.buttons.spec({ buttons: [{ label: "Track an order", value: "/track" }] }),
+]});
+```
+
+```csharp
+new MekikApp(new MekikOptions { Graph = g, Greeting = conv => new object[]
+{
+    $"Hi {conv.UserId}!",
+    Messages.ButtonsSpec([Messages.Button("Track an order", "/track")]),
+}});
+```
+
+`messages.card.spec(data)` / `Messages.CardSpec(…)` — same parameters as the
+emitter, minus the `ctx`. A greeting takes a string, one spec, or a list mixing
+both, delivered in order; each lands as its own persistent frame. GenUI
+components are deliberately not accepted there: a chunk belongs to a turn's
+stream, and there is no stream on connect.
+
 Two rules worth knowing before you reach for one:
 
 - **Reserved types.** The `type` may not be one of the protocol's own frame

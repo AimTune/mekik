@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 
 import type { Context } from "@ilmek/core";
 
-import { message, messageKind, messages } from "../src/messages.ts";
+import { message, messageKind, messageSpec, messages } from "../src/messages.ts";
 
 function recordingCtx() {
     const emitted: Array<Record<string, unknown>> = [];
@@ -51,6 +51,36 @@ describe("mekik.message / messageKind", () => {
         assert.deepEqual(emitted, [
             { $mekik: "message", messageType: "receipt", data: { orderId: "ORD-42", totalCents: 24990 } },
         ]);
+    });
+});
+
+describe("mekik.messageSpec / kind.spec", () => {
+    test("describes a message without emitting it, id only when given", () => {
+        assert.deepEqual(messageSpec("image", { src: "x" }), { type: "image", data: { src: "x" } });
+        assert.deepEqual(messageSpec("image", { src: "x" }, { id: "hero" }), {
+            type: "image",
+            data: { src: "x" },
+            id: "hero",
+        });
+    });
+
+    test("a kind's .spec carries its bound type and keeps the data typed", () => {
+        assert.deepEqual(messages.card.spec({ title: "Welcome", buttons: [{ label: "Start", value: "/start" }] }), {
+            type: "card",
+            data: { title: "Welcome", buttons: [{ label: "Start", value: "/start" }] },
+        });
+        assert.deepEqual(messageKind<{ orderId: string }>("receipt").spec({ orderId: "ORD-1" }, { id: "r1" }), {
+            type: "receipt",
+            data: { orderId: "ORD-1" },
+            id: "r1",
+        });
+    });
+
+    test("reserved protocol frame types are refused here too", () => {
+        for (const reserved of ["genui", "interrupt", "run", "welcome"]) {
+            assert.throws(() => messageSpec(reserved, {}), TypeError);
+        }
+        assert.equal(messageSpec("text", { text: "hi" }).type, "text");
     });
 });
 

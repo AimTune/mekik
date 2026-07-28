@@ -53,22 +53,61 @@ export interface MessageOptions {
  * ```
  */
 export function message(ctx: Context<any>, type: string, data: Record<string, unknown>, opts: MessageOptions = {}): void {
-    if (RESERVED_FRAME_TYPES.has(type) && type !== "text") {
-        throw new TypeError(`mekik.message: "${type}" is a reserved protocol frame type, not a message type`);
-    }
+    const spec = messageSpec(type, data, opts);
     ctx.emit({
         [MEKIK_KEY]: "message",
-        messageType: type,
-        data,
-        ...(opts.id !== undefined ? { id: opts.id } : {}),
+        messageType: spec.type,
+        data: spec.data,
+        ...(spec.id !== undefined ? { id: spec.id } : {}),
     });
 }
 
-/** A typed message kind: the callable emits it; `type` is the renderer name. */
+/**
+ * A message **described but not emitted** — the value form of {@link message}.
+ *
+ * @remarks
+ * Emitting needs a node's `ctx`; some places that send a message have none. The
+ * greeting is the standing example: it fires on connect, outside any run, so the
+ * app hands mekik a description and the engine turns it into the frame. Build one
+ * with {@link messageSpec}, or typed with a kind's `.spec` —
+ * `mekik.messages.card.spec({ title: "Welcome" })`.
+ */
+export interface MessageSpec {
+    /** The client message-renderer name. */
+    type: string;
+    /** The renderer's payload. */
+    data: Record<string, unknown>;
+    /** Optional stable message id; omit and mekik mints one. */
+    id?: string;
+}
+
+/**
+ * Describe a rich message without emitting it — for the places that send one
+ * outside a node, like {@link MekikOptions.greeting}.
+ *
+ * @remarks
+ * Same rules as {@link message}: `"text"` is allowed (it describes a regular text
+ * frame), the protocol's other frame types are reserved and throw.
+ *
+ * @example
+ * ```ts
+ * mekik({ graph, greeting: () => mekik.messageSpec("card", { title: "Welcome" }) });
+ * ```
+ */
+export function messageSpec(type: string, data: Record<string, unknown>, opts: MessageOptions = {}): MessageSpec {
+    if (RESERVED_FRAME_TYPES.has(type) && type !== "text") {
+        throw new TypeError(`mekik: "${type}" is a reserved protocol frame type, not a message type`);
+    }
+    return { type, data, ...(opts.id !== undefined ? { id: opts.id } : {}) };
+}
+
+/** A typed message kind: the callable emits it; `.spec` describes it; `type` is the renderer name. */
 export interface MessageKind<D extends object> {
     (ctx: Context<any>, data: D, opts?: MessageOptions): void;
     /** The client message-renderer name this emits as. */
     readonly type: string;
+    /** Describe it instead of emitting it — for a greeting. See {@link MessageSpec}. */
+    spec(data: D, opts?: MessageOptions): MessageSpec;
 }
 
 /**
@@ -78,14 +117,19 @@ export interface MessageKind<D extends object> {
  * @example
  * ```ts
  * const receipt = mekik.messageKind<{ orderId: string; totalCents: number }>("receipt");
- * receipt(ctx, { orderId: "ORD-42", totalCents: 24990 });
+ * receipt(ctx, { orderId: "ORD-42", totalCents: 24990 });   // emit from a node
+ * receipt.spec({ orderId: "ORD-42", totalCents: 24990 });   // …or describe it for a greeting
  * ```
  */
 export function messageKind<D extends object>(type: string): MessageKind<D> {
     const emit = (ctx: Context<any>, data: D, opts: MessageOptions = {}): void =>
         message(ctx, type, data as Record<string, unknown>, opts);
     Object.defineProperty(emit, "name", { value: type });
-    return Object.assign(emit, { type }) as MessageKind<D>;
+    return Object.assign(emit, {
+        type,
+        spec: (data: D, opts: MessageOptions = {}): MessageSpec =>
+            messageSpec(type, data as Record<string, unknown>, opts),
+    }) as MessageKind<D>;
 }
 
 // ── chativa's built-in message renderers ──────────────────────────────────────

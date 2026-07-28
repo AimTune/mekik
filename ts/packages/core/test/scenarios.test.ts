@@ -162,6 +162,68 @@ describe("a basic turn (§4, §5)", () => {
     });
 });
 
+describe("the greeting (§1)", () => {
+    test("a string greeting is one bot text frame, sent once", async () => {
+        const app = mekik({ graph: greeter, reply: (s) => s.reply as string, greeting: () => "Hi!" });
+        const c = conn();
+        await app.connect(c);
+        const { conversationId, userId } = welcomeOf(c);
+
+        const greeted = c.sent.filter((f) => f.type === "text");
+        assert.equal(greeted.length, 1);
+        assert.ok(greeted[0]?.type === "text" && greeted[0].data.text === "Hi!" && greeted[0].from === "bot");
+
+        // A reconnect replays it from the transcript rather than greeting twice.
+        const again = conn();
+        await app.connect(again, { hello: { conversationId, userId, watermark: 0 } });
+        assert.equal(again.sent.filter((f) => f.type === "text").length, 1, "replayed, not re-greeted");
+    });
+
+    test("a greeting can carry rich messages, in order, each its own persistent frame", async () => {
+        const app = mekik({
+            graph: greeter,
+            reply: (s) => s.reply as string,
+            greeting: (conv) => [
+                `Hi ${conv.userId}!`,
+                mekik.messages.card.spec({ title: "Welcome", buttons: [{ label: "Start", value: "/start" }] }, { id: "hero" }),
+                mekik.messages.buttons.spec({ text: "What next?", buttons: [{ label: "Track", value: "/track" }] }),
+            ],
+        });
+        const c = conn();
+        await app.connect(c);
+        const { conversationId } = welcomeOf(c);
+
+        assert.deepEqual(types(c), ["welcome", "text", "card", "buttons"]);
+        const card = c.sent.find((f) => f.type === "card") as MessageOutFrame;
+        assert.equal(card.id, "hero", "a spec's id reaches the wire");
+        assert.equal(card.from, "bot");
+        assert.deepEqual(card.data, { title: "Welcome", buttons: [{ label: "Start", value: "/start" }] });
+
+        // All three are persistent, in one gap-free seq run — so replay is complete.
+        const transcript = await app.history.after(conversationId, 0);
+        assert.deepEqual(transcript.map((f) => f.type), ["text", "card", "buttons"]);
+        assert.deepEqual(transcript.map((f) => f.seq), [1, 2, 3]);
+    });
+
+    test("an empty string greets nothing; a reserved frame type is dropped", async () => {
+        const empty = mekik({ graph: greeter, reply: (s) => s.reply as string, greeting: () => "" });
+        const a = conn();
+        await empty.connect(a);
+        assert.deepEqual(types(a), ["welcome"]);
+
+        // A hand-built spec can name a reserved type (messageSpec would throw);
+        // the engine drops it rather than let it collide with a protocol frame.
+        const sneaky = mekik({
+            graph: greeter,
+            reply: (s) => s.reply as string,
+            greeting: () => [{ type: "run", data: { status: "started" } }, "still here"],
+        });
+        const b = conn();
+        await sneaky.connect(b);
+        assert.deepEqual(types(b), ["welcome", "text"]);
+    });
+});
+
 describe("rich message frames (§4.5)", () => {
     /** Emits an image and an id-keyed card message, then replies. */
     const publisher = graph("publisher")

@@ -109,6 +109,8 @@ Shuttle.Ui(ctx, "card", new Dictionary<string, object?>()); // helper — called
 
 On top of these sit the **typed catalogs**, which bind a component or message name once so the payload is compiler-checked: `mekik.component` / `mekik.genui` for [components](./components.md), `mekik.messageKind` / `mekik.messages` for [messages](./messages.md), and `mekik.action` for chips. They add nothing to the wire — same frames, fewer hand-written object literals.
 
+Each message type also has a **describe** form — `messages.card.spec(data)` / `Messages.CardSpec(…)` — returning the message as a value instead of emitting it, for the places that send one without a `ctx`. That's how the [greeting](../getting-started.md#step-4--configure-the-app) carries a card or buttons rather than only a paragraph.
+
 ### text / ui / event
 
 Stream a chunk of generative UI. `text` streams prose deltas; `ui` mounts or updates a registered component by name; `event` dispatches a named event to a mounted component:
