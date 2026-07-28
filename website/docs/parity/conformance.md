@@ -59,6 +59,7 @@ The comparison is byte-for-byte over **canonical** JSON: UTF-8, object keys sort
 | `run-error` | `run_end{error}` → `⚠️` `text` + `run{error}` |
 | `run-aborted` | `run_end{aborted}` → `run{aborted}` only, no text |
 | `mixed-turn` | ui + tokens + tool + reply in one run (ordering + seq monotonicity) |
+| `rich-message` | `mekik.message` customs → persistent [rich message frames](../authoring/messages.md); a caller-supplied id wins over the minted one; a reserved frame type is dropped |
 
 Each row is a claim about the [event→frame mapping](../protocol/event-mapping.md), frozen as JSON.
 

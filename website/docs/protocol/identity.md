@@ -41,7 +41,7 @@ This is the subtle rule ports get wrong. A stale watermark against a fresh conve
 
 ## The watermark and replay
 
-Every persistent frame (`text`, `tool_call`, `genui`, `interrupt`, `interrupt_resolved`) carries a per-conversation, strictly monotonic, gap-free `seq`. The **watermark** is the highest `seq` a client has durably received.
+Every persistent frame (`text`, `tool_call`, `genui`, `interrupt`, `interrupt_resolved`, and any [rich message frame](../authoring/messages.md)) carries a per-conversation, strictly monotonic, gap-free `seq`. The **watermark** is the highest `seq` a client has durably received.
 
 On (re)connect:
 

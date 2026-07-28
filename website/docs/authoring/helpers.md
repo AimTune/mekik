@@ -1,12 +1,12 @@
 ---
 sidebar_position: 1
 title: Authoring helpers
-description: The five node-authoring helpers — text, ui, event, tool, approve — that emit generative UI, tool traces, and human-in-the-loop pauses from inside an ilmek node, in TypeScript and .NET.
+description: The node-authoring helpers — text, ui, mount, event, message, tool, approve, choose — that emit generative UI, rich messages, tool traces, and human-in-the-loop pauses from inside an ilmek node, in TypeScript and .NET.
 ---
 
 # Authoring helpers
 
-Inside an ilmek node you shape the conversation with five helpers. They're the entire authoring surface — everything a turn can produce on the wire comes from one of them. Each takes ilmek's context (no ambient storage; ilmek already threads it through every node) and emits a `custom` event the [mapper](../protocol/event-mapping.md) turns into a frame.
+Inside an ilmek node you shape the conversation with a handful of helpers. They're the entire authoring surface — everything a turn can produce on the wire comes from one of them. Each takes ilmek's context (no ambient storage; ilmek already threads it through every node) and emits a `custom` event the [mapper](../protocol/event-mapping.md) turns into a frame.
 
 <Tabs groupId="lang">
 <TabItem value="ts" label="TypeScript">

@@ -19,6 +19,7 @@ Frames are JSON objects with a `type` discriminator, exchanged over WebSocket, o
 ```
 client → server:  hello · text · resume · genui_event · abort
 server → client:  welcome · text · tool_call · genui · interrupt · interrupt_resolved · run · error
+                  · <rich message> — any client message-renderer name (image, card, carousel, …)
 ```
 
 **Persistence.** This is the axis that makes reconnect work:
@@ -26,6 +27,7 @@ server → client:  welcome · text · tool_call · genui · interrupt · interr
 ```
 PERSISTENT (carry a per-conversation seq, stored, replayed):
   text · tool_call · genui · interrupt · interrupt_resolved
+  · <rich message>  — the one open entry: any renderer-named type
 
 TRANSIENT (live-only, never stored, never replayed):
   welcome · run · error
