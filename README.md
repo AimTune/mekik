@@ -1,6 +1,10 @@
 # mekik
 
 [![CI](https://github.com/AimTune/mekik/actions/workflows/ci.yml/badge.svg)](https://github.com/AimTune/mekik/actions/workflows/ci.yml)
+[![npm @mekik/core](https://img.shields.io/npm/v/%40mekik%2Fcore?logo=npm&label=%40mekik%2Fcore)](https://www.npmjs.com/package/@mekik/core)
+[![npm @mekik/ws](https://img.shields.io/npm/v/%40mekik%2Fws?logo=npm&label=%40mekik%2Fws)](https://www.npmjs.com/package/@mekik/ws)
+[![NuGet Mekik.Core](https://img.shields.io/nuget/v/Mekik.Core?logo=nuget&label=Mekik.Core)](https://www.nuget.org/packages/Mekik.Core)
+[![NuGet Mekik.AspNetCore](https://img.shields.io/nuget/v/Mekik.AspNetCore?logo=nuget&label=Mekik.AspNetCore)](https://www.nuget.org/packages/Mekik.AspNetCore)
 
 **The realtime serving layer for [ilmek](https://www.npmjs.com/package/@ilmek/core) graphs.** mekik turns a
 running ilmek graph into a live conversation: a client (the [chativa](https://github.com/AimTune/chativa)
