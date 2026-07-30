@@ -78,7 +78,10 @@ jobs:
         run: |
           dotnet run --project examples/Mekik.SqlAgent -c Release --no-build -- --probe
           dotnet run --project examples/Mekik.WeatherAgent -c Release --no-build -- --probe
-          dotnet run --project examples/Mekik.ServerComponents -c Release --no-build
+          # --no-launch-profile is load-bearing: this example is a Web SDK project, so
+          # `dotnet run` would otherwise apply Properties/launchSettings.json, whose
+          # profile passes --serve. That starts the WebSocket server and never returns.
+          dotnet run --project examples/Mekik.ServerComponents -c Release --no-build --no-launch-profile
 
       # Same idea as the TS pack step: prove the libraries still produce valid
       # NuGet packages, with dependencies wired, before a release ever runs.
