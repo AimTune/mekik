@@ -1,0 +1,87 @@
+{
+  // Debug configurations for the .NET examples.
+  //
+  // ── Why `justMyCode` is false here ──────────────────────────────────────────
+  // A mekik pause is not an error: `Shuttle.Approve` calls ilmek's
+  // `ctx.InterruptAsync`, which throws `Ilmek.InterruptSignalException` to unwind
+  // the node, and the ilmek engine catches it and ends the run `interrupted`.
+  // That is normal control flow, and it happens on every single pause.
+  //
+  // With Just My Code ON, the debugger sees an exception leave your node (user
+  // code) and get caught by ilmek (not user code), calls that "user-unhandled",
+  // and breaks — so every approval stops the debugger with
+  //   Ilmek.InterruptSignalException: 'ilmek: paused for a human at interrupt#0'
+  //
+  // `justMyCode: false` turns that off: the debugger only breaks on exceptions
+  // nothing catches, which an interrupt never is. Trade-off: stepping can now
+  // walk into framework/library code.
+  //
+  // ── Turning the break back ON ───────────────────────────────────────────────
+  // Debugging the pause path itself? Flip the parameter to `true` in the config
+  // you are launching (or set `csharp.debug.justMyCode` in .vscode/settings.json,
+  // which covers debug sessions started without a launch config).
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": ".NET: ServerComponents (--serve, ws://localhost:8816/ws)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/dotnet/examples/Mekik.ServerComponents/bin/Debug/net9.0/Mekik.ServerComponents.dll",
+      "args": ["--serve"],
+      "cwd": "${workspaceFolder}/dotnet/examples/Mekik.ServerComponents",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "env": { "ASPNETCORE_ENVIRONMENT": "Development" },
+      // Set to true to break on every InterruptSignalException again.
+      "justMyCode": false
+    },
+    {
+      "name": ".NET: Examples (self-test)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/dotnet/examples/Mekik.Examples/bin/Debug/net9.0/Mekik.Examples.dll",
+      "cwd": "${workspaceFolder}/dotnet/examples/Mekik.Examples",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "justMyCode": false
+    },
+    {
+      // Needs ANTHROPIC_API_KEY in the environment VS Code was started from.
+      "name": ".NET: LlmAgent",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/dotnet/examples/Mekik.LlmAgent/bin/Debug/net9.0/Mekik.LlmAgent.dll",
+      "cwd": "${workspaceFolder}/dotnet/examples/Mekik.LlmAgent",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "justMyCode": false
+    },
+    {
+      // Needs ANTHROPIC_API_KEY in the environment VS Code was started from.
+      "name": ".NET: WeatherAgent",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/dotnet/examples/Mekik.WeatherAgent/bin/Debug/net9.0/Mekik.WeatherAgent.dll",
+      "cwd": "${workspaceFolder}/dotnet/examples/Mekik.WeatherAgent",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "justMyCode": false
+    },
+    {
+      // Needs ANTHROPIC_API_KEY in the environment VS Code was started from.
+      "name": ".NET: SqlAgent",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/dotnet/examples/Mekik.SqlAgent/bin/Debug/net9.0/Mekik.SqlAgent.dll",
+      "cwd": "${workspaceFolder}/dotnet/examples/Mekik.SqlAgent",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "justMyCode": false
+    }
+  ]
+}
