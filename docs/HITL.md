@@ -36,6 +36,23 @@ the graph re-runs the node from the top and the `await` returns the human's answ
 - The question `payload` is arbitrary; whatever you pass reaches the client as
   `interrupt.data.payload` (with mekik's reserved `$mekik` metadata stripped).
 
+### …or for a widget already on screen
+
+`mekik.onEvent` (`Shuttle.OnEvent`) is the same pause with a different answerer: a
+`component-event` button on a component you already mounted, instead of chips in
+the chat.
+
+```ts
+deliveryCard(ctx, props, { id: "card-1" });
+const rating = await mekik.onEvent<{ stars: number }>(ctx, "rate_delivery");
+```
+
+The interrupt frame carries `data.event` — the name it waits for — so the client
+waits for the widget rather than rendering Approve/Cancel. Everything else on this
+page applies unchanged: it is an ordinary interrupt, durable and replay-safe.
+Full routing rules (`component-event` vs `mekik-event`): [`docs/GENUI.md`](GENUI.md)
+and PROTOCOL.md §10.4.
+
 ## Buttons, typed (no hand-written JSON)
 
 When the pause is really just "pick one of these buttons", skip `approve`'s
@@ -156,3 +173,28 @@ re-renders the approval form and can answer it.
 In .NET the pause propagates as an `InterruptSignalException`. Any `try/catch`
 around node work must rethrow it (`Shuttle.Tool` does) — a blanket `catch (Exception)`
 would swallow the pause. See [`docs/LANGUAGES.md`](LANGUAGES.md).
+
+### Stopping the debugger from breaking on every pause
+
+Because the pause *is* a thrown exception, a debugger with **Just My Code** on
+stops on all of them:
+
+```
+Ilmek.InterruptSignalException: 'ilmek: paused for a human at interrupt#0'
+```
+
+Nothing is wrong. The exception leaves your node (user code) and is caught by the
+ilmek engine (not user code), which Just My Code reports as "user-unhandled".
+Turn it off and the debugger only breaks on exceptions nothing catches — which an
+interrupt never is. The trade-off is that stepping can now walk into library code.
+
+- **VS Code** — already off in this repo: `justMyCode: false` in
+  [`.vscode/launch.json`](../.vscode/launch.json) per configuration, and
+  `csharp.debug.justMyCode` in [`.vscode/settings.json`](../.vscode/settings.json)
+  for sessions started without a launch config. Set either to `true` when you do
+  want to stop at the pause.
+- **Visual Studio** — this setting lives in your user profile, not the repo:
+  *Debug → Windows → Exception Settings*, right-click `Ilmek.InterruptSignalException`
+  and check **Continue When Unhandled in User Code**. (Adding the type first via the
+  `+` button under *Common Language Runtime Exceptions* if it is not listed.)
+  *Tools → Options → Debugging → General → Enable Just My Code* turns it off wholesale.

@@ -99,10 +99,10 @@ envelope is persistent under the same rules.
 
 | `type`        | shape                                                         | meaning                                                                                                                                                                                                        |
 | ------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hello`       | `{type, userId?, conversationId?, watermark?, token?, meta?}` | handshake; may also travel as WS query string. `meta` is a client-supplied context map (see §6).                                                                                                               |
+| `hello`       | `{type, userId?, conversationId?, watermark?, token?, meta?, componentsHash?}` | handshake; may also travel as WS query string. `meta` is a client-supplied context map (see §6).                                                                                                               |
 | `text`        | `{type, data:{text}, meta?}`                                  | one user turn → starts a run (or is refused `busy`, §5).                                                                                                                                                       |
 | `resume`      | `{type, answers:{[interruptId]: any}}`                        | answer the open interrupts, keyed by thread-scoped interrupt `id`. Must cover **every** open interrupt (ilmek's `resumeKeyed` requires it); a resume that omits one draws `error{incomplete_resume}`.          |
-| `genui_event` | `{type, streamId, eventType, payload}`                        | an interaction from a mounted GenUI component. If the component was bound to an interrupt and `eventType == "submit"`, the server treats it as a `resume` for that interrupt (§4.4). |
+| `genui_event` | `{type, streamId, eventType, scope?, component?, payload}`     | an interaction from a mounted GenUI component. `scope` is `"component"` (from `component-event`), `"graph"` (from `mekik-event`), or absent (from `data-event`) and decides who receives it — the node parked on `onEvent`, the app's handler, or whichever answers first (§10.4). A `submit` naming an open interrupt is coerced to a `resume` regardless (§4.4). |
 | `abort`       | `{type}`                                                      | cancel the in-flight run. The graph stops at the next superstep boundary; the last checkpoint stands, so the thread stays resumable.                                                                           |
 
 Malformed frames (bad JSON, missing `type`, unknown required fields) draw an
@@ -120,6 +120,7 @@ stays open).
 | `interrupt`          | yes        | `{type, seq, id, data:{payload, ui?, actions?}}`                                                                       |
 | `interrupt_resolved` | yes        | `{type, seq, id, data:{answer?}}`                                                                                      |
 | _rich message_ (§4.5) | yes       | `{type: <rendererName>, id, seq, from:"bot"\|"user", data, timestamp}` - `type` is a client message-renderer name      |
+| `genui_components`   | no         | `{type, hash, unchanged?, components?: ComponentDefinition[]}` — the server-defined component catalog (§10)              |
 | `run`                | no         | `{type, data:{status:"started"\|"finished"\|"interrupted"\|"error"\|"aborted"}}`                                       |
 | `error`              | no         | `{type, data:{code, message}}`                                                                                         |
 
@@ -205,6 +206,17 @@ interrupt payload under a reserved `$mekik` key before calling `ctx.interrupt`:
 
 A plain `ctx.interrupt(x)` with no `$mekik` key yields `{payload: x}` with no
 `ui`/`actions` - the client falls back to default Approve/Cancel chips.
+
+`mekik.onEvent()` (§10.4.1) uses the same envelope with `$mekik: {event: "<name>"}`,
+which surfaces as a third split-out field:
+
+```jsonc
+{ "payload": {}, "event": "rate_delivery" }
+```
+
+`event` says the pause is waiting for a **component interaction** rather than an
+answer, so a client must not offer default Approve/Cancel chips for it. It is also
+what the engine matches an incoming `genui_event` against.
 
 ### 4.3 The reply text frame
 
@@ -399,3 +411,233 @@ Naming (extends MODEL.md §11):
 helpers that wraps node execution MUST rethrow when
 `InterruptSignalException.IsInterrupt(ex)` - a blanket `catch (Exception)` would
 swallow the pause.
+
+---
+
+## 10. Server-defined components (§10)
+
+A `ui` chunk names a component the **client** registered. That makes every new
+widget a client release: someone has to compile a component into the page before
+the graph can mount it.
+
+§10 inverts that. The server can define the component itself - markup, styles and
+prop defaults - and ship it as **metadata**. The client registers each definition
+under its `name` and mounts it from an ordinary `ui` chunk from then on. Adding a
+widget becomes a server deploy.
+
+What travels is markup, never code. A definition cannot carry script, and the
+client sanitizes the rendered result before it reaches the DOM.
+
+### 10.1 The definition
+
+```ts
+interface ComponentDefinition {
+  /** Registry name a `ui` chunk mounts by, e.g. "order-card". */
+  name: string;
+  /** Markup with `{{…}}` placeholders (§10.3). */
+  template: string;
+  /** Optional CSS, scoped to the component on the client. */
+  css?: string;
+  /** Prop defaults; also the declaration the client makes reactive. */
+  props?: Record<string, unknown>;
+  /** Definition version - a change re-registers the component. */
+  version?: string;
+  /** Custom element tag on the client. Derived from `name` when omitted. */
+  tag?: string;
+}
+```
+
+A definition whose `name` is empty or whose `template` is not a string is dropped
+by the client. A definition MUST NOT replace a component the client registered
+itself: a server cannot redefine `genui-form` under an app's feet.
+
+### 10.2 The handshake
+
+The catalog is versioned by an opaque hash, so it travels once rather than on
+every connect:
+
+```
+client → hello        { …, componentsHash?: "<cached hash>" }
+server → welcome      { … }
+server → genui_components
+         same hash    { type, hash, unchanged: true }              // no markup
+         otherwise    { type, hash, components: [ …definitions ] }
+```
+
+- The frame is sent **immediately after `welcome`**, before the replay tail, so a
+  widget named by the first replayed or streamed chunk is already registered.
+- It is **transient**: no `seq`, never persisted, never replayed (§2).
+- A server that defines no components sends no frame at all.
+- `componentsHash` is a field on the existing `hello` frame, so validating the
+  cache costs no extra round trip. The client stores `{ hash, components }` and
+  hands the hash back on its next connect.
+- The client MAY render from its cache before the server answers; an `unchanged`
+  frame confirms that cache, and a catalog frame replaces it.
+
+**Hash.** `sha256` (lowercase hex) over the canonical JSON (§9) of the definitions
+sorted by `name`, with absent optional fields omitted rather than null. Both
+implementations mint the identical hash for identical definitions, so a client can
+move between a TypeScript and a .NET server without re-downloading. The client
+never computes it - the hash is opaque, like an ETag.
+
+### 10.3 The template language
+
+A strict subset - enough to be useful, not an expression evaluator on the client:
+
+| form | meaning |
+| --- | --- |
+| `{{path.to.value}}` | HTML-escaped interpolation |
+| `{{#if path}} … {{else}} … {{/if}}` | truthiness; empty string / empty array / 0 are false |
+| `{{#each path}} … {{/each}}` | iteration, with `{{this}}`, `{{this.field}}`, `{{@index}}`, and the parent scope still reachable by name |
+
+Every interpolation is escaped, so a prop value can never inject markup. An unknown
+path renders as the empty string; an unbalanced block closes at the end of the
+template. Rendering never throws.
+
+### 10.4 Interaction
+
+A definition's markup declares its events instead of registering handlers. **The
+attribute picks the addressee**, and that is the whole routing model:
+
+| attribute | scope on the wire | who receives it |
+| --- | --- | --- |
+| `component-event="<name>"` | `"component"` | the node parked on `onEvent` / `OnEvent` waiting for that name - and nothing else |
+| `mekik-event="<name>"` | `"graph"` | the app's `onGenUiEvent` / `OnGenUiEvent`, which may start a turn |
+| `data-event="<name>"` | absent | tries the component route first, then the graph one |
+| `data-payload='<json>'` | - | parsed and sent as the payload; invalid JSON travels as the raw string |
+| `<form component-event="…">` | as above | the submit is intercepted and the named fields are sent, merged over `data-payload` |
+
+The distinction is *who the click is talking to*, not what it does:
+`component-event` addresses the widget's own conversation with the node that mounted
+it, `mekik-event` addresses the app. `data-event` predates both and stays supported.
+
+Those arrive at the server as an ordinary `genui_event` frame (§3.1), with `scope`
+set from the attribute - a server-defined component gets the same round trip a
+client-registered one does.
+
+**What the server does with one.** Three rules, in order:
+
+1. `eventType == "submit"` whose `payload.id` names an **open interrupt** is coerced
+   to a `resume` (§4.4). A payload id is a direct address, so it outranks `scope`.
+2. Unless the scope is `"graph"`: if a node is parked on `onEvent` waiting for this
+   event name, the frame resolves that pause and its `payload` becomes the value the
+   node's `await` returns. The pause is the binding, so nothing has to carry an id.
+3. Unless the scope is `"component"`: the app's handler gets it and returns a graph
+   input update to run a turn on, or nothing to ignore it.
+
+**A frame that matches none of the three is accepted and dropped** - no handler
+configured, or a `component-event` whose widget outlived the turn that mounted it. A
+decorative button should cost nothing.
+
+### 10.4.1 Waiting for a component event
+
+`onEvent` is `approve` for widgets: the run parks, but a button on a component
+already on screen answers it instead of chips in the chat.
+
+```ts
+deliveryCard(ctx, props, { id: "card-1" });                 // mount it first
+const rating = await mekik.onEvent<{ stars: number }>(ctx, "rate_delivery");
+```
+
+```csharp
+Shuttle.Ui(ctx, "delivery-card", props, id: "card-1");
+var rating = await Shuttle.OnEvent<IReadOnlyDictionary<string, object?>>(ctx, "rate_delivery");
+```
+
+It is an ordinary ilmek interrupt, so it inherits everything §4 already guarantees:
+the run ends `interrupted`, the thread is checkpointed, the wait survives a
+disconnect or a restart, and `welcome.pending` re-announces it on reconnect. Its
+`interrupt` frame carries **`data.event`** - the name it is waiting for - which is
+how a client knows to wait for the widget rather than render default Approve/Cancel
+chips. The node re-runs from the top on resume, so the usual rules apply: journal
+side effects, and give pre-pause chunks literal ids.
+
+While several pauses are open ilmek requires them all answered at once, so an
+interaction arriving while another pause is also open draws
+`error{incomplete_resume}` (§4.4) - the same rule the `submit` shortcut plays by.
+
+### 10.4.2 Handling a graph-wide event
+
+| | TypeScript | .NET |
+| --- | --- | --- |
+| handler | `onGenUiEvent: (ev) => …` | `OnGenUiEvent = ev => …` |
+| ignore | return `undefined` | return `null` |
+| the event | `{conversationId, userId, streamId, eventType, component?, payload?}` | `GenUiEvent` record, same fields |
+
+```ts
+mekik({
+    graph,
+    components: [orderCard],
+    onGenUiEvent: (ev) =>
+        ev.eventType === "track_order" ? { input: `track ${(ev.payload as { id: string }).id}` } : undefined,
+});
+```
+
+It is a mapper, not a place to do work - the same role `input` plays for a `text`
+turn. Side effects belong in the node the turn reaches, where the journal makes them
+exactly-once (§9). The turn it starts obeys §5: one at a time (`error{busy}`), never
+over a pause (`error{interrupted}`). It writes no `text` frame on the user's behalf -
+a click is not an utterance, and the transcript already carries the widget it came
+from.
+
+### 10.5 Authoring
+
+| | TypeScript | .NET |
+| --- | --- | --- |
+| define | `defineComponent({name, template, css?, props?})` | `new ComponentSpec { Name, Template, Css, Props }` |
+| as a class | `class X extends GenUiComponent` | `class X : GenUiComponent` |
+| register | `mekik({ graph, components: [x] })` | `new MekikOptions { Components = [x] }` |
+| emit | the `defineComponent` result is the typed emitter | `component.Emit(ctx, props)` / `Shuttle.Ui(ctx, name, props)` |
+
+Duplicate names throw at startup - a catalog with two `order-card`s is a
+configuration error, not a runtime surprise.
+
+### 10.6 Driving a defined component
+
+A definition is markup; the chunk stream is what makes it move. Nothing here is
+specific to §10 - a server-defined component is driven exactly like a
+client-registered one - but the two rules below are where demos go wrong.
+
+**Re-send the id to update in place.** A `ui` chunk whose `id` is already on
+screen replaces that element instead of appending another:
+
+```
+ui  {component:"order-card", id:"card-1", props:{status:"Preparing"}}    → mounted
+ui  {component:"order-card", id:"card-1", props:{status:"In transit"}}   → same element, new props
+ui  {component:"strip",      id:"strip-1", props:{step:"Picked up"}}     → a second element below it
+```
+
+The client keeps one element instance per id, so the DOM node survives the
+update - internal state, focus and scroll position stay put.
+
+**Pace it.** Two emissions in the same millisecond are one render as far as the
+user is concerned: the widget just appears in its final state. If the point is to
+*show* progress, put real time between the chunks.
+
+**Journal what happens before a pause.** An interrupt resumes by replaying the
+node from the top. Emitting a chunk is a side effect, so wrap each pre-pause
+beat in `ctx.step` (`ctx.StepAsync` in .NET) - on the replay pass the recorded
+value comes back and the body does not run, so the client is not walked back
+through states it already rendered. Use literal chunk ids across a pause for the
+same reason: an id minted by a counter drifts once its call site stops running.
+
+```ts
+const phase = (ctx, name, emit) =>
+    ctx.step(name, async () => { await sleep(1800); emit(); return true; });
+
+await phase(ctx, "packing",    () => card(ctx, props("Preparing"),  { id: "card-1" }));
+await phase(ctx, "in_transit", () => card(ctx, props("In transit"), { id: "card-1" }));
+
+// the widgets stay on screen while the chips render
+const choice = await mekik.choose(ctx, "What should the courier do?", [
+    mekik.action("Hand it to me", "handover"),
+    mekik.action("Reschedule", "reschedule"),
+] as const);
+
+// …and the answer re-renders the element the user is already looking at
+card(ctx, props(choice === "handover" ? "Delivered" : "Rescheduled"), { id: "card-1" });
+```
+
+Runnable: `ts/examples/server-components.ts`,
+`dotnet/examples/Mekik.ServerComponents`.
+

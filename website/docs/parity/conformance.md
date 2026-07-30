@@ -81,8 +81,10 @@ The 14 behavioural scenarios cover what a single-run fixture can't:
 12. **new turn while interrupted** — a `text` (not `resume`) while parked draws `error{interrupted}` and starts no run.
 13. **auth reject** — bad token → `error{unauthorized}` + WS close 4401; a verified `userId` overrides a spoofed asserted one; `claims` reach `meta.auth`.
 14. **exactly-once under replay** — a `mekik.tool` side effect before an interrupt runs once across the pause/resume (observed as one `tool_call{running}` id, not two).
+15. **component-event routing** — a node parked on `onEvent` announces its `interrupt{data:{event}}` with no `actions`; a `genui_event{scope:"component"}` of that name resolves it and its `payload` is the node's returned value. One no node is waiting for is dropped without reaching the app handler.
+16. **mekik-event routing** — a `genui_event{scope:"graph"}` never resolves a pause: it reaches the app handler, whose input update starts an ordinary turn (`error{interrupted}` while parked, `error{busy}` mid-run, no user `text` frame). An absent `scope` tries the component route first, then the graph one; an unknown `scope` is `error{bad_request}`.
 
-> **The scenarios ports tend to break** (mirroring ilmek's own list): **6 and 7** (id-vs-key routing), **8** (pending re-announce), **12** (refuse a new turn while parked), and **14** (replay idempotence). If you're porting mekik to a third language, write these four first.
+> **The scenarios ports tend to break** (mirroring ilmek's own list): **6 and 7** (id-vs-key routing), **8** (pending re-announce), **12** (refuse a new turn while parked), **14** (replay idempotence), and **16** (scope precedence — the `submit` id shortcut outranks `scope`, and a `component-event` must not fall through to the app handler). If you're porting mekik to a third language, write these five first.
 
 ## Running it
 

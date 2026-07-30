@@ -78,6 +78,7 @@ jobs:
         run: |
           dotnet run --project examples/Mekik.SqlAgent -c Release --no-build -- --probe
           dotnet run --project examples/Mekik.WeatherAgent -c Release --no-build -- --probe
+          dotnet run --project examples/Mekik.ServerComponents -c Release --no-build
 
       # Same idea as the TS pack step: prove the libraries still produce valid
       # NuGet packages, with dependencies wired, before a release ever runs.

@@ -288,6 +288,56 @@ public static class Shuttle
         return ctx.InterruptAsync<T>(wrapped, key);
     }
 
+    /// <summary>Pause the run until a mounted component fires a named interaction.</summary>
+    /// <remarks>
+    /// The widget half of <see cref="Approve{T}"/>: instead of chips in the chat, the run
+    /// waits for the <c>data-event</c> a component already on screen will send, and resolves
+    /// to that event's payload. Mount the component first — this call never returns on the
+    /// pass that parks, so anything emitted after it only reaches the client on the resume.
+    ///
+    /// <para>It is a real pause, with everything that buys: the run ends <c>interrupted</c>
+    /// and the thread is checkpointed, so the wait survives a disconnect, a restart and a
+    /// move to another node. The interrupt is re-announced in <c>welcome.pending</c> on
+    /// reconnect like any other, carrying <c>data.event</c> so the client knows this pause
+    /// answers by interaction and offers no default Approve/Cancel chips.</para>
+    ///
+    /// <para>The node re-runs from the top on resume, so wrap side effects in
+    /// <see cref="Tool{T}(IContext, string, IReadOnlyDictionary{string, object?}, Func{ValueTask{T}})"/>
+    /// and give the chunks you emitted literal ids, exactly as around any other pause.
+    /// While several pauses are open ilmek requires them all answered at once, so an
+    /// interaction that arrives while another pause is also open draws
+    /// <c>error{incomplete_resume}</c> (PROTOCOL.md §4.4) — the same rule the
+    /// <c>submit</c> shortcut plays by.</para>
+    /// </remarks>
+    /// <typeparam name="T">The shape of the event's payload.</typeparam>
+    /// <param name="ctx">The ilmek node context.</param>
+    /// <param name="eventType">The component's <c>data-event</c> name.</param>
+    /// <param name="payload">Optional context for the client, delivered as <c>interrupt.data.payload</c>.</param>
+    /// <param name="ui">Optional: mount a component as part of the pause, as <see cref="Approve{T}"/> does.</param>
+    /// <param name="key">Journal key; defaults to <c>event:{eventType}</c>, so one node can wait on several events.</param>
+    /// <returns>The event's payload, on the interaction.</returns>
+    /// <example><code>
+    /// Shuttle.Ui(ctx, "delivery-card", props, id: "card-1");
+    /// var req = await Shuttle.OnEvent&lt;IReadOnlyDictionary&lt;string, object?&gt;&gt;(ctx, "track_order");
+    /// </code></example>
+    public static ValueTask<T> OnEvent<T>(
+        IContext ctx,
+        string eventType,
+        IReadOnlyDictionary<string, object?>? payload = null,
+        IReadOnlyDictionary<string, object?>? ui = null,
+        string? key = null)
+    {
+        if (string.IsNullOrEmpty(eventType))
+            throw new ArgumentException("an awaited event needs a data-event name", nameof(eventType));
+
+        var meta = new Dictionary<string, object?> { ["event"] = eventType };
+        if (ui is not null) meta["ui"] = ui;
+
+        var wrapped = payload?.ToDictionary(kv => kv.Key, kv => kv.Value) ?? new Dictionary<string, object?>();
+        wrapped[MekikKey] = meta;
+        return ctx.InterruptAsync<T>(wrapped, key ?? $"event:{eventType}");
+    }
+
     // ── rich messages (PROTOCOL.md §4.5) ──────────────────────────────────────
 
     /// <summary>

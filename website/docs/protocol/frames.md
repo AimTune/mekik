@@ -17,7 +17,7 @@ Frames are flat (no nested envelope). Persistent server→client frames carry a 
 | `hello` | `{type, userId?, conversationId?, watermark?, token?, meta?}` | Handshake. May instead travel as the WS query string. `meta` is a client-supplied context map. All fields optional. |
 | `text` | `{type, data:{text}, meta?}` | One user turn → starts a run (or is refused `busy` / `interrupted`). |
 | `resume` | `{type, answers:{[interruptId]: any}}` | Answer the open interrupts, keyed by thread-scoped interrupt `id`. Must cover **every** open interrupt. |
-| `genui_event` | `{type, streamId, eventType, payload}` | An interaction from a mounted GenUI component. A `submit` whose `payload.id` names an open interrupt is coerced to a `resume`. |
+| `genui_event` | `{type, streamId, eventType, scope?, component?, payload}` | An interaction from a mounted GenUI component. `scope` comes from the markup — `"component"` (`component-event`), `"graph"` (`mekik-event`), or absent (`data-event`) — and decides who receives it: the node parked on `onEvent`, the app's handler, or whichever answers first. A `submit` naming an open interrupt is coerced to a `resume` regardless. See [Bidirectional events](../authoring/generative-ui.md#bidirectional-events--genui_event). |
 | `abort` | `{type}` | Cancel the in-flight run at the next superstep boundary. The last checkpoint stands. |
 
 A malformed inbound frame (bad JSON, missing `type`) draws `error{code:"bad_request"}` and is otherwise ignored — the connection stays open.

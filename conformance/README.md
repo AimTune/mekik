@@ -105,7 +105,17 @@ and committed; both suites then treat them as read-only goldens.
 14. **exactly-once under replay** - a `mekik.tool` side effect before an
     interrupt runs once across the pause/resume cycle (the ilmek journal
     guarantee, observed through the wire: one `tool_call{running}` id, not two).
+15. **component-event routing** - a node parked on `onEvent` announces its
+    `interrupt{data:{event}}` with no `actions`; a `genui_event{scope:"component"}`
+    of that name resolves it and its `payload` is the node's returned value. One
+    that no node is waiting for is dropped without reaching the app handler.
+16. **mekik-event routing** - a `genui_event{scope:"graph"}` never resolves a
+    pause: it reaches the app handler, whose input update starts an ordinary turn
+    (so `error{interrupted}` while parked, `error{busy}` mid-run, and no `text`
+    frame from the user). An absent `scope` tries the component route first, then
+    the graph one; an unknown `scope` is `error{bad_request}`.
 
 Subtle cases fresh ports tend to break (mirroring ilmek's list): 6 and 7
 (id-vs-key routing), 8 (pending re-announce), 12 (refuse new turn while parked),
-14 (replay idempotence).
+14 (replay idempotence), 16 (scope precedence - the `submit` id shortcut outranks
+`scope`, and a `component-event` must not fall through to the app handler).

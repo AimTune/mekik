@@ -375,6 +375,62 @@ export function approve<T = unknown>(
     return ctx.interrupt<T>(wrapped, opts.key);
 }
 
+export interface OnEventOptions {
+    /** Context for the client, delivered as `interrupt.data.payload`. */
+    payload?: Record<string, unknown>;
+    /** Mount a component as part of the pause, as {@link approve} does. */
+    ui?: UiRef;
+    /** Journal key; defaults to `event:{eventType}`, so one node can wait on several events. */
+    key?: string;
+}
+
+/**
+ * Pause the run until a mounted component fires a named interaction.
+ *
+ * @remarks
+ * The widget half of {@link approve}: instead of chips in the chat, the run waits
+ * for the `component-event` a component already on screen will send, and resolves
+ * to that event's payload. Mount the component first — this call never resolves on
+ * the pass that parks, so anything emitted after it only reaches the client on the
+ * resume.
+ *
+ * It is a real pause, with everything that buys: the run ends `interrupted` and the
+ * thread is checkpointed, so the wait survives a disconnect, a restart and a move to
+ * another node. The interrupt is re-announced in `welcome.pending` on reconnect like
+ * any other, carrying `data.event` so the client knows this pause answers by
+ * interaction and offers no default Approve/Cancel chips.
+ *
+ * The node re-runs from the top on resume, so wrap side effects in {@link tool} and
+ * give the chunks you emitted literal ids, exactly as around any other pause. While
+ * several pauses are open ilmek requires them all answered at once, so an interaction
+ * that arrives while another pause is also open draws `error{incomplete_resume}`
+ * (PROTOCOL.md §4.4) — the same rule the `submit` shortcut plays by.
+ *
+ * @typeParam T - The shape of the event's payload.
+ * @param ctx - The ilmek node context.
+ * @param eventType - The component's `component-event` name.
+ * @param opts - Presentation and journaling options; see {@link OnEventOptions}.
+ * @returns The event's payload, resolved on the interaction.
+ *
+ * @example
+ * ```ts
+ * deliveryCard(ctx, props, { id: "card-1" });
+ * const req = await mekik.onEvent<{ id: string }>(ctx, "track_order");
+ * ```
+ */
+export function onEvent<T = unknown>(
+    ctx: Context<any>,
+    eventType: string,
+    opts: OnEventOptions = {},
+): Promise<T> {
+    if (!eventType) throw new Error("an awaited event needs a component-event name");
+
+    const meta: { event: string; ui?: UiRef } = { event: eventType };
+    if (opts.ui !== undefined) meta.ui = opts.ui;
+
+    return ctx.interrupt<T>({ ...(opts.payload ?? {}), [MEKIK_KEY]: meta }, opts.key ?? `event:${eventType}`);
+}
+
 // ── buttons, typed (no hand-written action JSON) ──────────────────────────────
 
 /** A {@link action}-built chip whose `value` type is carried for {@link choose} inference. */

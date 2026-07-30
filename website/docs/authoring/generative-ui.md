@@ -192,14 +192,69 @@ An unknown component name is the client's call — chativa renders nothing for o
 GenUI is two-way over the same socket. When a mounted component fires an interaction (a form submit, a card button), the client sends a `genui_event` frame back:
 
 ```jsonc
-{ "type": "genui_event", "streamId": "stream-1", "eventType": "submit",
-  "payload": { "email": "a@b.com" } }
+{ "type": "genui_event", "streamId": "stream-1", "eventType": "rate_delivery",
+  "scope": "component", "payload": { "stars": 5 } }
 ```
 
-Two things can happen with it:
+**The markup picks the addressee.** That is the whole routing model:
 
-1. **Ordinary component event** — routed to your `onCustom` hook or handled app-side. The base engine has no built-in reaction beyond the interrupt-coercion below.
-2. **Interrupt answer** — if `eventType == "submit"` and `payload.id` names an open interrupt, the engine coerces it to a `resume{answers:{[id]: answer}}`. This lets a form mounted by an `interrupt` frame answer the pause by firing a submit event, without any server-side stream↔interrupt binding. See [Human-in-the-loop](./human-in-the-loop.md#answering).
+| markup | `scope` | who receives it |
+| --- | --- | --- |
+| `component-event="rate_delivery"` | `"component"` | the node parked on `onEvent` waiting for that name — nothing else |
+| `mekik-event="track_order"` | `"graph"` | your `onGenUiEvent` handler, which may start a turn |
+| `data-event="…"` | absent | tries the component route first, then the graph one (the original form, still supported) |
+
+Ahead of both sits one special case: a `submit` whose `payload.id` names an open interrupt is coerced to a `resume{answers:{[id]: answer}}`, whatever the scope says. A payload id is a direct address. That is how a form mounted by an `interrupt` frame's `ui` answers its pause — see [Human-in-the-loop](./human-in-the-loop.md#answering).
+
+**A frame that matches nothing is accepted and dropped** — no handler configured, or a `component-event` whose widget outlived the turn that mounted it. That is the right cost for a decorative button, and the first thing to check when a button appears dead.
+
+### `component-event` — a node waiting on its own widget
+
+`onEvent` is `approve` for widgets: the run parks, but a button on a component already on screen answers it instead of chips in the chat.
+
+```ts
+deliveryCard(ctx, props, { id: "card-1" });                 // mount it first
+const rating = await mekik.onEvent<{ stars: number }>(ctx, "rate_delivery");
+```
+
+```csharp
+Shuttle.Ui(ctx, "delivery-card", props, id: "card-1");
+var rating = await Shuttle.OnEvent<IReadOnlyDictionary<string, object?>>(ctx, "rate_delivery");
+```
+
+It is an ordinary interrupt, so it inherits everything a pause already gives you: the run ends `interrupted`, the thread is checkpointed, the wait survives a disconnect or a restart, and `welcome.pending` re-announces it on reconnect. Its `interrupt` frame carries `data.event` — the name it is waiting for — so a client knows to wait for the widget rather than render default Approve/Cancel chips.
+
+The pause the node holds *is* the binding, so nothing has to carry an interrupt id. The node re-runs from the top on resume, so journal your side effects and use literal chunk ids, exactly as around any other pause. While several pauses are open, ilmek requires them all answered at once — an interaction arriving then draws `error{incomplete_resume}`.
+
+### `mekik-event` — a click the graph should answer
+
+For the other case: a widget whose turn is long over, and a click that should start a new one.
+
+```ts
+mekik({
+    graph,
+    onGenUiEvent: (ev) =>
+        ev.eventType === "track_order" ? { input: `track ${(ev.payload as { id: string }).id}` } : undefined,
+});
+```
+
+```csharp
+new MekikOptions
+{
+    Graph = graph,
+    OnGenUiEvent = ev => ev switch
+    {
+        { EventType: "track_order", Payload: IReadOnlyDictionary<string, object?> p }
+            when p.GetValueOrDefault("id") is string id =>
+                new Dictionary<string, object?> { ["input"] = $"track {id}" },
+        _ => null,
+    },
+};
+```
+
+The handler is `input` for components: a mapper, not a place to do work. Side effects belong in the node the turn reaches, where the journal makes them exactly-once. The turn it starts is an ordinary turn — one at a time (`error{busy}`), never over an open pause (`error{interrupted}`), and it writes no `text` frame on the user's behalf, because a click is not something they said.
+
+The event carries `conversationId`, `userId`, `streamId`, `eventType`, the originating `component` when the client knows it, and the parsed `payload`.
 
 ## Where to go next
 

@@ -76,11 +76,16 @@ function isMessagePayload(v: unknown): v is MekikMessagePayload {
 }
 
 /** Split an interrupt payload into its client-facing parts (PROTOCOL.md §4.2). */
-export function unwrapInterrupt(payload: unknown): { payload: unknown; ui?: UiRef; actions?: MessageAction[] } {
+export function unwrapInterrupt(payload: unknown): {
+    payload: unknown;
+    ui?: UiRef;
+    actions?: MessageAction[];
+    event?: string;
+} {
     if (!isRecord(payload) || !isRecord(payload[MEKIK_KEY])) {
         return { payload };
     }
-    const meta = payload[MEKIK_KEY] as { ui?: UiRef; actions?: MessageAction[] };
+    const meta = payload[MEKIK_KEY] as { ui?: UiRef; actions?: MessageAction[]; event?: string };
     // Strip the reserved key from what the human sees; keep everything else.
     const rest: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(payload)) if (k !== MEKIK_KEY) rest[k] = v;
@@ -88,16 +93,25 @@ export function unwrapInterrupt(payload: unknown): { payload: unknown; ui?: UiRe
         payload: rest,
         ...(meta.ui !== undefined ? { ui: meta.ui } : {}),
         ...(meta.actions !== undefined ? { actions: meta.actions } : {}),
+        ...(typeof meta.event === "string" ? { event: meta.event } : {}),
     };
 }
 
+/**
+ * The `data-event` name a pause is waiting for, or undefined when it waits for an
+ * ordinary answer. This is what lets the engine route a `genui_event` to the node
+ * parked on {@link onEvent} (PROTOCOL.md §10.4).
+ */
+export const awaitedEvent = (p: Pending): string | undefined => unwrapInterrupt(p.payload).event;
+
 /** Build the `interrupt` frame (or its `welcome.pending` view minus seq) for one pending pause. */
 export function interruptFrameData(p: Pending): InterruptFrame["data"] {
-    const { payload, ui, actions } = unwrapInterrupt(p.payload);
+    const { payload, ui, actions, event } = unwrapInterrupt(p.payload);
     return {
         payload,
         ...(ui !== undefined ? { ui } : {}),
         ...(actions !== undefined ? { actions } : {}),
+        ...(event !== undefined ? { event } : {}),
     };
 }
 

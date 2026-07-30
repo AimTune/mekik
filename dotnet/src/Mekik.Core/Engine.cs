@@ -21,12 +21,40 @@ public sealed record HelloInfo
     public long? Watermark { get; init; }
     public string? Token { get; init; }
     public IReadOnlyDictionary<string, object?>? Meta { get; init; }
+    /// <summary>Hash of the component catalog this client has cached (PROTOCOL.md §10.2).</summary>
+    public string? ComponentsHash { get; init; }
 }
 
 public sealed record ConnectParams
 {
     public HelloInfo? Hello { get; init; }
     public Credential? Credential { get; init; }
+}
+
+/// <summary>
+/// One graph-addressed interaction from a mounted GenUI component — what a
+/// <c>mekik-event</c> element hands the server (PROTOCOL.md §10.4).
+/// </summary>
+/// <remarks>
+/// Two kinds of interaction never reach here, because both are already spoken for:
+/// a <c>submit</c> whose payload names an open interrupt (coerced to a resume, §4.4),
+/// and a <c>component-event</c> claimed by a node parked on
+/// <see cref="Shuttle.OnEvent{T}"/>. What is left is the graph-wide traffic: a click
+/// on a widget whose turn is long over.
+/// </remarks>
+public sealed record GenUiEvent
+{
+    public required string ConversationId { get; init; }
+    public required string UserId { get; init; }
+    /// <summary>The turn stream the component was mounted in.</summary>
+    public required string StreamId { get; init; }
+    /// <summary>The element's event name — its <c>mekik-event</c> or <c>data-event</c> value.</summary>
+    public required string EventType { get; init; }
+    /// <summary>The registry name of the component it came from, when the client knows it.</summary>
+    public string? Component { get; init; }
+    /// <summary>The element's <c>data-payload</c>, parsed — a dictionary for JSON,
+    /// the raw string for anything that did not parse, null when it carried none.</summary>
+    public object? Payload { get; init; }
 }
 
 /// <summary>Everything the engine needs, assembled by <see cref="MekikApp"/>.</summary>
@@ -47,6 +75,10 @@ public sealed record EngineConfig
     /// (<see cref="Messages.Spec"/>), or a list mixing both — see <see cref="MekikOptions.Greeting"/>.
     /// </summary>
     public Func<(string ConversationId, string UserId), object?>? Greeting { get; init; }
+    /// <summary>Components the server defines itself, announced on connect (PROTOCOL.md §5).</summary>
+    public ComponentCatalog? Components { get; init; }
+    /// <summary>Turn a component interaction into a graph input update, or null to ignore it (PROTOCOL.md §10.4).</summary>
+    public Func<GenUiEvent, IReadOnlyDictionary<string, object?>?>? OnGenUiEvent { get; init; }
     public required IIdMinter Minter { get; init; }
     public required Func<long> Now { get; init; }
     /// <summary>Cross-node single-writer lease. Default: <see cref="LocalTurnLock"/> (single node).</summary>
@@ -142,6 +174,18 @@ public sealed class ConversationEngine
                 ["pending"] = pendingViews,
             },
         });
+
+        // The component catalog (§10.2). Sent straight after `welcome` so a widget
+        // named by the very first turn is already registered. An unchanged catalog
+        // costs one tiny frame — the markup itself travels only when the hash moved.
+        var catalog = _cfg.Components;
+        if (catalog is not null && !catalog.IsEmpty)
+        {
+            var frame = new Frame { ["type"] = "genui_components", ["hash"] = catalog.Hash };
+            if (hello.ComponentsHash == catalog.Hash) frame["unchanged"] = true;
+            else frame["components"] = catalog.Definitions.Cast<object?>().ToList();
+            conn.Send(frame);
+        }
 
         var clientWatermark = watermarkReset ? 0 : hello.Watermark ?? 0;
         foreach (var frame in await _cfg.History.AfterAsync(conversationId, clientWatermark).ConfigureAwait(false))
@@ -251,7 +295,14 @@ public sealed class ConversationEngine
 
     // ── turns ─────────────────────────────────────────────────────────────────
 
-    private async Task HandleTextAsync(IConnection conn, string convId, IReadOnlyDictionary<string, object?> frame)
+    /// <summary>
+    /// The guarded turn. Takes the local lock, then the cross-node lease, refuses a
+    /// second run with <c>busy</c>, and always releases both — every path that drives
+    /// the graph goes through here, so none of them can drift on the locking rules
+    /// (PROTOCOL.md §5). The body gets the live state, the sending connection's state
+    /// and the turn's cancellation token.
+    /// </summary>
+    private async Task WithTurnAsync(IConnection conn, string convId, Func<Live, ConnState, CancellationToken, Task> body)
     {
         var live = _live[convId];
         var cts = new CancellationTokenSource();
@@ -268,6 +319,21 @@ public sealed class ConversationEngine
             lease = await _cfg.TurnLock.AcquireAsync(convId).ConfigureAwait(false);
             if (lease is null) { conn.Send(ErrorFrame("busy", "a run is already in flight")); return; }
 
+            ConnState state;
+            lock (live.Gate) state = live.Connections[conn.Id];
+            await body(live, state, cts.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (lease is not null) await lease.DisposeAsync().ConfigureAwait(false);
+            lock (live.Gate) live.Turn = null;
+            cts.Dispose();
+        }
+    }
+
+    private Task HandleTextAsync(IConnection conn, string convId, IReadOnlyDictionary<string, object?> frame) =>
+        WithTurnAsync(conn, convId, async (live, state, ct) =>
+        {
             var pending = await _cfg.Adapter.PendingAsync(convId).ConfigureAwait(false);
             if (pending.Count > 0)
             {
@@ -275,8 +341,6 @@ public sealed class ConversationEngine
                 return;
             }
 
-            ConnState state;
-            lock (live.Gate) state = live.Connections[conn.Id];
             var text = ((IReadOnlyDictionary<string, object?>)frame["data"]!)["text"] as string ?? "";
 
             // The user's own turn: stored + shown to the other tabs, not echoed back (§1).
@@ -292,31 +356,12 @@ public sealed class ConversationEngine
 
             var meta = BuildMeta(convId, state.UserId, text, frame.GetValueOrDefault("meta") as IReadOnlyDictionary<string, object?>, state.Claims);
             var input = _cfg.Input(frame);
-            await DriveAsync(convId, live, _cfg.Adapter.Run(input, new RunContext { ThreadId = convId, Meta = meta, CancellationToken = cts.Token })).ConfigureAwait(false);
-        }
-        finally
-        {
-            if (lease is not null) await lease.DisposeAsync().ConfigureAwait(false);
-            lock (live.Gate) live.Turn = null;
-            cts.Dispose();
-        }
-    }
+            await DriveAsync(convId, live, _cfg.Adapter.Run(input, new RunContext { ThreadId = convId, Meta = meta, CancellationToken = ct })).ConfigureAwait(false);
+        });
 
-    private async Task HandleResumeAsync(IConnection conn, string convId, IReadOnlyDictionary<string, object?> frame)
-    {
-        var live = _live[convId];
-        var cts = new CancellationTokenSource();
-        lock (live.Gate)
+    private Task HandleResumeAsync(IConnection conn, string convId, IReadOnlyDictionary<string, object?> frame) =>
+        WithTurnAsync(conn, convId, async (live, state, ct) =>
         {
-            if (live.Turn is not null) { conn.Send(ErrorFrame("busy", "a run is already in flight")); return; }
-            live.Turn = cts;
-        }
-        ITurnLease? lease = null;
-        try
-        {
-            lease = await _cfg.TurnLock.AcquireAsync(convId).ConfigureAwait(false);
-            if (lease is null) { conn.Send(ErrorFrame("busy", "a run is already in flight")); return; }
-
             var pending = await _cfg.Adapter.PendingAsync(convId).ConfigureAwait(false);
             if (pending.Count == 0)
             {
@@ -331,9 +376,6 @@ public sealed class ConversationEngine
                 return;
             }
 
-            ConnState state;
-            lock (live.Gate) state = live.Connections[conn.Id];
-
             // Tell every tab (and the transcript) each pause is closed, before the continuation streams (§4.4).
             foreach (var p in pending)
             {
@@ -347,15 +389,8 @@ public sealed class ConversationEngine
             }
 
             var meta = BuildMeta(convId, state.UserId, "", null, state.Claims);
-            await DriveAsync(convId, live, _cfg.Adapter.Resume(answers, new RunContext { ThreadId = convId, Meta = meta, CancellationToken = cts.Token })).ConfigureAwait(false);
-        }
-        finally
-        {
-            if (lease is not null) await lease.DisposeAsync().ConfigureAwait(false);
-            lock (live.Gate) live.Turn = null;
-            cts.Dispose();
-        }
-    }
+            await DriveAsync(convId, live, _cfg.Adapter.Resume(answers, new RunContext { ThreadId = convId, Meta = meta, CancellationToken = ct })).ConfigureAwait(false);
+        });
 
     private void HandleAbort(string convId)
     {
@@ -369,16 +404,90 @@ public sealed class ConversationEngine
 
     private async Task HandleGenUIEventAsync(IConnection conn, string convId, IReadOnlyDictionary<string, object?> frame)
     {
-        // v1: a component `submit` naming an open interrupt is coerced to a resume (PROTOCOL.md §4.4).
-        if (frame.GetValueOrDefault("eventType") is not "submit") return;
-        if (frame.GetValueOrDefault("payload") is not IReadOnlyDictionary<string, object?> payload) return;
-        if (payload.GetValueOrDefault("id") is not string id) return;
-        var pending = await _cfg.Adapter.PendingAsync(convId).ConfigureAwait(false);
-        if (pending.All(p => p.Id != id)) return;
-        await HandleResumeAsync(conn, convId, new Frame
+        var eventType = frame.GetValueOrDefault("eventType") as string ?? "";
+        var payload = frame.GetValueOrDefault("payload");
+
+        // Where the interaction is addressed, straight from the markup that fired it
+        // (PROTOCOL.md §10.4): `component-event` → the component's own pause,
+        // `mekik-event` → the graph, a plain `data-event` → whichever answers first.
+        var scope = frame.GetValueOrDefault("scope") as string;
+        var toComponent = scope != "graph";
+        var toGraph = scope != "component";
+
+        var open = await _cfg.Adapter.PendingAsync(convId).ConfigureAwait(false);
+
+        // 1. A `submit` naming an open interrupt is coerced to a resume (§4.4) — a form
+        //    bound to a pause answers that pause. The id in the payload is a direct
+        //    address, so it outranks the scope rather than being filtered by it.
+        if (eventType == "submit" &&
+            payload is IReadOnlyDictionary<string, object?> answer &&
+            answer.GetValueOrDefault("id") is string id &&
+            open.Any(p => p.Id == id))
         {
-            ["type"] = "resume",
-            ["answers"] = new Frame { [id] = payload.GetValueOrDefault("answer") },
+            await HandleResumeAsync(conn, convId, new Frame
+            {
+                ["type"] = "resume",
+                ["answers"] = new Frame { [id] = answer.GetValueOrDefault("answer") },
+            }).ConfigureAwait(false);
+            return;
+        }
+
+        // 2. A node parked on `Shuttle.OnEvent` is waiting for exactly this interaction.
+        //    The pause it holds is the binding, so no id has to travel in the payload.
+        if (toComponent && open.FirstOrDefault(p => TurnMapper.AwaitedEvent(p) == eventType) is { } waiting)
+        {
+            await HandleResumeAsync(conn, convId, new Frame
+            {
+                ["type"] = "resume",
+                ["answers"] = new Frame { [waiting.Id] = payload },
+            }).ConfigureAwait(false);
+            return;
+        }
+
+        // 3. Otherwise it is the app's call. A `component-event` stops here: it was
+        //    addressed to a component's own pause, and no node is holding one — the
+        //    widget outlived the turn that mounted it. Without a handler the click is
+        //    inert either way; a decorative button should cost nothing.
+        if (!toGraph || _cfg.OnGenUiEvent is null) return;
+
+        // Ask before taking the turn, not after: an ignored event must not answer a
+        // click with `busy` just because a run happens to be in flight.
+        string userId;
+        {
+            if (!_live.TryGetValue(convId, out var live)) return;
+            lock (live.Gate)
+            {
+                if (!live.Connections.TryGetValue(conn.Id, out var state)) return;
+                userId = state.UserId;
+            }
+        }
+
+        var input = _cfg.OnGenUiEvent(new GenUiEvent
+        {
+            ConversationId = convId,
+            UserId = userId,
+            StreamId = frame.GetValueOrDefault("streamId") as string ?? "",
+            EventType = eventType,
+            Component = frame.GetValueOrDefault("component") as string,
+            Payload = payload,
+        });
+        if (input is null) return;
+
+        await WithTurnAsync(conn, convId, async (live, state, ct) =>
+        {
+            // A parked run is answered, not overtaken — the same rule a `text` turn
+            // obeys (§4.4). The click is refused, the pause stands.
+            var pending = await _cfg.Adapter.PendingAsync(convId).ConfigureAwait(false);
+            if (pending.Count > 0)
+            {
+                conn.Send(ErrorFrame("interrupted", "answer the open interrupt(s) first"));
+                return;
+            }
+
+            // No `text` frame is dispatched: a click is not something the user said,
+            // and the transcript already carries the widget it came from.
+            var meta = BuildMeta(convId, state.UserId, "", null, state.Claims);
+            await DriveAsync(convId, live, _cfg.Adapter.Run(input, new RunContext { ThreadId = convId, Meta = meta, CancellationToken = ct })).ConfigureAwait(false);
         }).ConfigureAwait(false);
     }
 

@@ -35,6 +35,7 @@ export const RESERVED_FRAME_TYPES: ReadonlySet<string> = new Set([
     "abort",
     "tool_call",
     "genui",
+    "genui_components",
     "interrupt",
     "interrupt_resolved",
     "run",
@@ -72,6 +73,11 @@ export interface HelloFrame {
     conversationId?: string;
     watermark?: number;
     token?: string;
+    /**
+     * Hash of the component catalog this client has cached (PROTOCOL.md §10.2).
+     * Equal to the server's hash ⇒ the catalog is not re-sent.
+     */
+    componentsHash?: string;
     /** Client-supplied context; only the allowlisted subset reaches `ctx.meta.client` (PROTOCOL.md §6). */
     meta?: Record<string, unknown>;
 }
@@ -88,10 +94,21 @@ export interface ResumeFrame {
     answers: Record<string, unknown>;
 }
 
+/**
+ * Who an interaction is addressed to (PROTOCOL.md §10.4). The markup picks it:
+ * `component-event` sends `"component"`, `mekik-event` sends `"graph"`, and the
+ * original `data-event` sends neither — an unscoped event tries both routes.
+ */
+export type GenUIEventScope = "component" | "graph";
+
 export interface GenUIEventFrame {
     type: "genui_event";
     streamId: string;
     eventType: string;
+    /** Omitted by a plain `data-event`; see {@link GenUIEventScope}. */
+    scope?: GenUIEventScope;
+    /** The registry name of the component the interaction came from, when the client knows it. */
+    component?: string;
     payload?: unknown;
 }
 
@@ -172,11 +189,47 @@ export interface GenUIFrame {
     chunk: AIChunk;
 }
 
+/**
+ * A component the server defines itself (PROTOCOL.md §10). Markup, not code:
+ * the client registers it under `name` and mounts it from a `ui` chunk.
+ */
+export interface GenUiComponentDefinition {
+    /** Registry name a `ui` chunk mounts by. */
+    name: string;
+    /** Markup with `{{…}}` placeholders (§10.3). */
+    template: string;
+    /** Optional CSS, scoped to the component on the client. */
+    css?: string;
+    /** Prop defaults; also the declaration the client makes reactive. */
+    props?: Record<string, unknown>;
+    /** Definition version — a change re-registers the component. */
+    version?: string;
+    /** Custom element tag on the client. Derived from `name` when omitted. */
+    tag?: string;
+}
+
+/**
+ * The component catalog, sent once per connection after `welcome` (§10.2).
+ * Transient: no `seq`, never persisted, never replayed. `unchanged: true`
+ * means the client's cached catalog matches `hash` and no markup follows.
+ */
+export interface GenUiComponentsFrame {
+    type: "genui_components";
+    hash: string;
+    unchanged?: boolean;
+    components?: GenUiComponentDefinition[];
+}
+
 export interface InterruptFrame {
     type: "interrupt";
     seq: number;
     id: string;
-    data: { payload: unknown; ui?: UiRef; actions?: MessageAction[] };
+    /**
+     * `event` is set when the pause is waiting for a component interaction rather
+     * than an answer (PROTOCOL.md §10.4): the named `data-event` resolves it, and the
+     * client should not offer default Approve/Cancel chips.
+     */
+    data: { payload: unknown; ui?: UiRef; actions?: MessageAction[]; event?: string };
 }
 
 export interface InterruptResolvedFrame {
@@ -204,6 +257,7 @@ export type OutgoingFrame =
     | MessageOutFrame
     | ToolCallFrame
     | GenUIFrame
+    | GenUiComponentsFrame
     | InterruptFrame
     | InterruptResolvedFrame
     | RunFrame
@@ -285,9 +339,12 @@ export function parseIncoming(raw: string | unknown): IncomingFrame {
         }
     }
     if (type === "genui_event") {
-        const v = value as { streamId?: unknown; eventType?: unknown };
+        const v = value as { streamId?: unknown; eventType?: unknown; scope?: unknown };
         if (typeof v.streamId !== "string" || typeof v.eventType !== "string") {
             throw new ProtocolError("bad_request", "genui_event requires streamId and eventType strings");
+        }
+        if (v.scope !== undefined && v.scope !== "component" && v.scope !== "graph") {
+            throw new ProtocolError("bad_request", 'genui_event scope must be "component" or "graph"');
         }
     }
 

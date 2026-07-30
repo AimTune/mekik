@@ -40,6 +40,41 @@ public sealed record MekikOptions
     /// },
     /// </code></example>
     public Func<(string ConversationId, string UserId), object?>? Greeting { get; init; }
+    /// <summary>
+    /// Components this server defines itself (PROTOCOL.md §10). Each one is shipped to
+    /// the client on connect and registered there, so a <c>ui</c> chunk can mount it
+    /// without anything being compiled into the page. Accepts a
+    /// <see cref="ComponentSpec"/>, a <see cref="GenUiComponent"/> instance, or its
+    /// <see cref="Type"/>.
+    /// </summary>
+    /// <example><code>
+    /// Components = [new ComponentSpec { Name = "order-card", Template = "&lt;h3&gt;{{title}}&lt;/h3&gt;" }],
+    /// </code></example>
+    public IReadOnlyList<object>? Components { get; init; }
+    /// <summary>
+    /// What a click on a component does (PROTOCOL.md §10.4). Every <c>data-event</c>
+    /// interaction that is not already answering an open interrupt arrives here;
+    /// return a graph input update to run a turn on it, or <c>null</c> to ignore it.
+    /// Leave the option unset and every such interaction is inert.
+    /// </summary>
+    /// <remarks>
+    /// This is <see cref="Input"/> for components: a mapper, not a place to do work.
+    /// Side effects belong in the node the turn reaches, where the journal makes them
+    /// exactly-once. The turn runs under the same single-writer rule as a <c>text</c>
+    /// turn — a click while the graph is parked on an interrupt is refused with
+    /// <c>error{interrupted}</c>, and one arriving mid-run with <c>error{busy}</c>.
+    /// Nothing is written to the transcript on the user's behalf; a click is not an
+    /// utterance.
+    /// </remarks>
+    /// <example><code>
+    /// OnGenUiEvent = ev => ev.EventType switch
+    /// {
+    ///     "track_order" when ev.Payload is IReadOnlyDictionary&lt;string, object?&gt; p =>
+    ///         new Dictionary&lt;string, object?&gt; { ["input"] = $"track {p.GetValueOrDefault("id")}" },
+    ///     _ => null,   // anything else: not worth a turn
+    /// },
+    /// </code></example>
+    public Func<GenUiEvent, IReadOnlyDictionary<string, object?>?>? OnGenUiEvent { get; init; }
     public IAuthenticator? Authenticator { get; init; }
     public IHistoryStore? History { get; init; }
     public IConversationStore? Conversations { get; init; }
@@ -85,6 +120,8 @@ public sealed class MekikApp
             Context = options.Context,
             AcceptClientMeta = options.AcceptClientMeta,
             Greeting = options.Greeting,
+            Components = options.Components is { Count: > 0 } ? new ComponentCatalog(options.Components) : null,
+            OnGenUiEvent = options.OnGenUiEvent,
             Minter = options.Minter ?? new RandomMinter(),
             Now = options.Now ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
             TurnLock = options.TurnLock ?? new LocalTurnLock(),
