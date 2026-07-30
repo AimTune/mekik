@@ -118,6 +118,66 @@ describe("runAgent", () => {
         assert.equal(reply, "Your order total is 249.9.");
     });
 
+    test("a round with several tool calls costs one turn, not one per call", async () => {
+        let ran = 0;
+        const ping = mkTool("ping", "Ping", z.object({ n: z.number() }), ({ n }: { n: number }) => {
+            ran++;
+            return `pong ${n}`;
+        });
+
+        // Two rounds of three tool calls each (six invocations), then the answer.
+        // With maxTurns 3 this only settles if tool calls are NOT counted as turns.
+        const model = scriptedModel([
+            { toolCalls: [1, 2, 3].map((n) => ({ id: `a${n}`, name: "ping", args: { n } })) },
+            { toolCalls: [4, 5, 6].map((n) => ({ id: `b${n}`, name: "ping", args: { n } })) },
+            { text: "All pinged." },
+        ]);
+
+        const app = makeApp((input, ctx) =>
+            runAgent(ctx, model, { system: "sys", input, tools: [ping], stream: false, maxTurns: 3 }),
+        );
+
+        const c = new FakeConn();
+        await app.connect(c);
+        await app.receive(c, { type: "text", data: { text: "ping everything" } });
+
+        assert.equal(ran, 6, "all six tool invocations ran");
+        const reply = c.sent.filter((f) => f.type === "text").map((f) => data(f).text).at(-1);
+        assert.equal(reply, "All pinged.");
+    });
+
+    test("maxToolCalls caps total tool invocations with the budget reply", async () => {
+        let ran = 0;
+        const ping = mkTool("ping", "Ping", z.object({ n: z.number() }), ({ n }: { n: number }) => {
+            ran++;
+            return `pong ${n}`;
+        });
+
+        const model = scriptedModel([
+            { toolCalls: [1, 2, 3].map((n) => ({ id: `a${n}`, name: "ping", args: { n } })) },
+            { text: "unreachable" },
+        ]);
+
+        const app = makeApp((input, ctx) =>
+            runAgent(ctx, model, {
+                system: "sys",
+                input,
+                tools: [ping],
+                stream: false,
+                maxToolCalls: 2,
+                budgetReply: "budget spent",
+            }),
+        );
+
+        const c = new FakeConn();
+        await app.connect(c);
+        await app.receive(c, { type: "text", data: { text: "ping everything" } });
+
+        assert.equal(ran, 0, "the over-budget batch never executed");
+        const reply = c.sent.filter((f) => f.type === "text").map((f) => data(f).text).at(-1);
+        assert.equal(reply, "budget spent");
+    });
+
     test("streams the answer live as one bubble without a duplicate reply", async () => {
         const model = scriptedModel([{ text: "Hello, world." }]);
 

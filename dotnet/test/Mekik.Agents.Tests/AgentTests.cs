@@ -65,7 +65,9 @@ public class AgentTests
     private static IReadOnlyDictionary<string, object?> Data(IReadOnlyDictionary<string, object?> f) =>
         (IReadOnlyDictionary<string, object?>)f["data"]!;
 
-    private static MekikApp AgentApp(IChatClient chat, AIFunction[] tools, bool stream = true)
+    private static MekikApp AgentApp(
+        IChatClient chat, AIFunction[] tools, bool stream = true,
+        int maxTurns = 25, int maxToolCalls = 25, string budgetReply = "budget spent")
     {
         var g = Graph.Create("agent")
             .Channel("input", Channels.LastWrite(""))
@@ -77,6 +79,9 @@ public class AgentTests
                     Input = state.Get<string>("input") ?? string.Empty,
                     Tools = tools,
                     Stream = stream,
+                    MaxTurns = maxTurns,
+                    MaxToolCalls = maxToolCalls,
+                    BudgetReply = budgetReply,
                 })))
             .Edge(Graph.Start, "agent")
             .Edge("agent", Graph.End)
@@ -155,6 +160,49 @@ public class AgentTests
             .Select(f => Data(f).GetValueOrDefault("text") as string)
             .LastOrDefault();
         Assert.Equal("Hello there.", reply);
+    }
+
+    [Fact]
+    public async Task A_round_with_several_tool_calls_costs_one_turn_not_one_per_call()
+    {
+        var ran = 0;
+        var ping = AIFunctionFactory.Create((int n) => { Interlocked.Increment(ref ran); return $"pong {n}"; },
+            "ping", "Ping");
+
+        // Two rounds of three tool calls each (six invocations), then the answer.
+        // With MaxTurns 3 this only settles if tool calls are NOT counted as turns.
+        var chat = new ScriptedChat(
+            [CallUpdate("a1", "ping", new() { ["n"] = 1 }), CallUpdate("a2", "ping", new() { ["n"] = 2 }), CallUpdate("a3", "ping", new() { ["n"] = 3 })],
+            [CallUpdate("b1", "ping", new() { ["n"] = 4 }), CallUpdate("b2", "ping", new() { ["n"] = 5 }), CallUpdate("b3", "ping", new() { ["n"] = 6 })],
+            [TextUpdate("All pinged.")]);
+
+        var app = AgentApp(chat, [ping], stream: false, maxTurns: 3);
+        var conn = new FakeConn();
+        await app.ConnectAsync(conn);
+        await app.ReceiveAsync(conn, TextFrame("ping everything"));
+
+        Assert.Equal(6, ran);
+        Assert.Equal("All pinged.", Reply(conn));
+    }
+
+    [Fact]
+    public async Task MaxToolCalls_caps_total_tool_invocations_with_the_budget_reply()
+    {
+        var ran = 0;
+        var ping = AIFunctionFactory.Create((int n) => { Interlocked.Increment(ref ran); return $"pong {n}"; },
+            "ping", "Ping");
+
+        var chat = new ScriptedChat(
+            [CallUpdate("a1", "ping", new() { ["n"] = 1 }), CallUpdate("a2", "ping", new() { ["n"] = 2 }), CallUpdate("a3", "ping", new() { ["n"] = 3 })],
+            [TextUpdate("unreachable")]);
+
+        var app = AgentApp(chat, [ping], stream: false, maxToolCalls: 2, budgetReply: "budget spent");
+        var conn = new FakeConn();
+        await app.ConnectAsync(conn);
+        await app.ReceiveAsync(conn, TextFrame("ping everything"));
+
+        Assert.Equal(0, ran); // the over-budget batch never executed
+        Assert.Equal("budget spent", Reply(conn));
     }
 
     // ── route ───────────────────────────────────────────────────────────────────

@@ -22,8 +22,15 @@ public sealed record AgentRunOptions
     /// <summary>The tools the model may call. Wrapped with <see cref="MekikTools"/> automatically.</summary>
     public IReadOnlyList<AIFunction> Tools { get; init; } = [];
 
-    /// <summary>Max model↔tool round-trips before the loop gives up (guards runaway calls).</summary>
-    public int MaxTurns { get; init; } = 6;
+    /// <summary>
+    /// Max model↔tool round-trips — how many times the model may run again after calling
+    /// tools. Default 25. Individual tool invocations do NOT consume turns: a round that
+    /// fires five tools still costs one turn. Cap raw tool usage with <see cref="MaxToolCalls"/>.
+    /// </summary>
+    public int MaxTurns { get; init; } = 25;
+
+    /// <summary>Max total tool invocations across the run. Default 25.</summary>
+    public int MaxToolCalls { get; init; } = 25;
 
     /// <summary>Per-tool policies (visibility, approval, redaction) forwarded to <see cref="MekikTools.Wrap"/>.</summary>
     public IReadOnlyDictionary<string, ToolPolicy>? Policies { get; init; }
@@ -37,7 +44,7 @@ public sealed record AgentRunOptions
     /// <summary>Reply when the model settles with neither text nor a tool call.</summary>
     public string EmptyReply { get; init; } = "(no reply)";
 
-    /// <summary>Reply when <see cref="MaxTurns"/> is exhausted without the model settling.</summary>
+    /// <summary>Reply when <see cref="MaxTurns"/> or <see cref="MaxToolCalls"/> is exhausted without the model settling.</summary>
     public string BudgetReply { get; init; } = "I could not finish that within my step budget — please try again.";
 }
 
@@ -88,6 +95,11 @@ public static class Agent
             new(ChatRole.System, options.System),
             new(ChatRole.User, options.Input),
         };
+
+        // `turn` counts model rounds, not tool invocations — a round that fires several
+        // tools still costs one turn. `toolCallsUsed` tracks the raw tool budget
+        // separately for callers that set MaxToolCalls.
+        var toolCallsUsed = 0;
 
         for (var turn = 0; turn < options.MaxTurns; turn++)
         {
@@ -152,6 +164,9 @@ public static class Agent
                 // would show the message twice. So the stream IS the reply: return nothing.
                 return options.Stream ? string.Empty : text;
             }
+
+            toolCallsUsed += calls.Count;
+            if (toolCallsUsed > options.MaxToolCalls) return options.BudgetReply;
 
             foreach (var call in calls)
             {
