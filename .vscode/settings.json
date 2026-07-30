@@ -1,0 +1,12 @@
+{
+  // A mekik pause throws `Ilmek.InterruptSignalException` on purpose — ilmek uses
+  // it to unwind the node, then catches it and ends the run `interrupted`. With
+  // Just My Code on, the debugger calls that "user-unhandled" and breaks on every
+  // single approval. Off by default here so debugging an app that pauses is not
+  // an exercise in pressing Continue.
+  //
+  // This covers debug sessions started without a launch config; .vscode/launch.json
+  // sets the same parameter per configuration. Set either to `true` when you
+  // actually want to stop at the pause.
+  "csharp.debug.justMyCode": false
+}
