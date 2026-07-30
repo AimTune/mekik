@@ -46,7 +46,9 @@ function runAgent(
     system: string;
     input: string;
     tools?: readonly StructuredToolInterface[];
-    maxTurns?: number;           // default 6
+    maxTurns?: number;           // model↔tool round-trips; default 25. Tool calls don't consume turns —
+                                 // a round that fires five tools still costs one turn.
+    maxToolCalls?: number;       // total tool invocations across the run; default 25
     policy?: Readonly<Record<string, ToolPolicy>>;
     defaultPolicy?: ToolPolicy;
     stream?: boolean;            // live text deltas; default true

@@ -157,8 +157,15 @@ export interface RunAgentOptions {
     input: string;
     /** Tools the model may call. Wrapped with {@link withMekikTools} automatically. */
     tools?: readonly StructuredToolInterface[];
-    /** Max model↔tool round-trips before the loop gives up. Default 6. */
+    /**
+     * Max model↔tool round-trips — how many times the model may run again after
+     * calling tools. Default 25. Individual tool invocations do NOT consume turns:
+     * a round that fires five tools still costs one turn. Cap raw tool usage with
+     * {@link maxToolCalls} instead.
+     */
     maxTurns?: number;
+    /** Max total tool invocations across the run. Default 25. */
+    maxToolCalls?: number;
     /** Per-tool policies (visibility, approval, redaction) forwarded to {@link withMekikTools}. */
     policy?: ToolPolicyMap;
     /** Default policy for tools with no entry in {@link policy}. */
@@ -167,7 +174,7 @@ export interface RunAgentOptions {
     stream?: boolean;
     /** Reply when the model settles with neither text nor a tool call. */
     emptyReply?: string;
-    /** Reply when `maxTurns` is exhausted without the model settling. */
+    /** Reply when `maxTurns` or `maxToolCalls` is exhausted without the model settling. */
     budgetReply?: string;
 }
 
@@ -206,7 +213,8 @@ export async function runAgent(
         system,
         input,
         tools = [],
-        maxTurns = 6,
+        maxTurns = 25,
+        maxToolCalls = 25,
         policy = {},
         stream = true,
         emptyReply = "(no reply)",
@@ -224,6 +232,11 @@ export async function runAgent(
     const bound = model.bindTools(wrapped);
 
     const messages: BaseMessage[] = [new SystemMessage(system), new HumanMessage(input)];
+
+    // `turn` counts model rounds, not tool invocations — a round that fires
+    // several tools still costs one turn. `toolCallsUsed` tracks the raw tool
+    // budget separately for callers that set maxToolCalls.
+    let toolCallsUsed = 0;
 
     for (let turn = 0; turn < maxTurns; turn++) {
         // Journaled: a resume replays this decision instead of re-calling the model,
@@ -260,6 +273,9 @@ export async function runAgent(
             // stream IS the reply: return nothing.
             return stream ? "" : decision.text;
         }
+
+        toolCallsUsed += decision.toolCalls.length;
+        if (toolCallsUsed > maxToolCalls) return budgetReply;
 
         for (const call of decision.toolCalls) {
             const t = byName.get(call.name);

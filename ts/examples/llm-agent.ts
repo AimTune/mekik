@@ -92,8 +92,6 @@ const SYSTEM = [
 
 // ── the graph: one node that lets the model drive ─────────────────────────────
 
-const MAX_TURNS = 6;
-
 // Constructed lazily: `ChatAnthropic` throws on a missing key at construction,
 // and we would rather say so ourselves than crash on import.
 let llmSingleton: ChatAnthropic | undefined;
@@ -113,7 +111,6 @@ const desk = graph("llm-refund")
             system: SYSTEM,
             input: s.input,
             tools: [getOrder, customerTier, refundPayment],
-            maxTurns: MAX_TURNS,
             policy: {
                 get_order: { show: true },
                 // The one irreversible action: pause the graph and ask a human. The

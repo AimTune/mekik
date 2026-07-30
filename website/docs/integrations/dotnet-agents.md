@@ -28,6 +28,8 @@ using Mekik.Agents;
     })))
 ```
 
+The loop is budgeted by `MaxTurns` — model↔tool round-trips, default 25. Individual tool invocations do **not** consume turns: a round that fires five tools still costs one turn. `MaxToolCalls` (default 25) separately caps total tool invocations; when either budget runs out the loop settles with `BudgetReply`.
+
 You return the result as your node's reply (`Update.Of("reply", …)`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `RunAsync` returns an **empty string** — `Update.Of("reply", "")` emits nothing extra, no duplicate. With `Stream = false`, it returns the full text for the consolidated `text` reply. A model's function-call arguments and results (which `AIFunctionFactory` marshals through `System.Text.Json` as `JsonElement`) are canonicalized into the trace automatically — no plain-value converter needed. Reach for [`MekikTools.Wrap`](#mekiktoolswrap) directly when you need to drive the loop yourself.
 
 ## `MekikTools.Wrap`

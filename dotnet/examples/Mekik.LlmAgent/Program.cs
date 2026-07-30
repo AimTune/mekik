@@ -101,8 +101,6 @@ const string System = "You are a refund desk agent. Use the tools to answer; nev
     "Look the order up before refunding, and refund the order's full total unless the user says otherwise. " +
     "When you are done, reply to the customer in one or two short sentences.";
 
-const int MaxTurns = 6;
-
 // Lazily built: the SDK reads ANTHROPIC_API_KEY at construction, and we would
 // rather say so ourselves than surface its exception.
 IChatClient? chat = null;
@@ -124,7 +122,6 @@ var desk = Graph.Create("llm-refund")
             Input = state.Get<string>("input") ?? string.Empty,
             Tools = functions,
             Policies = policies,
-            MaxTurns = MaxTurns,
         })))
     .Edge(Graph.Start, "agent")
     .Edge("agent", Graph.End)
