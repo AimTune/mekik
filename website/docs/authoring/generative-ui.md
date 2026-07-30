@@ -256,6 +256,117 @@ The handler is `input` for components: a mapper, not a place to do work. Side ef
 
 The event carries `conversationId`, `userId`, `streamId`, `eventType`, the originating `component` when the client knows it, and the parsed `payload`.
 
+## Components the server defines
+
+Everything above names a component the **client** registered: a `ui` chunk is a
+name plus props, and someone had to compile that name into the page first. That
+makes every new widget a client release.
+
+`components` inverts it. The server ships the widget itself — markup, styles and
+prop defaults — as metadata; chativa registers each definition as a custom element
+and mounts it by name from then on. Adding a widget becomes a server deploy.
+
+```ts
+const deliveryCard = defineComponent({
+    name: "delivery-card",
+    template: `<div class="card">
+        <header><h3>{{title}}</h3><span class="badge">{{status}}</span></header>
+        {{#each lines}}<p>{{this.label}} — {{this.price}} ₺</p>{{/each}}
+        {{#if note}}<p class="note">{{note}}</p>{{/if}}
+        <button component-event="track_order" data-payload='{"id":"{{id}}"}'>Track</button>
+    </div>`,
+    css: `.card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; }`,
+    props: { id: "", title: "", status: "", note: "", lines: [] },
+});
+
+const app = mekik({ graph, components: [deliveryCard] });
+
+// …in a node — the same typed emitter `mekik.component` returns
+deliveryCard(ctx, { id: "ORD-42", title: "Order ORD-42", status: "Preparing", lines }, { id: "card-1" });
+```
+
+```csharp
+sealed class DeliveryCard : GenUiComponent
+{
+    public override string Name => "delivery-card";
+    public override string Template => "<h3>{{title}}</h3>";
+    public override IReadOnlyDictionary<string, object?>? Props =>
+        new Dictionary<string, object?> { ["title"] = "" };
+}
+
+var app = new MekikApp(new MekikOptions { Graph = graph, Components = [new DeliveryCard()] });
+new DeliveryCard().Emit(ctx, new Dictionary<string, object?> { ["title"] = "Order ORD-42" });
+```
+
+A `ComponentSpec` object, a `defineComponent` result, or a `GenUiComponent`
+subclass (instance or type) are all accepted. Duplicate names throw at startup.
+
+### The template language
+
+Markup, never code — a strict subset, and every interpolation is HTML-escaped
+before the client sanitizes the result again:
+
+| form | meaning |
+|---|---|
+| `{{path.to.value}}` | escaped interpolation |
+| `{{#if path}} … {{else}} … {{/if}}` | truthiness (empty string / empty array / `0` are false) |
+| `{{#each path}} … {{/each}}` | iteration, with `{{this}}`, `{{this.field}}`, `{{@index}}`, parent scope still visible |
+
+Interactions use the same attributes as any other component — `component-event`,
+`mekik-event`, `data-event`, and `<form …>` — so a server-defined widget gets the
+round trip [Bidirectional events](#bidirectional-events--genui_event) describes,
+`onEvent` included.
+
+### Sent once, cached by hash
+
+The catalog is versioned by a `sha256` over the canonical JSON of the definitions
+(sorted by name), so it travels once rather than on every connect:
+
+```
+client → hello              { …, componentsHash: "<cached>" }
+server → welcome            { … }
+server → genui_components   { hash, components: [ … ] }   // the hash moved
+                            { hash, unchanged: true }     // nothing changed, no markup
+```
+
+`componentsHash` rides on the `hello` frame the client already sends, so validating
+the cache costs no extra round trip. TypeScript and .NET mint the identical hash for
+identical definitions — a client can move between them without re-downloading.
+Change a template, and the next connect picks up the new markup.
+
+### Making an update visible
+
+Two rules, both learned the hard way:
+
+- **Pace the updates.** Chunks emitted back-to-back render as one state: the
+  element appears already finished. Put real time between them if the movement is
+  the point.
+- **Journal emissions that precede a pause.** A resume replays the node from the
+  top and emitting is a side effect, so wrap each beat in `ctx.step` /
+  `ctx.StepAsync` — otherwise the client is walked back through states it already
+  rendered. Use literal chunk ids across a pause; a counter-minted id drifts once
+  its call site stops running.
+
+```ts
+const phase = (ctx, name, emit) =>
+    ctx.step(name, async () => { await sleep(1800); emit(); return true; });
+
+await phase(ctx, "packing",    () => card(ctx, props("Preparing"),  { id: "card-1" }));
+await phase(ctx, "in_transit", () => card(ctx, props("In transit"), { id: "card-1" }));
+
+// the widget stays on screen while the chips render…
+const choice = await mekik.choose(ctx, "What should the courier do?", [
+    mekik.action("Hand it to me", "handover"),
+    mekik.action("Reschedule", "reschedule"),
+] as const);
+
+// …and the answer re-renders the element the user is already looking at
+card(ctx, props(choice === "handover" ? "Delivered" : "Rescheduled"), { id: "card-1" });
+```
+
+Runnable end to end: `ts/examples/server-components.ts`,
+`dotnet/examples/Mekik.ServerComponents`. Normative rules: PROTOCOL.md §10.
+
 ## Where to go next
 
 - [**Typed components**](./components.md) — bind a component name once so its props are compiler-checked, update an instance in place, and a worked example of all 13 components chativa registers out of the box.
