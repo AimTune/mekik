@@ -14,10 +14,10 @@ Frames are flat (no nested envelope). Persistent server→client frames carry a 
 
 | `type` | shape | meaning |
 |---|---|---|
-| `hello` | `{type, userId?, conversationId?, watermark?, token?, meta?}` | Handshake. May instead travel as the WS query string. `meta` is a client-supplied context map. All fields optional. |
+| `hello` | `{type, userId?, conversationId?, watermark?, token?, meta?, componentsHash?}` | Handshake. May instead travel as the WS query string. `meta` is a client-supplied context map. `componentsHash` is the [component catalog](../authoring/generative-ui.md#components-the-server-defines) the client has cached — a matching hash means the catalog is not re-sent. All fields optional. |
 | `text` | `{type, data:{text}, meta?}` | One user turn → starts a run (or is refused `busy` / `interrupted`). |
 | `resume` | `{type, answers:{[interruptId]: any}}` | Answer the open interrupts, keyed by thread-scoped interrupt `id`. Must cover **every** open interrupt. |
-| `genui_event` | `{type, streamId, eventType, payload}` | An interaction from a mounted GenUI component. A `submit` whose `payload.id` names an open interrupt is coerced to a `resume`. |
+| `genui_event` | `{type, streamId, eventType, scope?, component?, payload}` | An interaction from a mounted GenUI component. `scope` comes from the markup — `"component"` (`component-event`), `"graph"` (`mekik-event`), or absent (`data-event`) — and decides who receives it: the node parked on `onEvent`, the app's handler, or whichever answers first. A `submit` naming an open interrupt is coerced to a `resume` regardless. See [Bidirectional events](../authoring/generative-ui.md#bidirectional-events--genui_event). |
 | `abort` | `{type}` | Cancel the in-flight run at the next superstep boundary. The last checkpoint stands. |
 
 A malformed inbound frame (bad JSON, missing `type`) draws `error{code:"bad_request"}` and is otherwise ignored — the connection stays open.
@@ -62,6 +62,7 @@ Answering by `id` (not ilmek's `key`) and covering *every* open interrupt are bo
 | `interrupt` | **yes** | `{type, seq, id, data:{payload, ui?, actions?}}` |
 | `interrupt_resolved` | **yes** | `{type, seq, id, data:{answer?}}` |
 | *rich message* | **yes** | `{type: <rendererName>, id, seq, from:"bot"\|"user", data, timestamp}` |
+| `genui_components` | no | `{type, hash, unchanged?, components?: ComponentDefinition[]}` |
 | `run` | no | `{type, data:{status:"started"\|"finished"\|"interrupted"\|"error"\|"aborted"}}` |
 | `error` | no | `{type, data:{code, message}}` |
 
@@ -132,6 +133,26 @@ Live-only. Never stored, never replayed.
 ```
 
 `pending` is a `PendingView[]` re-announcing open interrupts so a reconnecting UI can re-render approval forms. A `PendingView` is `{id, data:{payload, ui?, actions?}}` — an `interrupt` frame minus `seq`/`timestamp`.
+
+**`genui_components`** — the components this server defines itself, sent once per
+connection right after `welcome` (before the replay tail, so a widget named by the
+first replayed chunk is already registered):
+
+```jsonc
+{ "type": "genui_components", "hash": "d8a1c300…",
+  "components": [{ "name": "delivery-card",
+                   "template": "<h3>{{title}}</h3>{{#each lines}}<p>{{this.label}}</p>{{/each}}",
+                   "css": ".card { padding: 12px; }",
+                   "props": { "title": "", "lines": [] } }] }
+```
+
+The client registers each definition under its `name` and mounts it from an
+ordinary `ui` chunk from then on — no client build step. `hash` versions the
+catalog: the client stores it, hands it back in `hello`, and a matching hash gets
+`{ "type": "genui_components", "hash": "…", "unchanged": true }` with no markup
+instead. A server that defines no components sends no frame at all. Definitions,
+the template language and the interaction attributes:
+[Components the server defines](../authoring/generative-ui.md#components-the-server-defines).
 
 **`run`** — the turn's lifecycle signal; always the last frame of its run:
 

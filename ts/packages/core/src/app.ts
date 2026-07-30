@@ -5,10 +5,11 @@
 import { InMemoryCheckpointer, type Checkpointer, type CompiledGraph } from "@ilmek/core";
 
 import { IlmekAdapter } from "./adapter.ts";
-import { ConversationEngine, randomMinter, type ConnectParams, type Connection, type EngineConfig, type Greeting } from "./engine.ts";
+import { ConversationEngine, randomMinter, type ConnectParams, type Connection, type EngineConfig, type GenUiEvent, type Greeting } from "./engine.ts";
 import type { IdMinter } from "./mapper.ts";
 import type { TextInFrame } from "./protocol.ts";
 import type { Authenticator } from "./auth.ts";
+import { ComponentCatalog, type ComponentSource } from "./components.ts";
 import {
     InMemoryConversationStore,
     InMemoryHistoryStore,
@@ -60,6 +61,48 @@ export interface MekikOptions {
      * ```
      */
     greeting?: (conv: { conversationId: string; userId: string }) => Greeting | undefined;
+    /**
+     * Components this server defines itself (PROTOCOL.md §10). Each one is shipped
+     * to the client on connect and registered there, so a `ui` chunk can mount it
+     * without anything being compiled into the page.
+     *
+     * Accepts a plain spec, a {@link defineComponent} result, or a
+     * {@link GenUiComponent} subclass (instance or constructor).
+     *
+     * @example
+     * ```ts
+     * const orderCard = defineComponent({
+     *     name: "order-card",
+     *     template: `<h3>{{title}}</h3><button data-event="track">Track</button>`,
+     *     props: { title: "" },
+     * });
+     * const app = mekik({ graph: g, components: [orderCard] });
+     * ```
+     */
+    components?: readonly ComponentSource[];
+    /**
+     * What a click on a component does (PROTOCOL.md §10.4). Every `data-event`
+     * interaction that is not already answering an open interrupt arrives here;
+     * return a graph input update to run a turn on it, or `undefined` to ignore it.
+     * Leave the option unset and every such interaction is inert.
+     *
+     * @remarks
+     * This is {@link MekikOptions.input} for components: a mapper, not a place to do
+     * work. Side effects belong in the node the turn reaches, where the journal makes
+     * them exactly-once. The turn runs under the same single-writer rule as a `text`
+     * turn — a click while the graph is parked on an interrupt is refused with
+     * `error{interrupted}`, and one arriving mid-run with `error{busy}`. Nothing is
+     * written to the transcript on the user's behalf; a click is not an utterance.
+     *
+     * @example
+     * ```ts
+     * onGenUiEvent: (ev) =>
+     *     ev.eventType === "track_order"
+     *         ? { input: `track ${(ev.payload as { id?: string })?.id ?? ""}` }
+     *         : undefined,   // anything else: not worth a turn
+     * ```
+     */
+    onGenUiEvent?: (event: GenUiEvent) => Record<string, unknown> | undefined;
     /** Enable connect-time auth (PROTOCOL.md §7). */
     authenticator?: Authenticator;
     history?: HistoryStore;
@@ -110,6 +153,8 @@ export class MekikApp {
             ...(options.context ? { context: options.context } : {}),
             ...(options.acceptClientMeta ? { acceptClientMeta: options.acceptClientMeta } : {}),
             ...(options.greeting ? { greeting: options.greeting } : {}),
+            ...(options.components?.length ? { components: new ComponentCatalog(options.components) } : {}),
+            ...(options.onGenUiEvent ? { onGenUiEvent: options.onGenUiEvent } : {}),
         };
         this.engine = new ConversationEngine(cfg);
     }

@@ -103,7 +103,7 @@ A `resume` frame maps to ilmek's `resumeKeyedStream(g, answers, {threadId: conve
 - **Route by the thread-scoped interrupt `id`, never ilmek's task-scoped `key`.** Answering by `key` silently collapses concurrent pauses (ilmek `MODEL.md §6.1`). [Conformance scenario 6](../parity/conformance.md) proves it.
 - When the resume run starts, the engine first emits an `interrupt_resolved` frame for each answered `id`, then the new run's frames.
 
-There's a convenience path: a `genui_event{eventType:"submit", payload:{id, answer}}` whose `id` names an open interrupt is coerced by the engine to `resume{answers:{[id]: answer}}`. A form mounted by an `interrupt` frame's `ui` already knows its interrupt id, so it can either answer with a plain `resume` on submit (the ordinary path) or fire a `submit` event — no server-side stream↔interrupt binding is needed either way.
+There's a convenience path: a `genui_event{eventType:"submit", payload:{id, answer}}` whose `id` names an open interrupt is coerced by the engine to `resume{answers:{[id]: answer}}`. A form mounted by an `interrupt` frame's `ui` already knows its interrupt id, so it can either answer with a plain `resume` on submit (the ordinary path) or fire a `submit` event — no server-side stream↔interrupt binding is needed either way. A `genui_event` that does *not* name an open interrupt is routed by its `scope`: to a node parked on `onEvent`, or to [`onGenUiEvent`](../authoring/generative-ui.md#bidirectional-events--genui_event).
 
 ## Extending the mapping (reserved)
 

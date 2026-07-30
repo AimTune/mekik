@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import type { IlmekEvent } from "@ilmek/core";
 
 import { IlmekAdapter } from "./adapter.ts";
-import { interruptFrameData, TurnMapper, type IdMinter } from "./mapper.ts";
+import { awaitedEvent, interruptFrameData, TurnMapper, type IdMinter } from "./mapper.ts";
 import {
     AUTH_CLOSE_CODE,
     isPersistent,
@@ -17,11 +17,13 @@ import {
     PROTOCOL_VERSION,
     ProtocolError,
     RESERVED_FRAME_TYPES,
+    type GenUIEventFrame,
     type OutgoingFrame,
     type PendingView,
     type ResumeFrame,
     type TextInFrame,
 } from "./protocol.ts";
+import type { ComponentCatalog } from "./components.ts";
 import type { MessageSpec } from "./messages.ts";
 import type { ConversationStore, HistoryStore, PersistentFrame } from "./stores.ts";
 import type { Authenticator, Credential } from "./auth.ts";
@@ -75,9 +77,37 @@ export interface ConnectParams {
         watermark?: number;
         token?: string;
         meta?: Record<string, unknown>;
+        /** Hash of the component catalog the client has cached (§10.2). */
+        componentsHash?: string;
     };
     /** Raw credential (headers/query) for the Authenticator, if configured. */
     credential?: Credential;
+}
+
+/**
+ * One graph-addressed interaction from a mounted GenUI component — what a
+ * `mekik-event` element hands the server (PROTOCOL.md §10.4).
+ *
+ * @remarks
+ * Two kinds of interaction never reach here, because both are already spoken for: a
+ * `submit` whose payload names an open interrupt (coerced to a resume, §4.4), and a
+ * `component-event` claimed by a node parked on {@link onEvent}. What is left is the
+ * graph-wide traffic: a click on a widget whose turn is long over.
+ */
+export interface GenUiEvent {
+    conversationId: string;
+    userId: string;
+    /** The turn stream the component was mounted in. */
+    streamId: string;
+    /** The element's event name — its `mekik-event` or `data-event` value. */
+    eventType: string;
+    /** The registry name of the component it came from, when the client knows it. */
+    component?: string;
+    /**
+     * The element's `data-payload`, parsed — an object for JSON, the raw string for
+     * anything that did not parse, undefined when it carried none.
+     */
+    payload?: unknown;
 }
 
 /** Everything the engine needs, assembled by `mekik()` (see app.ts). */
@@ -94,6 +124,10 @@ export interface EngineConfig {
     context?: (conv: { conversationId: string; userId: string }, turn: { text: string; meta?: Record<string, unknown> }) => Record<string, unknown>;
     /** Allowlist for client-supplied meta → `ctx.meta.client`. Default: drop everything. */
     acceptClientMeta?: (meta: Record<string, unknown>) => Record<string, unknown> | undefined;
+    /** Components the server defines itself, announced on connect (PROTOCOL.md §5). */
+    components?: ComponentCatalog;
+    /** Turn a component interaction into a graph input update, or undefined to ignore it (PROTOCOL.md §10.4). */
+    onGenUiEvent?: (event: GenUiEvent) => Record<string, unknown> | undefined;
     /** A one-time bot greeting sent when a fresh conversation first connects (PROTOCOL.md §1). */
     greeting?: (conv: { conversationId: string; userId: string }) => Greeting | undefined;
     minter: IdMinter;
@@ -173,6 +207,18 @@ export class ConversationEngine {
             },
         });
 
+        // The component catalog (§10.2). Sent straight after `welcome` so a widget
+        // named by the very first turn is already registered. An unchanged catalog
+        // costs one tiny frame — the markup itself travels only when the hash moved.
+        const catalog = this.cfg.components;
+        if (catalog && !catalog.isEmpty) {
+            conn.send(
+                hello.componentsHash === catalog.hash
+                    ? { type: "genui_components", hash: catalog.hash, unchanged: true }
+                    : { type: "genui_components", hash: catalog.hash, components: [...catalog.definitions] },
+            );
+        }
+
         // Replay the tail the client hasn't durably seen (§2). A server-substituted
         // conversation resets the watermark: the asserted one wasn't resumable.
         const clientWatermark = watermarkReset ? 0 : hello.watermark ?? 0;
@@ -241,14 +287,23 @@ export class ConversationEngine {
 
     // ── turns ─────────────────────────────────────────────────────────────────
 
-    private async handleText(conn: Connection, convId: string, frame: TextInFrame): Promise<void> {
+    /**
+     * The guarded turn. Takes the local lock, then the cross-node lease, refuses a
+     * second run with `busy`, and always releases both — every path that drives the
+     * graph goes through here, so none of them can drift on the locking rules (§5).
+     */
+    private async withTurn(
+        conn: Connection,
+        convId: string,
+        body: (live: Live, state: ConnState, signal: AbortSignal) => Promise<void>,
+    ): Promise<void> {
         const live = this.live.get(convId)!;
         if (live.turn) {
             conn.send({ type: "error", data: { code: "busy", message: "a run is already in flight" } });
             return;
         }
         // Acquire the local lock synchronously, before the first await, so a second
-        // text arriving in the same tick sees it held (§5).
+        // frame arriving in the same tick sees it held (§5).
         const abort = new AbortController();
         live.turn = abort;
         let lease: TurnLease | null = null;
@@ -260,14 +315,21 @@ export class ConversationEngine {
                 conn.send({ type: "error", data: { code: "busy", message: "a run is already in flight" } });
                 return;
             }
+            await body(live, live.connections.get(conn.id)!, abort.signal);
+        } finally {
+            if (lease) await lease.release();
+            live.turn = null;
+        }
+    }
 
+    private handleText(conn: Connection, convId: string, frame: TextInFrame): Promise<void> {
+        return this.withTurn(conn, convId, async (live, state, signal) => {
             const pending = await this.cfg.adapter.pending(convId);
             if (pending.length > 0) {
                 conn.send({ type: "error", data: { code: "interrupted", message: "answer the open interrupt(s) first" } });
                 return;
             }
 
-            const state = live.connections.get(conn.id)!;
             // The user's own turn: stored + shown to the other tabs, not echoed
             // back to the sender (§1).
             await this.dispatch(convId, {
@@ -282,29 +344,12 @@ export class ConversationEngine {
             const turn = { text: frame.data.text, ...(frame.meta !== undefined ? { meta: frame.meta } : {}) };
             const meta = this.buildMeta(convId, state.userId, turn, state.claims);
             const input = this.cfg.input(frame);
-            await this.drive(convId, live, this.cfg.adapter.run(input, { threadId: convId, meta, signal: abort.signal }));
-        } finally {
-            if (lease) await lease.release();
-            live.turn = null;
-        }
+            await this.drive(convId, live, this.cfg.adapter.run(input, { threadId: convId, meta, signal }));
+        });
     }
 
-    private async handleResume(conn: Connection, convId: string, frame: ResumeFrame): Promise<void> {
-        const live = this.live.get(convId)!;
-        if (live.turn) {
-            conn.send({ type: "error", data: { code: "busy", message: "a run is already in flight" } });
-            return;
-        }
-        const abort = new AbortController();
-        live.turn = abort;
-        let lease: TurnLease | null = null;
-        try {
-            lease = await this.cfg.turnLock.acquire(convId);
-            if (!lease) {
-                conn.send({ type: "error", data: { code: "busy", message: "a run is already in flight" } });
-                return;
-            }
-
+    private handleResume(conn: Connection, convId: string, frame: ResumeFrame): Promise<void> {
+        return this.withTurn(conn, convId, async (live, state, signal) => {
             const pending = await this.cfg.adapter.pending(convId);
             if (pending.length === 0) {
                 conn.send({ type: "error", data: { code: "not_interrupted", message: "no open interrupt to resume" } });
@@ -321,7 +366,6 @@ export class ConversationEngine {
                 return;
             }
 
-            const state = live.connections.get(conn.id)!;
             // Tell every tab (and the transcript) each pause is closed, before the
             // continuation streams (§4.4).
             for (const p of pending) {
@@ -329,28 +373,78 @@ export class ConversationEngine {
             }
 
             const meta = this.buildMeta(convId, state.userId, { text: "" }, state.claims);
-            await this.drive(convId, live, this.cfg.adapter.resume(frame.answers, { threadId: convId, meta, signal: abort.signal }));
-        } finally {
-            if (lease) await lease.release();
-            live.turn = null;
-        }
+            await this.drive(convId, live, this.cfg.adapter.resume(frame.answers, { threadId: convId, meta, signal }));
+        });
     }
 
     private handleAbort(convId: string): void {
         this.live.get(convId)?.turn?.abort("client abort");
     }
 
-    private async handleGenUIEvent(conn: Connection, convId: string, frame: { streamId: string; eventType: string; payload?: unknown }): Promise<void> {
-        // v1: a component `submit` naming an open interrupt is coerced to a resume
-        // (PROTOCOL.md §4.4). Anything else is reserved for a future forwarding path.
-        if (frame.eventType !== "submit") return;
+    private async handleGenUIEvent(conn: Connection, convId: string, frame: GenUIEventFrame): Promise<void> {
         const payload = frame.payload;
-        if (typeof payload !== "object" || payload === null) return;
-        const id = (payload as { id?: unknown }).id;
-        if (typeof id !== "string") return;
-        const pending = await this.cfg.adapter.pending(convId);
-        if (!pending.some((p) => p.id === id)) return;
-        await this.handleResume(conn, convId, { type: "resume", answers: { [id]: (payload as { answer?: unknown }).answer } });
+
+        // Where the interaction is addressed, straight from the markup that fired it
+        // (PROTOCOL.md §10.4): `component-event` → the component's own pause,
+        // `mekik-event` → the graph, a plain `data-event` → whichever answers first.
+        const toComponent = frame.scope !== "graph";
+        const toGraph = frame.scope !== "component";
+
+        const open = await this.cfg.adapter.pending(convId);
+
+        // 1. A `submit` naming an open interrupt is coerced to a resume (§4.4) — a form
+        //    bound to a pause answers that pause. The id in the payload is a direct
+        //    address, so it outranks the scope rather than being filtered by it.
+        if (frame.eventType === "submit" && typeof payload === "object" && payload !== null) {
+            const id = (payload as { id?: unknown }).id;
+            if (typeof id === "string" && open.some((p) => p.id === id)) {
+                await this.handleResume(conn, convId, { type: "resume", answers: { [id]: (payload as { answer?: unknown }).answer } });
+                return;
+            }
+        }
+
+        // 2. A node parked on `onEvent` is waiting for exactly this interaction. The
+        //    pause it holds is the binding, so no id has to travel in the payload.
+        const waiting = toComponent ? open.find((p) => awaitedEvent(p) === frame.eventType) : undefined;
+        if (waiting) {
+            await this.handleResume(conn, convId, { type: "resume", answers: { [waiting.id]: payload } });
+            return;
+        }
+
+        // 3. Otherwise it is the app's call. A `component-event` stops here: it was
+        //    addressed to a component's own pause, and no node is holding one — the
+        //    widget outlived the turn that mounted it. Without a handler the click is
+        //    inert either way; a decorative button should cost nothing.
+        if (!toGraph || !this.cfg.onGenUiEvent) return;
+
+        // Ask before taking the turn, not after: an ignored event must not answer a
+        // click with `busy` just because a run happens to be in flight.
+        const state = this.live.get(convId)?.connections.get(conn.id);
+        if (!state) return;
+        const input = this.cfg.onGenUiEvent({
+            conversationId: convId,
+            userId: state.userId,
+            streamId: frame.streamId,
+            eventType: frame.eventType,
+            ...(frame.component !== undefined ? { component: frame.component } : {}),
+            ...(payload !== undefined ? { payload } : {}),
+        });
+        if (input === undefined) return;
+
+        await this.withTurn(conn, convId, async (live, turnState, signal) => {
+            // A parked run is answered, not overtaken — the same rule a `text` turn
+            // obeys (§4.4). The click is refused, the pause stands.
+            const pending = await this.cfg.adapter.pending(convId);
+            if (pending.length > 0) {
+                conn.send({ type: "error", data: { code: "interrupted", message: "answer the open interrupt(s) first" } });
+                return;
+            }
+
+            // No `text` frame is dispatched: a click is not something the user said,
+            // and the transcript already carries the widget it came from.
+            const meta = this.buildMeta(convId, turnState.userId, { text: "" }, turnState.claims);
+            await this.drive(convId, live, this.cfg.adapter.run(input, { threadId: convId, meta, signal }));
+        });
     }
 
     /** Stream one run's events through a fresh TurnMapper, fanning frames out. */

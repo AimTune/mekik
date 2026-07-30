@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { channel, command, END, graph, send, START } from "@ilmek/core";
 
 import { mekik } from "../src/index.ts";
-import type { Connection } from "../src/engine.ts";
+import type { Connection, GenUiEvent } from "../src/engine.ts";
 import type { MessageOutFrame, OutgoingFrame, RunStatus } from "../src/protocol.ts";
 import { StaticTokenAuthenticator } from "../src/auth.ts";
 
@@ -74,6 +74,19 @@ const approval = graph("approval")
     })
     .edge(START, "gate")
     .edge("gate", END)
+    .compile();
+
+/** Mounts a widget and parks until its own button fires (§10.4). */
+const awaiting = graph("awaiting")
+    .channel("input", channel.lastWrite<string>(""))
+    .channel("reply", channel.lastWrite<string>(""))
+    .node("wait", async (s, ctx) => {
+        mekik.ui(ctx, "delivery-card", { id: s.input }, { id: "card-1" });
+        const req = await mekik.onEvent<{ id: string }>(ctx, "track_order");
+        return { reply: `tracking ${req.id}` };
+    })
+    .edge(START, "wait")
+    .edge("wait", END)
     .compile();
 
 /** Fans out to two workers, each of which pauses - two concurrent interrupts. */
@@ -430,5 +443,318 @@ describe("auth (§7)", () => {
         const c = conn();
         await app.connect(c, { hello: { token: "good-token", userId: "i-am-someone-else" } });
         assert.equal(welcomeOf(c).userId, "u-42");
+    });
+});
+
+// ── §10 server-defined components ──────────────────────────────────────────────
+
+describe("server-defined components", () => {
+    const orderCard = {
+        name: "order-card",
+        template: `<h3>{{title}}</h3><button data-event="track_order">Track</button>`,
+        props: { title: "" },
+    };
+    const withComponents = () => mekik({ graph: greeter, reply: (s) => s.reply as string, components: [orderCard] });
+
+    test("announces the catalog right after welcome", async () => {
+        const app = withComponents();
+        const c = conn();
+        await app.connect(c);
+
+        assert.deepEqual(types(c).slice(0, 2), ["welcome", "genui_components"]);
+        const frame = first(c, "genui_components");
+        assert.deepEqual(frame.components, [orderCard]);
+        assert.match(frame.hash, /^[0-9a-f]{64}$/);
+        assert.equal(frame.unchanged, undefined);
+    });
+
+    test("answers `unchanged` when the client already has that catalog", async () => {
+        const app = withComponents();
+        const hash = first(await connected(app), "genui_components").hash;
+
+        const c = conn();
+        await app.connect(c, { hello: { componentsHash: hash } });
+
+        const frame = first(c, "genui_components");
+        assert.equal(frame.unchanged, true);
+        assert.equal(frame.components, undefined);
+        assert.equal(frame.hash, hash);
+    });
+
+    test("re-sends the markup when the client's hash is stale", async () => {
+        const app = withComponents();
+        const c = conn();
+        await app.connect(c, { hello: { componentsHash: "an-old-hash" } });
+
+        const frame = first(c, "genui_components");
+        assert.equal(frame.unchanged, undefined);
+        assert.deepEqual(frame.components, [orderCard]);
+    });
+
+    test("sends no catalog frame when the server defines no components", async () => {
+        const app = mekik({ graph: greeter, reply: (s) => s.reply as string });
+        const c = conn();
+        await app.connect(c);
+
+        assert.equal(types(c).includes("genui_components"), false);
+    });
+
+    test("the catalog frame is transient — it carries no seq and never replays", async () => {
+        const app = withComponents();
+        const c1 = conn();
+        await app.connect(c1);
+        await app.receive(c1, { type: "text", data: { text: "world" } });
+
+        const frame = first(c1, "genui_components") as unknown as { seq?: number };
+        assert.equal(frame.seq, undefined);
+
+        // A reconnect at the current watermark replays the transcript tail only;
+        // the one catalog frame it gets is this connect's own announcement.
+        const c2 = conn();
+        await app.connect(c2, { hello: { conversationId: welcomeOf(c1).conversationId, watermark: welcomeOf(c1).watermark } });
+        assert.equal(c2.sent.filter((f) => f.type === "genui_components").length, 1);
+    });
+
+    /** Connect a throwaway connection just to read the catalog hash off it. */
+    async function connected(app: ReturnType<typeof mekik>) {
+        const c = conn();
+        await app.connect(c);
+        return c;
+    }
+});
+
+// ── §10.4 component interaction ────────────────────────────────────────────────
+
+describe("component events (§10.4)", () => {
+    const clickEvent = { type: "genui_event" as const, streamId: "stream-1", eventType: "track_order", payload: { id: "ORD-42" } };
+
+    test("without a handler a component event is inert", async () => {
+        const app = mekik({ graph: greeter, reply: (s) => s.reply as string });
+        const c = conn();
+        await app.connect(c);
+        const before = c.sent.length;
+
+        await app.receive(c, clickEvent);
+
+        assert.equal(c.sent.length, before);
+    });
+
+    test("a handler that returns an update runs a turn on it", async () => {
+        const seen: GenUiEvent[] = [];
+        const app = mekik({
+            graph: greeter,
+            reply: (s) => s.reply as string,
+            onGenUiEvent: (ev) => {
+                seen.push(ev);
+                return { input: (ev.payload as { id: string }).id };
+            },
+        });
+        const c = conn();
+        await app.connect(c);
+        await app.receive(c, clickEvent);
+
+        assert.deepEqual(runStatuses(c), ["started", "finished"]);
+        assert.ok(c.sent.some((f) => f.type === "text" && f.from === "bot" && f.data.text === "Hi, ORD-42!"));
+
+        // The handler sees the whole interaction, not just the payload.
+        assert.equal(seen.length, 1);
+        assert.equal(seen[0]!.eventType, "track_order");
+        assert.equal(seen[0]!.streamId, "stream-1");
+        assert.deepEqual(seen[0]!.payload, { id: "ORD-42" });
+        assert.equal(seen[0]!.conversationId, welcomeOf(c).conversationId);
+        assert.equal(seen[0]!.userId, welcomeOf(c).userId);
+    });
+
+    test("a click is not an utterance — no user text lands in the transcript", async () => {
+        const app = mekik({ graph: greeter, reply: (s) => s.reply as string, onGenUiEvent: () => ({ input: "ORD-42" }) });
+        const c = conn();
+        await app.connect(c);
+        await app.receive(c, clickEvent);
+
+        assert.equal(c.sent.some((f) => f.type === "text" && f.from === "user"), false);
+    });
+
+    test("a handler that returns undefined starts no turn", async () => {
+        const app = mekik({ graph: greeter, reply: (s) => s.reply as string, onGenUiEvent: () => undefined });
+        const c = conn();
+        await app.connect(c);
+        const before = c.sent.length;
+
+        await app.receive(c, clickEvent);
+
+        assert.equal(c.sent.length, before);
+    });
+
+    test("a submit answering an open interrupt resumes — the handler never sees it", async () => {
+        let handled = 0;
+        const app = mekik({
+            graph: approval,
+            reply: (s) => s.reply as string,
+            onGenUiEvent: () => {
+                handled++;
+                return { input: "should not happen" };
+            },
+        });
+        const c = conn();
+        await app.connect(c);
+        await app.receive(c, { type: "text", data: { text: "refund" } });
+        const interruptId = first(c, "interrupt").id;
+
+        await app.receive(c, {
+            type: "genui_event",
+            streamId: "stream-1",
+            eventType: "submit",
+            payload: { id: interruptId, answer: { approved: true } },
+        });
+
+        assert.equal(handled, 0, "the §4.4 shortcut wins over the handler");
+        assert.equal(first(c, "interrupt_resolved").id, interruptId);
+        assert.ok(c.sent.some((f) => f.type === "text" && f.from === "bot" && f.data.text === "approved"));
+    });
+
+    test("a submit naming no open interrupt falls through to the handler", async () => {
+        const seen: string[] = [];
+        const app = mekik({
+            graph: greeter,
+            reply: (s) => s.reply as string,
+            onGenUiEvent: (ev) => {
+                seen.push(ev.eventType);
+                return undefined;
+            },
+        });
+        const c = conn();
+        await app.connect(c);
+
+        await app.receive(c, { type: "genui_event", streamId: "stream-1", eventType: "submit", payload: { id: "no-such-interrupt" } });
+
+        assert.deepEqual(seen, ["submit"]);
+    });
+
+    test("a component-driven turn cannot overtake a pause", async () => {
+        const app = mekik({ graph: approval, reply: (s) => s.reply as string, onGenUiEvent: () => ({ input: "again" }) });
+        const c = conn();
+        await app.connect(c);
+        await app.receive(c, { type: "text", data: { text: "refund" } });
+        const before = c.sent.length;
+
+        await app.receive(c, clickEvent);
+
+        const err = c.sent.slice(before).find((f) => f.type === "error");
+        assert.ok(err && err.type === "error" && err.data.code === "interrupted");
+        assert.deepEqual(runStatuses(c), ["started", "interrupted"], "the parked run is untouched");
+    });
+});
+
+// ── §10.4 a node waiting on a component's own event ────────────────────────────
+
+describe("mekik.onEvent — the in-graph listener (§10.4)", () => {
+    /** Start `awaiting` and park it on the card's `track_order`. */
+    async function parked(onGenUiEvent?: (ev: GenUiEvent) => Record<string, unknown> | undefined) {
+        const app = mekik({
+            graph: awaiting,
+            reply: (s) => s.reply as string,
+            ...(onGenUiEvent ? { onGenUiEvent } : {}),
+        });
+        const c = conn();
+        await app.connect(c);
+        await app.receive(c, { type: "text", data: { text: "ORD-42" } });
+        return { app, c };
+    }
+
+    test("the pause announces which event it waits for, and offers no chips", async () => {
+        const { c } = await parked();
+
+        assert.deepEqual(runStatuses(c), ["started", "interrupted"]);
+        const intr = first(c, "interrupt");
+        assert.equal(intr.data.event, "track_order");
+        assert.equal(intr.data.actions, undefined, "a widget answers this, not default Approve/Cancel chips");
+    });
+
+    test("a component-event resolves it, and its payload is the return value", async () => {
+        const { app, c } = await parked();
+
+        await app.receive(c, {
+            type: "genui_event",
+            streamId: "stream-1",
+            eventType: "track_order",
+            scope: "component",
+            payload: { id: "ORD-42" },
+        });
+
+        assert.deepEqual(runStatuses(c), ["started", "interrupted", "started", "finished"]);
+        assert.ok(c.sent.some((f) => f.type === "text" && f.from === "bot" && f.data.text === "tracking ORD-42"));
+    });
+
+    test("a plain data-event resolves it too — an unscoped event tries both routes", async () => {
+        const { app, c } = await parked();
+
+        await app.receive(c, { type: "genui_event", streamId: "stream-1", eventType: "track_order", payload: { id: "ORD-42" } });
+
+        assert.ok(c.sent.some((f) => f.type === "text" && f.from === "bot" && f.data.text === "tracking ORD-42"));
+    });
+
+    test("a mekik-event never resolves a pause — it is addressed to the graph", async () => {
+        let handled = 0;
+        const { app, c } = await parked(() => {
+            handled++;
+            return { input: "ORD-99" };
+        });
+        const before = c.sent.length;
+
+        await app.receive(c, {
+            type: "genui_event",
+            streamId: "stream-1",
+            eventType: "track_order",
+            scope: "graph",
+            payload: { id: "ORD-42" },
+        });
+
+        assert.equal(handled, 1, "it went to the graph handler, not the waiting node");
+        const err = c.sent.slice(before).find((f) => f.type === "error");
+        assert.ok(err && err.type === "error" && err.data.code === "interrupted", "…and a new turn cannot overtake the pause");
+        assert.deepEqual(runStatuses(c), ["started", "interrupted"], "the pause still stands");
+    });
+
+    test("an event no node is waiting for does not reach the graph handler when component-scoped", async () => {
+        let handled = 0;
+        const { app, c } = await parked(() => {
+            handled++;
+            return undefined;
+        });
+
+        await app.receive(c, {
+            type: "genui_event",
+            streamId: "stream-1",
+            eventType: "some_other_button",
+            scope: "component",
+            payload: {},
+        });
+
+        assert.equal(handled, 0, "a component-event is for a component's own pause, nothing else");
+        assert.deepEqual(runStatuses(c), ["started", "interrupted"]);
+    });
+
+    test("a submit naming the interrupt still wins, whatever the scope says", async () => {
+        const { app, c } = await parked();
+        const interruptId = first(c, "interrupt").id;
+
+        await app.receive(c, {
+            type: "genui_event",
+            streamId: "stream-1",
+            eventType: "submit",
+            scope: "graph",
+            payload: { id: interruptId, answer: { id: "ORD-7" } },
+        });
+
+        assert.ok(c.sent.some((f) => f.type === "text" && f.from === "bot" && f.data.text === "tracking ORD-7"));
+    });
+
+    test("an unknown scope is a bad_request", async () => {
+        const { app, c } = await parked();
+
+        await app.receive(c, { type: "genui_event", streamId: "stream-1", eventType: "track_order", scope: "everywhere" });
+
+        const err = c.sent.at(-1);
+        assert.ok(err && err.type === "error" && err.data.code === "bad_request");
     });
 });

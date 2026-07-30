@@ -73,6 +73,24 @@ sequenceDiagram
   N2->>E: continues past the await
 ```
 
+## …or pause for a widget already on screen
+
+`mekik.onEvent` / `Shuttle.OnEvent` is the same pause with a different answerer: a `component-event` button on a component you already mounted, instead of chips in the chat.
+
+```ts
+deliveryCard(ctx, props, { id: "card-1" });                 // mount it first
+const rating = await mekik.onEvent<{ stars: number }>(ctx, "rate_delivery");
+```
+
+```csharp
+Shuttle.Ui(ctx, "delivery-card", props, id: "card-1");
+var rating = await Shuttle.OnEvent<IReadOnlyDictionary<string, object?>>(ctx, "rate_delivery");
+```
+
+The `interrupt` frame carries `data.event` — the name it waits for — so the client waits for the widget rather than rendering default Approve/Cancel chips. The pause the node holds *is* the binding, so nothing has to carry an interrupt id. Everything else on this page applies unchanged: it is an ordinary interrupt, durable and replay-safe.
+
+Full routing rules, including `mekik-event` for clicks the graph should answer: [Generative UI → Bidirectional events](./generative-ui.md#bidirectional-events--genui_event).
+
 ## Buttons, typed (no hand-written JSON)
 
 When the pause really is "pick one of these buttons", skip `approve`'s generic and its `actions` JSON: `mekik.choose` / `Shuttle.Choose` take the options directly, and `mekik.action` / `Shuttle.Action` build the chips.
@@ -268,6 +286,40 @@ The pause is an ordinary `interrupt` frame — chativa renders chips or a form, 
 ## .NET note
 
 In .NET the pause propagates as an `InterruptSignalException`. Any `try/catch` around node work **must rethrow** it (`Shuttle.Tool` does) — a blanket `catch (Exception)` would swallow the pause. See [Parity](../parity/languages.md#the-five-deliberate-divergences).
+
+### Stopping the debugger from breaking on every pause
+
+Because the pause *is* a thrown exception, a debugger with **Just My Code** on stops on all of them:
+
+```
+Ilmek.InterruptSignalException: 'ilmek: paused for a human at interrupt#0'
+```
+
+Nothing is wrong. The exception leaves your node (user code) and is caught by the ilmek engine (not user code), which Just My Code reports as "user-unhandled". Turn it off and the debugger only breaks on exceptions nothing catches — which an interrupt never is. The trade-off is that stepping can now walk into library code.
+
+**VS Code** — set it per launch configuration, or in `settings.json` to cover sessions started without one:
+
+```json title=".vscode/launch.json"
+{
+  "configurations": [
+    {
+      "name": ".NET: my app",
+      "type": "coreclr",
+      "request": "launch",
+      // true to break on every pause again
+      "justMyCode": false
+    }
+  ]
+}
+```
+
+```json title=".vscode/settings.json"
+{ "csharp.debug.justMyCode": false }
+```
+
+The mekik repo ships both for its own examples.
+
+**Visual Studio** — the setting lives in your user profile, not the repo: *Debug → Windows → Exception Settings*, right-click `Ilmek.InterruptSignalException` and check **Continue When Unhandled in User Code** (add the type with the `+` button under *Common Language Runtime Exceptions* if it is not listed). *Tools → Options → Debugging → General → Enable Just My Code* turns it off wholesale.
 
 ## Where to go next
 

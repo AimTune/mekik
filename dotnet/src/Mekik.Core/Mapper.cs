@@ -177,8 +177,19 @@ public sealed class TurnMapper
 
     // ── interrupt payload wrapping (PROTOCOL.md §4.2) ─────────────────────────
 
-    /// <summary>Split an interrupt payload into `{ payload, ui?, actions? }` (public for `welcome.pending`).</summary>
+    /// <summary>Split an interrupt payload into `{ payload, ui?, actions?, event? }` (public for `welcome.pending`).</summary>
     public static Dictionary<string, object?> InterruptFrameData(Pending p) => Unwrap(p.Payload);
+
+    /// <summary>
+    /// The <c>data-event</c> name a pause is waiting for, or null when it waits for an
+    /// ordinary answer. This is what lets the engine route a <c>genui_event</c> to the
+    /// node parked on <see cref="Shuttle.OnEvent{T}"/> (PROTOCOL.md §10.4).
+    /// </summary>
+    public static string? AwaitedEvent(Pending p) =>
+        p.Payload is IReadOnlyDictionary<string, object?> dict &&
+        dict.GetValueOrDefault(MekikKey) is IReadOnlyDictionary<string, object?> meta
+            ? meta.GetValueOrDefault("event") as string
+            : null;
 
     private static Dictionary<string, object?> Unwrap(object? payload)
     {
@@ -189,6 +200,7 @@ public sealed class TurnMapper
             var data = new Dictionary<string, object?> { ["payload"] = rest };
             if (meta.GetValueOrDefault("ui") is { } ui) data["ui"] = ui;
             if (meta.GetValueOrDefault("actions") is { } actions) data["actions"] = actions;
+            if (meta.GetValueOrDefault("event") is string ev) data["event"] = ev;
             return data;
         }
         return new Dictionary<string, object?> { ["payload"] = payload };

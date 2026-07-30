@@ -1,0 +1,13 @@
+{
+  "profiles": {
+    "Mekik.ServerComponents": {
+      "commandName": "Project",
+      "commandLineArgs": "--serve",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:65117;http://localhost:65118"
+    }
+  }
+}

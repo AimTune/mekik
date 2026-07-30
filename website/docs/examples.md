@@ -80,9 +80,35 @@ node ts/examples/storefront.ts --serve    # ws://localhost:8802 — then type "c
 
 Its self-test is the executable version of the two authoring guides — [Typed components](./authoring/components.md) and [Rich messages](./authoring/messages.md) — right down to asserting that the three progress-bar emissions share **one** chunk id (an in-place update, not three bars) and that messages replay from the transcript on reconnect.
 
+## The backend owns the widget
+
+`server-components.ts` is the only example whose components are not registered in
+the client at all. It defines two of them — `delivery-card` and `shipment-strip` —
+on the server, ships them in a `genui_components` frame on connect, and then mounts
+them with ordinary `ui` chunks. Adding a widget is a server deploy.
+
+```bash
+node ts/examples/server-components.ts            # self-test: catalog, hash cache, in-place updates
+node ts/examples/server-components.ts --serve    # ws://localhost:8806 — then type "track ORD-42"
+
+dotnet run --project dotnet/examples/Mekik.ServerComponents            # the same self-test
+dotnet run --project dotnet/examples/Mekik.ServerComponents -- --serve # ws://localhost:8816/ws
+```
+
+The turn is paced on purpose, because the mechanism is otherwise invisible: the
+card is re-rendered from *Preparing* to *In transit* under one chunk id, the run then
+**pauses** on three chips, and the answer re-renders that same card again. Its
+self-test asserts the parts you would otherwise have to squint at in a network log —
+that a cached hash gets `unchanged: true` and no markup, that a stale one gets the
+full catalog, that four pre-pause `ui` chunks carry two ids, and that the replay
+after the resume does **not** re-emit the states the user already watched (each
+phase ran inside `ctx.step`).
+
+See [Components the server defines](./authoring/generative-ui.md#components-the-server-defines).
+
 ## Rendering end-to-end
 
-The GenUI components these emit — `data-table`, `weather-card`, `approval-form`, `order-card`, plus the `genui-*` built-ins `storefront` uses — are registered in [chativa's sandbox](https://github.com/AimTune/chativa), so `--serve` renders end to end against a real client. To see the full loop: run an example with `--serve`, point chativa's `MekikConnector` at `ws://localhost:8800`, and type an order number (`ORD-42` in the refund example) to trigger the approval flow.
+The GenUI components these emit — `data-table`, `weather-card`, `approval-form`, `order-card`, plus the `genui-*` built-ins `storefront` uses — are registered in [chativa's sandbox](https://github.com/AimTune/chativa), so `--serve` renders end to end against a real client. `server-components` is the exception that proves the rule: it needs no registration at all, because it ships its own definitions. To see the full loop: run an example with `--serve`, point chativa's `MekikConnector` at `ws://localhost:8800`, and type an order number (`ORD-42` in the refund example) to trigger the approval flow.
 
 ## Running the suites
 

@@ -29,7 +29,7 @@ public static class Protocol
     public static readonly IReadOnlySet<string> ReservedFrameTypes = new HashSet<string>
     {
         "hello", "welcome", "text", "resume", "genui_event", "abort",
-        "tool_call", "genui", "interrupt", "interrupt_resolved", "run", "error", "typing",
+        "tool_call", "genui", "genui_components", "interrupt", "interrupt_resolved", "run", "error", "typing",
     };
 
     private static readonly IReadOnlySet<string> IncomingTypes =
@@ -85,6 +85,8 @@ public static class Protocol
             case "genui_event":
                 if (frame.GetValueOrDefault("streamId") is not string || frame.GetValueOrDefault("eventType") is not string)
                     throw new ProtocolException("bad_request", "genui_event requires streamId and eventType strings");
+                if (frame.GetValueOrDefault("scope") is { } scope && scope is not ("component" or "graph"))
+                    throw new ProtocolException("bad_request", "genui_event scope must be \"component\" or \"graph\"");
                 break;
         }
 

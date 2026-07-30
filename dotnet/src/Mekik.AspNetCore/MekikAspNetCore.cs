@@ -103,6 +103,7 @@ public static class MekikAspNetCore
                 Watermark = h.GetValueOrDefault("watermark") is long w ? w : hello.Watermark,
                 Token = h.GetValueOrDefault("token") as string ?? hello.Token,
                 Meta = h.GetValueOrDefault("meta") as IReadOnlyDictionary<string, object?>,
+                ComponentsHash = h.GetValueOrDefault("componentsHash") as string ?? hello.ComponentsHash,
             };
         }
 

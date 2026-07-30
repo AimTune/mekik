@@ -192,14 +192,180 @@ An unknown component name is the client's call — chativa renders nothing for o
 GenUI is two-way over the same socket. When a mounted component fires an interaction (a form submit, a card button), the client sends a `genui_event` frame back:
 
 ```jsonc
-{ "type": "genui_event", "streamId": "stream-1", "eventType": "submit",
-  "payload": { "email": "a@b.com" } }
+{ "type": "genui_event", "streamId": "stream-1", "eventType": "rate_delivery",
+  "scope": "component", "payload": { "stars": 5 } }
 ```
 
-Two things can happen with it:
+**The markup picks the addressee.** That is the whole routing model:
 
-1. **Ordinary component event** — routed to your `onCustom` hook or handled app-side. The base engine has no built-in reaction beyond the interrupt-coercion below.
-2. **Interrupt answer** — if `eventType == "submit"` and `payload.id` names an open interrupt, the engine coerces it to a `resume{answers:{[id]: answer}}`. This lets a form mounted by an `interrupt` frame answer the pause by firing a submit event, without any server-side stream↔interrupt binding. See [Human-in-the-loop](./human-in-the-loop.md#answering).
+| markup | `scope` | who receives it |
+| --- | --- | --- |
+| `component-event="rate_delivery"` | `"component"` | the node parked on `onEvent` waiting for that name — nothing else |
+| `mekik-event="track_order"` | `"graph"` | your `onGenUiEvent` handler, which may start a turn |
+| `data-event="…"` | absent | tries the component route first, then the graph one (the original form, still supported) |
+
+Ahead of both sits one special case: a `submit` whose `payload.id` names an open interrupt is coerced to a `resume{answers:{[id]: answer}}`, whatever the scope says. A payload id is a direct address. That is how a form mounted by an `interrupt` frame's `ui` answers its pause — see [Human-in-the-loop](./human-in-the-loop.md#answering).
+
+**A frame that matches nothing is accepted and dropped** — no handler configured, or a `component-event` whose widget outlived the turn that mounted it. That is the right cost for a decorative button, and the first thing to check when a button appears dead.
+
+### `component-event` — a node waiting on its own widget
+
+`onEvent` is `approve` for widgets: the run parks, but a button on a component already on screen answers it instead of chips in the chat.
+
+```ts
+deliveryCard(ctx, props, { id: "card-1" });                 // mount it first
+const rating = await mekik.onEvent<{ stars: number }>(ctx, "rate_delivery");
+```
+
+```csharp
+Shuttle.Ui(ctx, "delivery-card", props, id: "card-1");
+var rating = await Shuttle.OnEvent<IReadOnlyDictionary<string, object?>>(ctx, "rate_delivery");
+```
+
+It is an ordinary interrupt, so it inherits everything a pause already gives you: the run ends `interrupted`, the thread is checkpointed, the wait survives a disconnect or a restart, and `welcome.pending` re-announces it on reconnect. Its `interrupt` frame carries `data.event` — the name it is waiting for — so a client knows to wait for the widget rather than render default Approve/Cancel chips.
+
+The pause the node holds *is* the binding, so nothing has to carry an interrupt id. The node re-runs from the top on resume, so journal your side effects and use literal chunk ids, exactly as around any other pause. While several pauses are open, ilmek requires them all answered at once — an interaction arriving then draws `error{incomplete_resume}`.
+
+### `mekik-event` — a click the graph should answer
+
+For the other case: a widget whose turn is long over, and a click that should start a new one.
+
+```ts
+mekik({
+    graph,
+    onGenUiEvent: (ev) =>
+        ev.eventType === "track_order" ? { input: `track ${(ev.payload as { id: string }).id}` } : undefined,
+});
+```
+
+```csharp
+new MekikOptions
+{
+    Graph = graph,
+    OnGenUiEvent = ev => ev switch
+    {
+        { EventType: "track_order", Payload: IReadOnlyDictionary<string, object?> p }
+            when p.GetValueOrDefault("id") is string id =>
+                new Dictionary<string, object?> { ["input"] = $"track {id}" },
+        _ => null,
+    },
+};
+```
+
+The handler is `input` for components: a mapper, not a place to do work. Side effects belong in the node the turn reaches, where the journal makes them exactly-once. The turn it starts is an ordinary turn — one at a time (`error{busy}`), never over an open pause (`error{interrupted}`), and it writes no `text` frame on the user's behalf, because a click is not something they said.
+
+The event carries `conversationId`, `userId`, `streamId`, `eventType`, the originating `component` when the client knows it, and the parsed `payload`.
+
+## Components the server defines
+
+Everything above names a component the **client** registered: a `ui` chunk is a
+name plus props, and someone had to compile that name into the page first. That
+makes every new widget a client release.
+
+`components` inverts it. The server ships the widget itself — markup, styles and
+prop defaults — as metadata; chativa registers each definition as a custom element
+and mounts it by name from then on. Adding a widget becomes a server deploy.
+
+```ts
+const deliveryCard = defineComponent({
+    name: "delivery-card",
+    template: `<div class="card">
+        <header><h3>{{title}}</h3><span class="badge">{{status}}</span></header>
+        {{#each lines}}<p>{{this.label}} — {{this.price}} ₺</p>{{/each}}
+        {{#if note}}<p class="note">{{note}}</p>{{/if}}
+        <button component-event="track_order" data-payload='{"id":"{{id}}"}'>Track</button>
+    </div>`,
+    css: `.card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; }`,
+    props: { id: "", title: "", status: "", note: "", lines: [] },
+});
+
+const app = mekik({ graph, components: [deliveryCard] });
+
+// …in a node — the same typed emitter `mekik.component` returns
+deliveryCard(ctx, { id: "ORD-42", title: "Order ORD-42", status: "Preparing", lines }, { id: "card-1" });
+```
+
+```csharp
+sealed class DeliveryCard : GenUiComponent
+{
+    public override string Name => "delivery-card";
+    public override string Template => "<h3>{{title}}</h3>";
+    public override IReadOnlyDictionary<string, object?>? Props =>
+        new Dictionary<string, object?> { ["title"] = "" };
+}
+
+var app = new MekikApp(new MekikOptions { Graph = graph, Components = [new DeliveryCard()] });
+new DeliveryCard().Emit(ctx, new Dictionary<string, object?> { ["title"] = "Order ORD-42" });
+```
+
+A `ComponentSpec` object, a `defineComponent` result, or a `GenUiComponent`
+subclass (instance or type) are all accepted. Duplicate names throw at startup.
+
+### The template language
+
+Markup, never code — a strict subset, and every interpolation is HTML-escaped
+before the client sanitizes the result again:
+
+| form | meaning |
+|---|---|
+| `{{path.to.value}}` | escaped interpolation |
+| `{{#if path}} … {{else}} … {{/if}}` | truthiness (empty string / empty array / `0` are false) |
+| `{{#each path}} … {{/each}}` | iteration, with `{{this}}`, `{{this.field}}`, `{{@index}}`, parent scope still visible |
+
+Interactions use the same attributes as any other component — `component-event`,
+`mekik-event`, `data-event`, and `<form …>` — so a server-defined widget gets the
+round trip [Bidirectional events](#bidirectional-events--genui_event) describes,
+`onEvent` included.
+
+### Sent once, cached by hash
+
+The catalog is versioned by a `sha256` over the canonical JSON of the definitions
+(sorted by name), so it travels once rather than on every connect:
+
+```
+client → hello              { …, componentsHash: "<cached>" }
+server → welcome            { … }
+server → genui_components   { hash, components: [ … ] }   // the hash moved
+                            { hash, unchanged: true }     // nothing changed, no markup
+```
+
+`componentsHash` rides on the `hello` frame the client already sends, so validating
+the cache costs no extra round trip. TypeScript and .NET mint the identical hash for
+identical definitions — a client can move between them without re-downloading.
+Change a template, and the next connect picks up the new markup.
+
+### Making an update visible
+
+Two rules, both learned the hard way:
+
+- **Pace the updates.** Chunks emitted back-to-back render as one state: the
+  element appears already finished. Put real time between them if the movement is
+  the point.
+- **Journal emissions that precede a pause.** A resume replays the node from the
+  top and emitting is a side effect, so wrap each beat in `ctx.step` /
+  `ctx.StepAsync` — otherwise the client is walked back through states it already
+  rendered. Use literal chunk ids across a pause; a counter-minted id drifts once
+  its call site stops running.
+
+```ts
+const phase = (ctx, name, emit) =>
+    ctx.step(name, async () => { await sleep(1800); emit(); return true; });
+
+await phase(ctx, "packing",    () => card(ctx, props("Preparing"),  { id: "card-1" }));
+await phase(ctx, "in_transit", () => card(ctx, props("In transit"), { id: "card-1" }));
+
+// the widget stays on screen while the chips render…
+const choice = await mekik.choose(ctx, "What should the courier do?", [
+    mekik.action("Hand it to me", "handover"),
+    mekik.action("Reschedule", "reschedule"),
+] as const);
+
+// …and the answer re-renders the element the user is already looking at
+card(ctx, props(choice === "handover" ? "Delivered" : "Rescheduled"), { id: "card-1" });
+```
+
+Runnable end to end: `ts/examples/server-components.ts`,
+`dotnet/examples/Mekik.ServerComponents`. Normative rules: PROTOCOL.md §10.
 
 ## Where to go next
 

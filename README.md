@@ -87,6 +87,7 @@ mekik/
     examples/concierge.ts # all three tool groups in one agent (single node)
     examples/routed-desk.ts # the same desk as a real graph: router + per-domain nodes
     examples/storefront.ts # rendering showcase: every typed component + message type
+    examples/server-components.ts # the backend defines the widget itself (§10)
   dotnet/
     src/Mekik.Core/            # mirror of @mekik/core
     src/Mekik.AspNetCore/      # app.MapMekik("/ws", app)
@@ -96,6 +97,7 @@ mekik/
     test/Mekik.Core.Tests/     # loads the SAME fixtures
     examples/Mekik.Examples    # mirror of the refund showcase
     examples/Mekik.LlmAgent    # mirror of the LLM-driven desk
+    examples/Mekik.ServerComponents # mirror of the server-defined components demo
 ```
 
 mekik depends on ilmek as a published package — [`@ilmek/core`](https://www.npmjs.com/package/@ilmek/core)
