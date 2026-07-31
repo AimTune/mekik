@@ -17,6 +17,9 @@ import {
     PROTOCOL_VERSION,
     ProtocolError,
     RESERVED_FRAME_TYPES,
+    sanitizeClientTools,
+    type ClientToolDefinition,
+    type ClientToolsFrame,
     type GenUIEventFrame,
     type OutgoingFrame,
     type PendingView,
@@ -79,10 +82,27 @@ export interface ConnectParams {
         meta?: Record<string, unknown>;
         /** Hash of the component catalog the client has cached (§10.2). */
         componentsHash?: string;
+        /** Tools this client can execute (§11.1). Inert unless {@link EngineConfig.clientTools} opts in. */
+        tools?: ClientToolDefinition[];
     };
     /** Raw credential (headers/query) for the Authenticator, if configured. */
     credential?: Credential;
 }
+
+/**
+ * Whether — and which — client-declared tools the server accepts (PROTOCOL.md
+ * §11.1). `true` accepts every well-formed declaration; a function is the
+ * allowlist form — it sees the sanitized declarations and returns the subset to
+ * accept (or `undefined` for none). Absent, client tool declarations are
+ * **ignored entirely**: the same opt-in posture as `acceptClientMeta`, because a
+ * declaration is client-controlled input that a model will read.
+ */
+export type ClientToolsPolicy =
+    | true
+    | ((
+          tools: ClientToolDefinition[],
+          conv: { conversationId: string; userId: string },
+      ) => ClientToolDefinition[] | undefined);
 
 /**
  * One graph-addressed interaction from a mounted GenUI component — what a
@@ -124,6 +144,8 @@ export interface EngineConfig {
     context?: (conv: { conversationId: string; userId: string }, turn: { text: string; meta?: Record<string, unknown> }) => Record<string, unknown>;
     /** Allowlist for client-supplied meta → `ctx.meta.client`. Default: drop everything. */
     acceptClientMeta?: (meta: Record<string, unknown>) => Record<string, unknown> | undefined;
+    /** Accept client-declared tools → `ctx.meta.clientTools` (§11). Default: ignore them. */
+    clientTools?: ClientToolsPolicy;
     /** Components the server defines itself, announced on connect (PROTOCOL.md §5). */
     components?: ComponentCatalog;
     /** Turn a component interaction into a graph input update, or undefined to ignore it (PROTOCOL.md §10.4). */
@@ -142,6 +164,13 @@ interface ConnState {
     conn: Connection;
     userId: string;
     claims?: Record<string, unknown>;
+    /**
+     * The tools this connection declared (§11.1), already sanitized and passed
+     * through the {@link ClientToolsPolicy}. `stamp` orders declarations across
+     * a conversation's connections: when two tabs declare the same tool name,
+     * the most recent declaration wins in the per-turn snapshot.
+     */
+    tools?: { defs: ClientToolDefinition[]; stamp: number };
 }
 
 /** Per-conversation, process-local runtime state. `seq` is the persistent-frame counter. */
@@ -160,6 +189,8 @@ export class ConversationEngine {
     private readonly connIndex = new Map<string, string>();
     /** This node's identity - stamped on published frames so we skip our own on the backplane. */
     private readonly nodeId = `node-${randomBytes(8).toString("base64url")}`;
+    /** Orders client tool declarations across connections (see ConnState.tools). */
+    private declStamp = 0;
 
     constructor(cfg: EngineConfig) {
         this.cfg = cfg;
@@ -190,8 +221,14 @@ export class ConversationEngine {
         const { conversationId, watermarkReset } = await this.resolveConversation(hello.conversationId, userId);
 
         const live = await this.ensureLive(conversationId);
-        live.connections.set(conn.id, { conn, userId, ...(claims ? { claims } : {}) });
+        const state: ConnState = { conn, userId, ...(claims ? { claims } : {}) };
+        live.connections.set(conn.id, state);
         this.connIndex.set(conn.id, conversationId);
+
+        // Client tool declarations (§11.1). Inert unless the app opted in - the
+        // same default-drop posture as client meta, because a declaration is
+        // client-controlled input a model will read.
+        if (hello.tools !== undefined) this.applyClientTools(state, hello.tools, conversationId, userId);
 
         const pending = await this.cfg.adapter.pending(conversationId);
         const pendingViews: PendingView[] = pending.map((p) => ({ id: p.id, data: interruptFrameData(p) }));
@@ -282,7 +319,48 @@ export class ConversationEngine {
                 return this.handleAbort(convId);
             case "genui_event":
                 return this.handleGenUIEvent(conn, convId, frame);
+            case "client_tools":
+                return this.handleClientTools(conn, convId, frame);
         }
+    }
+
+    /**
+     * Replace this connection's declared client tools (§11.1). The frame carries
+     * the connection's whole new set; `[]` withdraws every tool. Takes effect on
+     * the next turn — an in-flight run keeps the snapshot it started with.
+     */
+    private handleClientTools(conn: Connection, convId: string, frame: ClientToolsFrame): void {
+        const state = this.live.get(convId)?.connections.get(conn.id);
+        if (!state) return;
+        this.applyClientTools(state, frame.tools, convId, state.userId);
+    }
+
+    /** Sanitize a declaration, pass it through the policy, and store it on the connection. */
+    private applyClientTools(state: ConnState, raw: unknown, convId: string, userId: string): void {
+        const policy = this.cfg.clientTools;
+        if (policy === undefined) return; // opted out: declarations are inert
+        let defs = sanitizeClientTools(raw);
+        if (policy !== true) defs = policy(defs, { conversationId: convId, userId }) ?? [];
+        state.tools = { defs, stamp: ++this.declStamp };
+    }
+
+    /**
+     * The conversation's client tools as one turn sees them (§11.2): the union of
+     * every live connection's declaration, deduped by name — the most recent
+     * declaration of a name wins. Undefined when nothing is declared (or the app
+     * never opted in), so `ctx.meta` stays clean for the common case.
+     */
+    private clientToolsFor(convId: string): ClientToolDefinition[] | undefined {
+        const live = this.live.get(convId);
+        if (!live) return undefined;
+        const declared = [...live.connections.values()]
+            .map((s) => s.tools)
+            .filter((t): t is { defs: ClientToolDefinition[]; stamp: number } => t !== undefined)
+            .sort((a, b) => a.stamp - b.stamp);
+        if (declared.length === 0) return undefined;
+        const byName = new Map<string, ClientToolDefinition>();
+        for (const { defs } of declared) for (const def of defs) byName.set(def.name, def);
+        return byName.size > 0 ? [...byName.values()] : undefined;
     }
 
     // ── turns ─────────────────────────────────────────────────────────────────
@@ -496,6 +574,10 @@ export class ConversationEngine {
             const client = this.cfg.acceptClientMeta(turn.meta);
             if (client !== undefined) meta.client = client;
         }
+        // The turn's client-tool snapshot (§11.2): taken here, at run start, so a
+        // set that changes mid-run does not shift under the node's feet.
+        const clientTools = this.clientToolsFor(convId);
+        if (clientTools !== undefined) meta.clientTools = clientTools;
         return meta;
     }
 

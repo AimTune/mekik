@@ -31,6 +31,7 @@ const sidebars: SidebarsConfig = {
         "authoring/messages",
         "authoring/tools",
         "authoring/human-in-the-loop",
+        "authoring/client-tools",
       ],
     },
     {

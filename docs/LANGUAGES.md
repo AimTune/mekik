@@ -17,6 +17,11 @@ mekik ships two implementations that speak the identical `mekik/1` wire
 | authoring helpers | `mekik.text / ui / event / tool / approve` | `Shuttle.Text / Ui / Event / Tool / Approve` |
 | button chips | `mekik.action` / `mekik.choose` | `Shuttle.Action` / `Shuttle.Choose` |
 | managed ui instance | `mekik.mount` → `UiHandle` (`id`, `update`) | `Shuttle.Mount` → `UiHandle` (`Id`, `Update`) |
+| client tools read (§11) | `mekik.clientTools(ctx, {tags?, mode?})` | `Shuttle.ClientTools(ctx, tags?, mode?)` |
+| client tool call (§11) | `mekik.callClientTool(ctx, name, params?, {key?})` | `Shuttle.CallClientToolAsync<T>(ctx, name, params?, key?)` |
+| client tools accept | `MekikOptions.clientTools: true \| fn` | `MekikOptions.ClientTools` (`ClientTools.AcceptAll` / `ClientToolsPolicy`) |
+| client tool sanitize | `sanitizeClientTools` | `ClientTools.Sanitize` |
+| client tool model wrap | `withClientTools` (`@mekik/langchain`) | `ClientToolFunctions.Wrap` (`Mekik.Agents`) |
 | typed component | `mekik.component<P>(name)` | pass the name to `Shuttle.Ui` / `Shuttle.Mount` |
 | built-in components | `mekik.genui.*` | `GenUI.*` (+ `GenUI.Names.*`) |
 | rich messages | `mekik.message` / `mekik.messageKind` / `mekik.messages.*` | `Shuttle.Message` / `Messages.*` |
@@ -49,12 +54,17 @@ mekik ships two implementations that speak the identical `mekik/1` wire
    in TS and a `CancellationTokenSource`/`CancellationToken` in .NET (which is what
    ilmek's .NET run loop already takes).
 
-4. **`Choose`'s answer type.** TypeScript infers it from the options themselves (a
+4. **The client-tools opt-in.** TypeScript spells "accept everything" as the
+   literal `clientTools: true`; C# has no boolean-or-delegate union, so .NET
+   assigns the identity policy `ClientTools.AcceptAll` to the same effect. The
+   function/delegate form is identical in both.
+
+5. **`Choose`'s answer type.** TypeScript infers it from the options themselves (a
    `const` type parameter turns `["S", "M", "L"]` into `"S" | "M" | "L"`). C# has no
    literal-type inference, so `Shuttle.Choose<T>` takes the answer type explicitly —
    same contract, stated instead of inferred.
 
-5. **The interrupt rethrow rule.** In .NET, any `try/catch` in the adapter or
+6. **The interrupt rethrow rule.** In .NET, any `try/catch` in the adapter or
    helpers that wraps node execution MUST rethrow when the exception is an
    `InterruptSignalException` — a blanket `catch (Exception)` would swallow the
    pause. `Shuttle.Tool` does this. (In TS the pause is a thrown non-`Error` value, so

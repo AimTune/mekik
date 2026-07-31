@@ -37,8 +37,8 @@ import { AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage } f
 import type { BaseMessage } from "@langchain/core/messages";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 
-import { approve as mekikApprove, nextToolCallId, text as emitText, toolTrace } from "@mekik/core";
-import type { MessageAction, ToolCall, UiRef } from "@mekik/core";
+import { approve as mekikApprove, callClientTool, clientTools, nextToolCallId, text as emitText, toolTrace } from "@mekik/core";
+import type { ClientToolDefinition, ClientToolFilter, MessageAction, ToolCall, UiRef } from "@mekik/core";
 import type { Context } from "@ilmek/core";
 
 /** What a redacted field is replaced with in a surfaced trace. */
@@ -144,6 +144,58 @@ function wrapOne(
         },
     });
 
+    return wrapped as unknown as StructuredToolInterface;
+}
+
+// ── client-declared tools (PROTOCOL.md §11) ───────────────────────────────────
+
+/**
+ * The **client's** declared tools as LangChain tools, so a model can call the
+ * UI the same way it calls a server tool (PROTOCOL.md §11).
+ *
+ * @remarks
+ * Reads `mekik.clientTools(ctx, filter)` — the tools the connected frontend
+ * declared and the server accepted — and wraps each one in a
+ * `DynamicStructuredTool` whose executor is `mekik.callClientTool`. A
+ * `"call"`-mode tool parks the run until the client's handler answers (the
+ * pause is durable, like any mekik interrupt); a `"notify"`-mode tool streams
+ * the invocation and returns a delivery note the model can read. A handler
+ * error comes back as an error observation (the agent loop stays alive), and
+ * the `tool_call` running → completed/error trace is emitted for you.
+ *
+ * Use `filter.tags` to scope which of the client's tools this node exposes:
+ *
+ * ```ts
+ * const tools = [
+ *     ...withMekikTools(ctx, serverTools, policy),
+ *     ...withClientTools(ctx, { tags: ["billing"] }),
+ * ];
+ * ```
+ */
+export function withClientTools(ctx: Context<any>, filter: ClientToolFilter = {}): StructuredToolInterface[] {
+    return clientTools(ctx, filter).map((def) => wrapClientTool(ctx, def));
+}
+
+function wrapClientTool(ctx: Context<any>, def: ClientToolDefinition): StructuredToolInterface {
+    const wrapped = new DynamicStructuredTool({
+        name: def.name,
+        description: def.description ?? `Invoke the client's "${def.name}" tool.`,
+        // The declared JSON Schema is what the model sees. LangChain ≥0.3
+        // accepts a JSON schema object here directly.
+        schema: (def.parameters ?? { type: "object", properties: {} }) as never,
+        func: async (input: unknown) => {
+            try {
+                const result = await callClientTool(ctx, def.name, asRecord(input));
+                if (result === undefined) return `Delivered ${def.name} to the client.`;
+                return typeof result === "string" ? result : JSON.stringify(result);
+            } catch (err) {
+                if (isInterruptLike(err)) throw err; // the pause IS the mechanism - never swallow it
+                // A failed client handler is an observation, not a crash: the
+                // model reads the error and can route around it.
+                return `Error from client tool ${def.name}: ${err instanceof Error ? err.message : String(err)}`;
+            }
+        },
+    });
     return wrapped as unknown as StructuredToolInterface;
 }
 

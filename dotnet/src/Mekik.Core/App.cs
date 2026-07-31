@@ -18,6 +18,24 @@ public sealed record MekikOptions
     /// <summary>Allowlist client-supplied meta into `ctx.Meta["client"]`. Default: drop everything.</summary>
     public Func<IReadOnlyDictionary<string, object?>, IReadOnlyDictionary<string, object?>?>? AcceptClientMeta { get; init; }
     /// <summary>
+    /// Accept <b>client-declared tools</b> into <c>ctx.Meta["clientTools"]</c>
+    /// (PROTOCOL.md §11). Default: off — declarations in <c>hello.tools</c> /
+    /// <c>client_tools</c> frames are ignored entirely, mirroring
+    /// <see cref="AcceptClientMeta"/>'s drop-by-default posture, because a
+    /// declaration is client-controlled input a model will read.
+    /// </summary>
+    /// <remarks>
+    /// Assign <see cref="Mekik.ClientTools.AcceptAll"/> to accept every well-formed
+    /// declaration, or a filter to pin names, strip tags, or cap the count. Nodes
+    /// read the accepted set with
+    /// <see cref="Shuttle.ClientTools(Ilmek.IContext, IReadOnlyList{string}?, string?)"/>
+    /// and invoke one with <see cref="Shuttle.CallClientToolAsync{T}"/>.
+    /// </remarks>
+    /// <example><code>
+    /// ClientTools = (tools, _) => tools.Where(t => t.Name is "show_map" or "pick_date").ToList(),
+    /// </code></example>
+    public ClientToolsPolicy? ClientTools { get; init; }
+    /// <summary>
     /// What the bot sends once when a fresh conversation first connects (before any turn)
     /// — a greeting / instructions. Not sent on reconnect (the transcript already has it).
     /// Return <c>null</c> for no greeting.
@@ -119,6 +137,7 @@ public sealed class MekikApp
             Reply = options.Reply,
             Context = options.Context,
             AcceptClientMeta = options.AcceptClientMeta,
+            ClientTools = options.ClientTools,
             Greeting = options.Greeting,
             Components = options.Components is { Count: > 0 } ? new ComponentCatalog(options.Components) : null,
             OnGenUiEvent = options.OnGenUiEvent,

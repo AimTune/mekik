@@ -5,7 +5,7 @@
 import { InMemoryCheckpointer, type Checkpointer, type CompiledGraph } from "@ilmek/core";
 
 import { IlmekAdapter } from "./adapter.ts";
-import { ConversationEngine, randomMinter, type ConnectParams, type Connection, type EngineConfig, type GenUiEvent, type Greeting } from "./engine.ts";
+import { ConversationEngine, randomMinter, type ClientToolsPolicy, type ConnectParams, type Connection, type EngineConfig, type GenUiEvent, type Greeting } from "./engine.ts";
 import type { IdMinter } from "./mapper.ts";
 import type { TextInFrame } from "./protocol.ts";
 import type { Authenticator } from "./auth.ts";
@@ -34,6 +34,24 @@ export interface MekikOptions {
     ) => Record<string, unknown>;
     /** Allowlist client-supplied meta into `ctx.meta.client`. Default: drop everything. */
     acceptClientMeta?: (meta: Record<string, unknown>) => Record<string, unknown> | undefined;
+    /**
+     * Accept **client-declared tools** into `ctx.meta.clientTools` (PROTOCOL.md §11).
+     * Default: off — declarations in `hello.tools` / `client_tools` frames are
+     * ignored entirely, mirroring `acceptClientMeta`'s drop-by-default posture,
+     * because a declaration is client-controlled input a model will read.
+     *
+     * Pass `true` to accept every well-formed declaration, or a function to
+     * filter — pin names, strip tags, cap the count:
+     *
+     * @example
+     * ```ts
+     * clientTools: (tools) => tools.filter((t) => ["show_map", "pick_date"].includes(t.name)),
+     * ```
+     *
+     * Nodes read the accepted set with `mekik.clientTools(ctx, { tags })` and
+     * invoke one with `mekik.callClientTool(ctx, name, params)`.
+     */
+    clientTools?: ClientToolsPolicy;
     /**
      * What the bot sends once when a fresh conversation first connects (before any
      * turn) — a greeting / instructions. Not sent on reconnect (the transcript
@@ -152,6 +170,7 @@ export class MekikApp {
             ...(options.reply ? { reply: options.reply } : {}),
             ...(options.context ? { context: options.context } : {}),
             ...(options.acceptClientMeta ? { acceptClientMeta: options.acceptClientMeta } : {}),
+            ...(options.clientTools !== undefined ? { clientTools: options.clientTools } : {}),
             ...(options.greeting ? { greeting: options.greeting } : {}),
             ...(options.components?.length ? { components: new ComponentCatalog(options.components) } : {}),
             ...(options.onGenUiEvent ? { onGenUiEvent: options.onGenUiEvent } : {}),

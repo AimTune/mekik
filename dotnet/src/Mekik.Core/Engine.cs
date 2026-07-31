@@ -23,6 +23,12 @@ public sealed record HelloInfo
     public IReadOnlyDictionary<string, object?>? Meta { get; init; }
     /// <summary>Hash of the component catalog this client has cached (PROTOCOL.md §10.2).</summary>
     public string? ComponentsHash { get; init; }
+    /// <summary>
+    /// Tools this client can execute (PROTOCOL.md §11.1), as raw parsed JSON —
+    /// the engine sanitizes with <see cref="ClientTools.Sanitize"/>. Inert unless
+    /// <see cref="EngineConfig.ClientTools"/> opts in.
+    /// </summary>
+    public IReadOnlyList<object?>? Tools { get; init; }
 }
 
 public sealed record ConnectParams
@@ -69,6 +75,8 @@ public sealed record EngineConfig
     public Func<IReadOnlyDictionary<string, object?>, string?>? Reply { get; init; }
     public Func<(string ConversationId, string UserId), (string Text, IReadOnlyDictionary<string, object?>? Meta), IReadOnlyDictionary<string, object?>>? Context { get; init; }
     public Func<IReadOnlyDictionary<string, object?>, IReadOnlyDictionary<string, object?>?>? AcceptClientMeta { get; init; }
+    /// <summary>Accept client-declared tools → <c>ctx.Meta["clientTools"]</c> (PROTOCOL.md §11). Default: ignore them.</summary>
+    public ClientToolsPolicy? ClientTools { get; init; }
     /// <summary>
     /// A one-time bot greeting sent when a fresh conversation first connects (PROTOCOL.md §1).
     /// Returns a <see cref="string"/> (one <c>text</c> frame), a described rich message
@@ -100,6 +108,13 @@ public sealed class ConversationEngine
         public required IConnection Conn { get; init; }
         public required string UserId { get; init; }
         public IReadOnlyDictionary<string, object?>? Claims { get; init; }
+        /// <summary>
+        /// The tools this connection declared (§11.1), already sanitized and passed
+        /// through the <see cref="ClientToolsPolicy"/>. <c>Stamp</c> orders
+        /// declarations across a conversation's connections: when two tabs declare
+        /// the same tool name, the most recent declaration wins in the snapshot.
+        /// </summary>
+        public (IReadOnlyList<ClientToolDefinition> Defs, long Stamp)? Tools { get; set; }
     }
 
     private sealed class Live
@@ -119,6 +134,8 @@ public sealed class ConversationEngine
     private readonly object _registryLock = new();
     /// <summary>This node's identity — stamped on published frames so we skip our own on the backplane.</summary>
     private readonly string _nodeId = $"node-{Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant()}";
+    /// <summary>Orders client tool declarations across connections (see ConnState.Tools).</summary>
+    private long _declStamp;
 
     public ConversationEngine(EngineConfig cfg) => _cfg = cfg;
 
@@ -150,11 +167,17 @@ public sealed class ConversationEngine
         var (conversationId, watermarkReset) = await ResolveConversationAsync(hello.ConversationId, userId).ConfigureAwait(false);
 
         var live = await EnsureLiveAsync(conversationId).ConfigureAwait(false);
+        var state = new ConnState { Conn = conn, UserId = userId, Claims = claims };
         lock (live.Gate)
         {
-            live.Connections[conn.Id] = new ConnState { Conn = conn, UserId = userId, Claims = claims };
+            live.Connections[conn.Id] = state;
         }
         lock (_registryLock) _connIndex[conn.Id] = conversationId;
+
+        // Client tool declarations (§11.1). Inert unless the app opted in — the
+        // same default-drop posture as client meta, because a declaration is
+        // client-controlled input a model will read.
+        if (hello.Tools is not null) ApplyClientTools(state, hello.Tools, conversationId, userId);
 
         var pending = await _cfg.Adapter.PendingAsync(conversationId).ConfigureAwait(false);
         var pendingViews = pending
@@ -290,7 +313,65 @@ public sealed class ConversationEngine
             case "resume": await HandleResumeAsync(conn, convId, frame).ConfigureAwait(false); break;
             case "abort": HandleAbort(convId); break;
             case "genui_event": await HandleGenUIEventAsync(conn, convId, frame).ConfigureAwait(false); break;
+            case "client_tools": HandleClientTools(conn, convId, frame); break;
         }
+    }
+
+    /// <summary>
+    /// Replace this connection's declared client tools (§11.1). The frame carries
+    /// the connection's whole new set; <c>[]</c> withdraws every tool. Takes effect
+    /// on the next turn — an in-flight run keeps the snapshot it started with.
+    /// </summary>
+    private void HandleClientTools(IConnection conn, string convId, IReadOnlyDictionary<string, object?> frame)
+    {
+        if (!_live.TryGetValue(convId, out var live)) return;
+        ConnState? state;
+        lock (live.Gate) live.Connections.TryGetValue(conn.Id, out state);
+        if (state is null) return;
+        ApplyClientTools(state, frame.GetValueOrDefault("tools"), convId, state.UserId);
+    }
+
+    /// <summary>Sanitize a declaration, pass it through the policy, and store it on the connection.</summary>
+    private void ApplyClientTools(ConnState state, object? raw, string convId, string userId)
+    {
+        var policy = _cfg.ClientTools;
+        if (policy is null) return; // opted out: declarations are inert
+        var defs = Mekik.ClientTools.Sanitize(raw);
+        defs = policy(defs, (convId, userId)) ?? [];
+        state.Tools = (defs, Interlocked.Increment(ref _declStamp));
+    }
+
+    /// <summary>
+    /// The conversation's client tools as one turn sees them (§11.2): the union of
+    /// every live connection's declaration, deduped by name — the most recent
+    /// declaration of a name wins, keeping the position of its first appearance.
+    /// Null when nothing is declared (or the app never opted in), so <c>ctx.Meta</c>
+    /// stays clean for the common case.
+    /// </summary>
+    private IReadOnlyList<ClientToolDefinition>? ClientToolsFor(string convId)
+    {
+        if (!_live.TryGetValue(convId, out var live)) return null;
+        List<(IReadOnlyList<ClientToolDefinition> Defs, long Stamp)> declared;
+        lock (live.Gate)
+        {
+            declared = live.Connections.Values
+                .Where(s => s.Tools is not null)
+                .Select(s => s.Tools!.Value)
+                .OrderBy(t => t.Stamp)
+                .ToList();
+        }
+        if (declared.Count == 0) return null;
+        var order = new List<string>();
+        var byName = new Dictionary<string, ClientToolDefinition>();
+        foreach (var (defs, _) in declared)
+        {
+            foreach (var def in defs)
+            {
+                if (!byName.ContainsKey(def.Name)) order.Add(def.Name);
+                byName[def.Name] = def;
+            }
+        }
+        return order.Count > 0 ? order.Select(n => byName[n]).ToList() : null;
     }
 
     // ── turns ─────────────────────────────────────────────────────────────────
@@ -543,6 +624,9 @@ public sealed class ConversationEngine
             var client = _cfg.AcceptClientMeta(clientMeta);
             if (client is not null) meta["client"] = client;
         }
+        // The turn's client-tool snapshot (§11.2): taken here, at run start, so a
+        // set that changes mid-run does not shift under the node's feet.
+        if (ClientToolsFor(convId) is { } clientTools) meta["clientTools"] = clientTools;
         return meta;
     }
 

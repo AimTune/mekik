@@ -28,7 +28,7 @@ using Mekik.Agents;
     })))
 ```
 
-The loop is budgeted by `MaxTurns` — model↔tool round-trips, default 25. Individual tool invocations do **not** consume turns: a round that fires five tools still costs one turn. `MaxToolCalls` (default 25) separately caps total tool invocations; when either budget runs out the loop settles with `BudgetReply`.
+The loop is budgeted by `MaxTurns` — model↔tool round-trips, default 25. Individual tool invocations do **not** consume turns: a round that fires five tools still costs one turn. `MaxToolCalls` (default 25) separately caps total tool invocations; rather than cutting a batch off halfway, the loop settles with `BudgetReply` before executing a batch that would overrun the cap. Node-level looping stays budgeted by ilmek's `RecursionLimit`, which tool calls never consume.
 
 You return the result as your node's reply (`Update.Of("reply", …)`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `RunAsync` returns an **empty string** — `Update.Of("reply", "")` emits nothing extra, no duplicate. With `Stream = false`, it returns the full text for the consolidated `text` reply. A model's function-call arguments and results (which `AIFunctionFactory` marshals through `System.Text.Json` as `JsonElement`) are canonicalized into the trace automatically — no plain-value converter needed. Reach for [`MekikTools.Wrap`](#mekiktoolswrap) directly when you need to drive the loop yourself.
 
@@ -50,6 +50,43 @@ var response = await chatClient.GetResponseAsync(
 ```
 
 Each wrapper, when the model calls it: emits a `tool_call` trace (unless `Show = false`), optionally pauses the graph for a human, and executes inside `ctx.StepAsync` so it runs exactly once across an interrupt/resume.
+
+## `ClientToolFunctions.Wrap` — the frontend's tools
+
+The connected **client** can declare tools of its own — open its date picker, render one of its cards — via [client tools](../authoring/client-tools.md) (PROTOCOL.md §11). `ClientToolFunctions.Wrap` turns the turn's accepted declarations into `AIFunction`s so the model calls the UI the same way it calls a server function. It is the .NET mirror of `@mekik/langchain`'s `withClientTools`:
+
+```csharp
+using Mekik.Agents;
+
+.Node("agent", async (State state, IContext ctx) =>
+{
+    var tools = MekikTools.Wrap(ctx, serverFunctions, policies)       // the server's own functions
+        .Concat(ClientToolFunctions.Wrap(ctx, tags: ["billing"]))     // the frontend's, scoped by tag
+        .ToList();
+
+    return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
+    {
+        System = SYSTEM,
+        Input  = state.Get<string>("input") ?? string.Empty,
+        Tools  = tools,
+    }));
+})
+```
+
+Signature:
+
+```csharp
+static IReadOnlyList<AIFunction> Wrap(IContext ctx, IReadOnlyList<string>? tags = null, string? mode = null);
+```
+
+Each wrapper's executor is [`Shuttle.CallClientToolAsync`](../authoring/client-tools.md#calling):
+
+- a `"call"`-mode tool **parks the loop durably** — the pause is an ilmek interrupt, the agent's decisions are journaled, and a resume replays them instead of re-invoking the model;
+- a `"notify"`-mode tool returns a delivery note (`"Delivered <name> to the client."`) the model can read;
+- a failed client handler comes back as an error *observation* (`"Error from client tool <name>: …"`), so the loop stays alive — the underlying `InterruptSignalException` is always rethrown, never swallowed;
+- the declared JSON Schema is exposed verbatim through `AIFunction.JsonSchema` (canonicalized with `Json.Canonicalize`, so it is byte-identical to what the TypeScript side would present).
+
+`tags` is the scoping lever: the frontend tags the tools it wants restricted to particular nodes, untagged tools are visible everywhere, and the server's [`MekikOptions.ClientTools` policy](../authoring/client-tools.md#accepting-the-server-side--off-by-default) has already allowlisted the whole set before this call ever sees it. Runnable: [`dotnet/examples/Mekik.ClientTools`](https://github.com/AimTune/mekik/tree/main/dotnet/examples/Mekik.ClientTools).
 
 ## Why wrapping
 
@@ -120,4 +157,5 @@ Both are in `Mekik.Core` (`Shuttle`), mirrored in TypeScript as `mekik.authClaim
 
 - [**Semantic Kernel**](./semantic-kernel.md) — the SK integration, a filter rather than a wrapper.
 - [**Agent integrations → Overview**](./overview.md) — the shared policy shape.
+- [**Authoring → Client tools**](../authoring/client-tools.md) — declaring, accepting, and calling the frontend's tools.
 - [**Parity → TypeScript ↔ .NET**](../parity/languages.md) — how `Mekik.Agents` mirrors `@mekik/langchain`.

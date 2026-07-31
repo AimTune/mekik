@@ -28,12 +28,21 @@ public static class Protocol
     /// </summary>
     public static readonly IReadOnlySet<string> ReservedFrameTypes = new HashSet<string>
     {
-        "hello", "welcome", "text", "resume", "genui_event", "abort",
+        "hello", "welcome", "text", "resume", "genui_event", "client_tools", "abort",
         "tool_call", "genui", "genui_components", "interrupt", "interrupt_resolved", "run", "error", "typing",
     };
 
+    /// <summary>
+    /// The reserved genui <b>event-chunk name</b> that carries a fire-and-forget
+    /// client tool invocation (PROTOCOL.md §11.3):
+    /// <c>{type:"event", name:"client_tool", payload:{name, params?}}</c>. A client
+    /// routes chunks with this name to its tool registry instead of the mounted
+    /// components.
+    /// </summary>
+    public const string ClientToolEvent = "client_tool";
+
     private static readonly IReadOnlySet<string> IncomingTypes =
-        new HashSet<string> { "hello", "text", "resume", "genui_event", "abort" };
+        new HashSet<string> { "hello", "text", "resume", "genui_event", "client_tools", "abort" };
 
     /// <summary>
     /// True for a rich message frame (PROTOCOL.md §4.5): the text envelope under a
@@ -87,6 +96,10 @@ public static class Protocol
                     throw new ProtocolException("bad_request", "genui_event requires streamId and eventType strings");
                 if (frame.GetValueOrDefault("scope") is { } scope && scope is not ("component" or "graph"))
                     throw new ProtocolException("bad_request", "genui_event scope must be \"component\" or \"graph\"");
+                break;
+            case "client_tools":
+                if (frame.GetValueOrDefault("tools") is not IReadOnlyList<object?>)
+                    throw new ProtocolException("bad_request", "client_tools frame requires tools: array");
                 break;
         }
 

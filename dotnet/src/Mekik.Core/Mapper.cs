@@ -177,7 +177,7 @@ public sealed class TurnMapper
 
     // ── interrupt payload wrapping (PROTOCOL.md §4.2) ─────────────────────────
 
-    /// <summary>Split an interrupt payload into `{ payload, ui?, actions?, event? }` (public for `welcome.pending`).</summary>
+    /// <summary>Split an interrupt payload into `{ payload, ui?, actions?, event?, tool? }` (public for `welcome.pending`).</summary>
     public static Dictionary<string, object?> InterruptFrameData(Pending p) => Unwrap(p.Payload);
 
     /// <summary>
@@ -201,6 +201,11 @@ public sealed class TurnMapper
             if (meta.GetValueOrDefault("ui") is { } ui) data["ui"] = ui;
             if (meta.GetValueOrDefault("actions") is { } actions) data["actions"] = actions;
             if (meta.GetValueOrDefault("event") is string ev) data["event"] = ev;
+            // A client tool call (§11.3) survives only in its well-formed shape — the
+            // allowlist is what keeps a hand-built $mekik bag from leaking junk fields.
+            if (meta.GetValueOrDefault("tool") is IReadOnlyDictionary<string, object?> tool &&
+                tool.GetValueOrDefault("name") is string)
+                data["tool"] = tool;
             return data;
         }
         return new Dictionary<string, object?> { ["payload"] = payload };

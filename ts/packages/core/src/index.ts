@@ -29,7 +29,7 @@
 import { createMekikApp } from "./app.ts";
 import { component, genui } from "./genui.ts";
 import { message, messageKind, messageSpec, messages } from "./messages.ts";
-import { action, approve, authClaims, choose, claimStrings, event, mount, onEvent, streamText, text, tool, ui } from "./helpers.ts";
+import { action, approve, authClaims, callClientTool, choose, claimStrings, clientTools, event, mount, onEvent, streamText, text, tool, ui } from "./helpers.ts";
 
 /** The app factory with the authoring helpers attached (PROTOCOL.md §6). */
 export const mekik = Object.assign(createMekikApp, {
@@ -43,6 +43,8 @@ export const mekik = Object.assign(createMekikApp, {
     onEvent,
     action,
     choose,
+    clientTools,
+    callClientTool,
     component,
     genui,
     message,
@@ -60,7 +62,7 @@ export { GenUiComponent, ComponentCatalog, defineComponent, toComponentDefinitio
 export type { ComponentSpec, ComponentSource, DefinedComponent } from "./components.ts";
 
 export { ConversationEngine, randomMinter } from "./engine.ts";
-export type { Connection, ConnectParams, EngineConfig, GenUiEvent, Greeting } from "./engine.ts";
+export type { ClientToolsPolicy, Connection, ConnectParams, EngineConfig, GenUiEvent, Greeting } from "./engine.ts";
 
 export { IlmekAdapter } from "./adapter.ts";
 export type { RunContext } from "./adapter.ts";
@@ -69,8 +71,8 @@ export { TurnMapper, eventToFrames, unwrapInterrupt, interruptFrameData } from "
 export type { IdMinter, TurnMapperDeps } from "./mapper.ts";
 
 // The helpers are also available as named imports, for callers who prefer them.
-export { action, approve, authClaims, choose, claimStrings, event, mount, onEvent, streamText, text, tool, ui } from "./helpers.ts";
-export type { ActionOf, ApproveOptions, ChoiceOption, ChoiceValue, ChooseOptions, ChunkOptions, OnEventOptions, UiHandle } from "./helpers.ts";
+export { action, approve, authClaims, callClientTool, choose, claimStrings, clientTools, event, mount, onEvent, streamText, text, tool, ui } from "./helpers.ts";
+export type { ActionOf, ApproveOptions, CallClientToolOptions, ChoiceOption, ChoiceValue, ChooseOptions, ChunkOptions, ClientToolFilter, OnEventOptions, UiHandle } from "./helpers.ts";
 
 // Typed rich messages: the factory and chativa's built-in message types.
 export { message, messageKind, messageSpec, messages } from "./messages.ts";
@@ -126,6 +128,7 @@ export { nextToolCallId, toolTrace } from "./helpers.ts";
 export {
     AUTH_CLOSE_CODE,
     canonicalize,
+    CLIENT_TOOL_EVENT,
     isMessageFrame,
     isPersistent,
     parseIncoming,
@@ -133,9 +136,14 @@ export {
     PROTOCOL_VERSION,
     ProtocolError,
     RESERVED_FRAME_TYPES,
+    sanitizeClientTools,
 } from "./protocol.ts";
 export type {
     AIChunk,
+    ClientToolCall,
+    ClientToolDefinition,
+    ClientToolMode,
+    ClientToolsFrame,
     ErrorFrame,
     Frame,
     GenUIEventFrame,
