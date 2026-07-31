@@ -104,6 +104,7 @@ public static class MekikAspNetCore
                 Token = h.GetValueOrDefault("token") as string ?? hello.Token,
                 Meta = h.GetValueOrDefault("meta") as IReadOnlyDictionary<string, object?>,
                 ComponentsHash = h.GetValueOrDefault("componentsHash") as string ?? hello.ComponentsHash,
+                Tools = h.GetValueOrDefault("tools") as IReadOnlyList<object?>,
             };
         }
 

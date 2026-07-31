@@ -53,6 +53,15 @@ page applies unchanged: it is an ordinary interrupt, durable and replay-safe.
 Full routing rules (`component-event` vs `mekik-event`): [`docs/GENUI.md`](GENUI.md)
 and PROTOCOL.md §10.4.
 
+### …or for the client's own tool
+
+`mekik.callClientTool` (`Shuttle.CallClientToolAsync`) is the third answerer:
+the pause is resolved by a **tool handler the frontend registered** — open a
+picker, read the device, render a card — rather than by chips or a widget
+button. Same durable interrupt underneath; the frame carries `data.tool` and
+the client answers with the tool's result. Authoring guide:
+[`docs/CLIENT-TOOLS.md`](CLIENT-TOOLS.md), wire rules: PROTOCOL.md §11.
+
 ## Buttons, typed (no hand-written JSON)
 
 When the pause is really just "pick one of these buttons", skip `approve`'s

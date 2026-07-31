@@ -12,6 +12,7 @@ import { isToken, type IlmekEvent, type Pending } from "@ilmek/core";
 import { RESERVED_FRAME_TYPES } from "./protocol.ts";
 import type {
     AIChunk,
+    ClientToolCall,
     GenUIFrame,
     InterruptFrame,
     MessageAction,
@@ -81,19 +82,24 @@ export function unwrapInterrupt(payload: unknown): {
     ui?: UiRef;
     actions?: MessageAction[];
     event?: string;
+    tool?: ClientToolCall;
 } {
     if (!isRecord(payload) || !isRecord(payload[MEKIK_KEY])) {
         return { payload };
     }
-    const meta = payload[MEKIK_KEY] as { ui?: UiRef; actions?: MessageAction[]; event?: string };
+    const meta = payload[MEKIK_KEY] as { ui?: UiRef; actions?: MessageAction[]; event?: string; tool?: unknown };
     // Strip the reserved key from what the human sees; keep everything else.
     const rest: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(payload)) if (k !== MEKIK_KEY) rest[k] = v;
+    // A client tool call (§11.3) survives only in its well-formed shape - the
+    // allowlist is what keeps a hand-built $mekik bag from leaking junk fields.
+    const tool = isRecord(meta.tool) && typeof meta.tool.name === "string" ? (meta.tool as unknown as ClientToolCall) : undefined;
     return {
         payload: rest,
         ...(meta.ui !== undefined ? { ui: meta.ui } : {}),
         ...(meta.actions !== undefined ? { actions: meta.actions } : {}),
         ...(typeof meta.event === "string" ? { event: meta.event } : {}),
+        ...(tool !== undefined ? { tool } : {}),
     };
 }
 
@@ -106,12 +112,13 @@ export const awaitedEvent = (p: Pending): string | undefined => unwrapInterrupt(
 
 /** Build the `interrupt` frame (or its `welcome.pending` view minus seq) for one pending pause. */
 export function interruptFrameData(p: Pending): InterruptFrame["data"] {
-    const { payload, ui, actions, event } = unwrapInterrupt(p.payload);
+    const { payload, ui, actions, event, tool } = unwrapInterrupt(p.payload);
     return {
         payload,
         ...(ui !== undefined ? { ui } : {}),
         ...(actions !== undefined ? { actions } : {}),
         ...(event !== undefined ? { event } : {}),
+        ...(tool !== undefined ? { tool } : {}),
     };
 }
 

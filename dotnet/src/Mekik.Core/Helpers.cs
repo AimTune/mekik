@@ -253,6 +253,121 @@ public static class Shuttle
     public static ValueTask<T> Tool<T>(IContext ctx, string name, IReadOnlyDictionary<string, object?> @params, Func<T> fn) =>
         Tool(ctx, name, @params, () => new ValueTask<T>(fn()));
 
+    // ── client tools (PROTOCOL.md §11) ────────────────────────────────────────
+
+    /// <summary>
+    /// The client tools this turn may call (PROTOCOL.md §11.2) — the sanitized,
+    /// server-accepted union of what the conversation's live connections declared,
+    /// snapshotted at run start into <c>ctx.Meta["clientTools"]</c>. Empty unless
+    /// the app opted in via <see cref="MekikOptions.ClientTools"/>.
+    /// </summary>
+    /// <remarks>
+    /// The tag rule (§11.2): a tool with <b>no tags is unrestricted</b> and matches
+    /// every query; a tagged tool matches only when its tags intersect
+    /// <paramref name="tags"/>. So a frontend tags the tools it wants scoped to
+    /// particular nodes and leaves general-purpose ones untagged. The returned
+    /// definitions are ready to hand to a model as its tool list; dispatch a
+    /// model's call with <see cref="CallClientToolAsync{T}"/>.
+    /// </remarks>
+    /// <param name="ctx">The ilmek node context.</param>
+    /// <param name="tags">Optional tag filter; see remarks.</param>
+    /// <param name="mode">Optional invocation-mode filter (<c>"call"</c> or <c>"notify"</c>).</param>
+    /// <returns>The matching definitions, in declaration order.</returns>
+    /// <example><code>var tools = Shuttle.ClientTools(ctx, tags: ["billing"]);</code></example>
+    public static IReadOnlyList<ClientToolDefinition> ClientTools(IContext ctx, IReadOnlyList<string>? tags = null, string? mode = null)
+    {
+        if (ctx.Meta?.GetValueOrDefault("clientTools") is not IReadOnlyList<ClientToolDefinition> defs) return [];
+        IEnumerable<ClientToolDefinition> query = defs;
+        if (mode is not null) query = query.Where(d => (d.Mode ?? "call") == mode);
+        if (tags is not null)
+        {
+            var wanted = tags.ToHashSet();
+            query = query.Where(d => d.Tags is null || d.Tags.Count == 0 || d.Tags.Any(wanted.Contains));
+        }
+        return query.ToList();
+    }
+
+    /// <summary>
+    /// Invoke a tool the <b>client</b> declared (PROTOCOL.md §11.3) and return the
+    /// result its handler produced.
+    /// </summary>
+    /// <remarks>
+    /// For a <c>"call"</c>-mode tool (the default) this is a real pause with
+    /// everything a pause buys: the run parks on an interrupt whose frame carries
+    /// <c>data.tool = {name, params}</c>, the client executes its handler and
+    /// answers with a <c>resume</c> carrying <c>{ok: true, result}</c> (or
+    /// <c>{ok: false, error}</c>, which makes this call <b>throw</b>), and the wait
+    /// survives a disconnect or restart — <c>welcome.pending</c> re-announces the
+    /// open call so a reconnecting client can retry it. The node re-runs from the
+    /// top on resume, so wrap side effects in
+    /// <see cref="Tool{T}(IContext, string, IReadOnlyDictionary{string, object?}, Func{ValueTask{T}})"/>,
+    /// exactly as around any other pause.
+    ///
+    /// <para>A <c>"notify"</c>-mode tool never parks: the invocation streams as a
+    /// genui event chunk (<see cref="Protocol.ClientToolEvent"/>) in the turn's
+    /// stream and the call returns immediately with <c>default</c>.</para>
+    ///
+    /// <para>Either way the call is surfaced as a <c>tool_call</c> running →
+    /// completed/error trace, so the conversation shows the client-side work like
+    /// any server tool.</para>
+    /// </remarks>
+    /// <typeparam name="T">The shape of the client handler's result.</typeparam>
+    /// <param name="ctx">The ilmek node context.</param>
+    /// <param name="name">The declared tool name (see <see cref="ClientTools(IContext, IReadOnlyList{string}?, string?)"/>).</param>
+    /// <param name="params">Parameters for the client handler, matching the declared schema.</param>
+    /// <param name="key">Journal key; defaults to <c>tool:{name}</c>, so one node can call several client tools.</param>
+    /// <returns>The handler's result (<c>default</c> for a notify tool).</returns>
+    /// <example><code>var when = await Shuttle.CallClientToolAsync&lt;IReadOnlyDictionary&lt;string, object?&gt;&gt;(ctx, "pick_date", p);</code></example>
+    public static async ValueTask<T?> CallClientToolAsync<T>(
+        IContext ctx,
+        string name,
+        IReadOnlyDictionary<string, object?>? @params = null,
+        string? key = null)
+    {
+        if (string.IsNullOrEmpty(name)) throw new ArgumentException("a client tool call needs a tool name", nameof(name));
+        var def = ClientTools(ctx).FirstOrDefault(d => d.Name == name);
+        var id = NextToolId(ctx);
+        void Trace(Dictionary<string, object?> call) => ToolTrace(ctx, call);
+
+        var running = new Dictionary<string, object?> { ["id"] = id, ["name"] = name, ["status"] = "running" };
+        if (@params is not null) running["params"] = @params;
+        Trace(running);
+
+        if ((def?.Mode ?? "call") == "notify")
+        {
+            // Fire-and-forget: the invocation is an event chunk in the turn stream,
+            // keyed by the (replay-stable) trace id so a resume pass upserts it.
+            var notice = new Dictionary<string, object?> { ["name"] = name };
+            if (@params is not null) notice["params"] = @params;
+            Event(ctx, Protocol.ClientToolEvent, notice, id);
+            Trace(new Dictionary<string, object?> { ["id"] = id, ["name"] = name, ["status"] = "completed" });
+            return default;
+        }
+
+        var call = new Dictionary<string, object?> { ["name"] = name };
+        if (@params is not null) call["params"] = @params;
+        var wrapped = new Dictionary<string, object?> { [MekikKey] = new Dictionary<string, object?> { ["tool"] = call } };
+        var answer = await ctx.InterruptAsync<object?>(wrapped, key ?? $"tool:{name}").ConfigureAwait(false);
+
+        // The result envelope (§11.3). A hand-rolled resume that skips the envelope
+        // is taken as the bare result — lenient on purpose, so a human answering an
+        // open tool call from another tab does not wedge the run.
+        if (answer is IReadOnlyDictionary<string, object?> env && env.GetValueOrDefault("ok") is bool ok)
+        {
+            if (!ok)
+            {
+                var message = env.GetValueOrDefault("error") is string { Length: > 0 } err ? err : $"client tool \"{name}\" failed";
+                Trace(new Dictionary<string, object?> { ["id"] = id, ["name"] = name, ["status"] = "error", ["error"] = message });
+                throw new InvalidOperationException(message);
+            }
+            var result = env.GetValueOrDefault("result");
+            Trace(new Dictionary<string, object?> { ["id"] = id, ["name"] = name, ["status"] = "completed", ["result"] = result });
+            return (T?)result;
+        }
+        Trace(new Dictionary<string, object?> { ["id"] = id, ["name"] = name, ["status"] = "completed", ["result"] = answer });
+        return (T?)answer;
+    }
+
     /// <summary>Pause the run for a human and resume with their answer.</summary>
     /// <remarks>
     /// The node suspends at this call on the first pass — it never returns there. The engine emits an

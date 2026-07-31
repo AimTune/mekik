@@ -32,6 +32,7 @@ export const RESERVED_FRAME_TYPES: ReadonlySet<string> = new Set([
     "text",
     "resume",
     "genui_event",
+    "client_tools",
     "abort",
     "tool_call",
     "genui",
@@ -42,6 +43,14 @@ export const RESERVED_FRAME_TYPES: ReadonlySet<string> = new Set([
     "error",
     "typing",
 ]);
+
+/**
+ * The reserved genui **event-chunk name** that carries a fire-and-forget client
+ * tool invocation (PROTOCOL.md §11.3): `{type:"event", name:"client_tool",
+ * payload:{name, params?}}`. A client routes chunks with this name to its tool
+ * registry instead of the mounted components.
+ */
+export const CLIENT_TOOL_EVENT = "client_tool";
 
 /** WS close code for an auth rejection (PROTOCOL.md §7). */
 export const AUTH_CLOSE_CODE = 4401;
@@ -65,6 +74,80 @@ export interface UiRef {
     props?: Record<string, unknown>;
 }
 
+// ── client tools (PROTOCOL.md §11) ────────────────────────────────────────────
+
+/**
+ * How a client tool is invoked (PROTOCOL.md §11.3): `"call"` round-trips — the
+ * run parks on an interrupt until the client answers with the tool's result —
+ * while `"notify"` fires and forgets as a genui event chunk. Default: `"call"`.
+ */
+export type ClientToolMode = "call" | "notify";
+
+/**
+ * One tool the **client** declares it can execute (PROTOCOL.md §11.1): a UI
+ * capability — render a card, open a picker, read the device — described well
+ * enough for a server-side model to call it. Declared in `hello.tools` or a
+ * `client_tools` frame; the server snapshots the declarations into
+ * `ctx.meta.clientTools` per turn (only when {@link MekikOptions.clientTools}
+ * opts in — the default is off).
+ *
+ * A declaration is **capability, not authority**: it changes what the server
+ * *may ask the client to do*, never what the server itself does. Authorization
+ * and side effects stay server-side.
+ */
+export interface ClientToolDefinition {
+    /** Unique per connection; a redeclared name replaces the earlier one. */
+    name: string;
+    /** What the tool does — this is what a model reads. */
+    description?: string;
+    /** JSON Schema for the tool's parameters (a model's `input_schema`). */
+    parameters?: Record<string, unknown>;
+    /**
+     * Server-side filter labels (PROTOCOL.md §11.2). A tool with no tags is
+     * unrestricted — every {@link clientTools} query returns it; a tagged tool is
+     * returned only by queries whose tags intersect its own. This is how one
+     * node sees a tool another node does not.
+     */
+    tags?: string[];
+    /** Invocation mode; see {@link ClientToolMode}. Default `"call"`. */
+    mode?: ClientToolMode;
+}
+
+/** A client tool invocation as it travels on an `interrupt` frame (`data.tool`, PROTOCOL.md §11.3). */
+export interface ClientToolCall {
+    name: string;
+    params?: Record<string, unknown>;
+}
+
+/**
+ * Sanitize a client-declared tool list (PROTOCOL.md §11.1): drop anything that
+ * is not a definition with a non-empty string `name`, keep only the known,
+ * correctly-typed fields, and dedupe by name (last declaration wins). Pure —
+ * the engine applies it to `hello.tools` and `client_tools.tools`, and a client
+ * library may use it to validate before sending.
+ */
+export function sanitizeClientTools(value: unknown): ClientToolDefinition[] {
+    if (!Array.isArray(value)) return [];
+    const byName = new Map<string, ClientToolDefinition>();
+    for (const entry of value) {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+        const e = entry as Record<string, unknown>;
+        if (typeof e.name !== "string" || e.name.length === 0) continue;
+        const def: ClientToolDefinition = { name: e.name };
+        if (typeof e.description === "string") def.description = e.description;
+        if (typeof e.parameters === "object" && e.parameters !== null && !Array.isArray(e.parameters)) {
+            def.parameters = e.parameters as Record<string, unknown>;
+        }
+        if (Array.isArray(e.tags)) {
+            const tags = e.tags.filter((t): t is string => typeof t === "string" && t.length > 0);
+            if (tags.length > 0) def.tags = [...new Set(tags)];
+        }
+        if (e.mode === "call" || e.mode === "notify") def.mode = e.mode;
+        byName.set(def.name, def);
+    }
+    return [...byName.values()];
+}
+
 // ── client → server ───────────────────────────────────────────────────────────
 
 export interface HelloFrame {
@@ -80,6 +163,12 @@ export interface HelloFrame {
     componentsHash?: string;
     /** Client-supplied context; only the allowlisted subset reaches `ctx.meta.client` (PROTOCOL.md §6). */
     meta?: Record<string, unknown>;
+    /**
+     * Tools this client can execute (PROTOCOL.md §11.1). Inert unless the server
+     * opts in via {@link MekikOptions.clientTools}; replaced wholesale by a later
+     * `client_tools` frame.
+     */
+    tools?: ClientToolDefinition[];
 }
 
 export interface TextInFrame {
@@ -112,18 +201,33 @@ export interface GenUIEventFrame {
     payload?: unknown;
 }
 
+/**
+ * Replace this connection's declared client tools (PROTOCOL.md §11.1). The list
+ * is the connection's whole new set — sending `[]` withdraws every tool. Like
+ * `hello.tools`, inert unless the server opted in.
+ */
+export interface ClientToolsFrame {
+    type: "client_tools";
+    tools: ClientToolDefinition[];
+}
+
 export interface AbortFrame {
     type: "abort";
 }
 
-export type IncomingFrame = HelloFrame | TextInFrame | ResumeFrame | GenUIEventFrame | AbortFrame;
+export type IncomingFrame = HelloFrame | TextInFrame | ResumeFrame | GenUIEventFrame | ClientToolsFrame | AbortFrame;
 
 // ── server → client ───────────────────────────────────────────────────────────
 
-/** Re-announced in `welcome.data.pending` so a reconnecting UI re-renders open forms (PROTOCOL.md §3.2). */
+/**
+ * Re-announced in `welcome.data.pending` so a reconnecting UI re-renders open forms
+ * (PROTOCOL.md §3.2). `data` is the `interrupt` frame's `data`, verbatim — including
+ * `event` (a pause waiting on a component interaction, §10.4) and `tool` (an open
+ * client tool call, §11.3).
+ */
 export interface PendingView {
     id: string;
-    data: { payload: unknown; ui?: UiRef; actions?: MessageAction[] };
+    data: { payload: unknown; ui?: UiRef; actions?: MessageAction[]; event?: string; tool?: ClientToolCall };
 }
 
 export interface WelcomeFrame {
@@ -227,9 +331,11 @@ export interface InterruptFrame {
     /**
      * `event` is set when the pause is waiting for a component interaction rather
      * than an answer (PROTOCOL.md §10.4): the named `data-event` resolves it, and the
-     * client should not offer default Approve/Cancel chips.
+     * client should not offer default Approve/Cancel chips. `tool` is set when the
+     * pause is a **client tool call** (PROTOCOL.md §11.3): the client runs the named
+     * tool and answers with `{ok, result?|error?}` — again, no default chips.
      */
-    data: { payload: unknown; ui?: UiRef; actions?: MessageAction[]; event?: string };
+    data: { payload: unknown; ui?: UiRef; actions?: MessageAction[]; event?: string; tool?: ClientToolCall };
 }
 
 export interface InterruptResolvedFrame {
@@ -297,7 +403,7 @@ export class ProtocolError extends Error {
     }
 }
 
-const INCOMING_TYPES: ReadonlySet<string> = new Set(["hello", "text", "resume", "genui_event", "abort"]);
+const INCOMING_TYPES: ReadonlySet<string> = new Set(["hello", "text", "resume", "genui_event", "client_tools", "abort"]);
 
 /**
  * Parse one client→server message. Accepts a JSON string or an already-parsed
@@ -345,6 +451,12 @@ export function parseIncoming(raw: string | unknown): IncomingFrame {
         }
         if (v.scope !== undefined && v.scope !== "component" && v.scope !== "graph") {
             throw new ProtocolError("bad_request", 'genui_event scope must be "component" or "graph"');
+        }
+    }
+    if (type === "client_tools") {
+        const tools = (value as { tools?: unknown }).tools;
+        if (!Array.isArray(tools)) {
+            throw new ProtocolError("bad_request", "client_tools frame requires tools: array");
         }
     }
 

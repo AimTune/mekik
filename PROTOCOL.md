@@ -99,10 +99,11 @@ envelope is persistent under the same rules.
 
 | `type`        | shape                                                         | meaning                                                                                                                                                                                                        |
 | ------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hello`       | `{type, userId?, conversationId?, watermark?, token?, meta?, componentsHash?}` | handshake; may also travel as WS query string. `meta` is a client-supplied context map (see §6).                                                                                                               |
+| `hello`       | `{type, userId?, conversationId?, watermark?, token?, meta?, componentsHash?, tools?}` | handshake; may also travel as WS query string. `meta` is a client-supplied context map (see §6); `tools` declares this client's callable tools (§11.1).                                        |
 | `text`        | `{type, data:{text}, meta?}`                                  | one user turn → starts a run (or is refused `busy`, §5).                                                                                                                                                       |
 | `resume`      | `{type, answers:{[interruptId]: any}}`                        | answer the open interrupts, keyed by thread-scoped interrupt `id`. Must cover **every** open interrupt (ilmek's `resumeKeyed` requires it); a resume that omits one draws `error{incomplete_resume}`.          |
 | `genui_event` | `{type, streamId, eventType, scope?, component?, payload}`     | an interaction from a mounted GenUI component. `scope` is `"component"` (from `component-event`), `"graph"` (from `mekik-event`), or absent (from `data-event`) and decides who receives it — the node parked on `onEvent`, the app's handler, or whichever answers first (§10.4). A `submit` naming an open interrupt is coerced to a `resume` regardless (§4.4). |
+| `client_tools` | `{type, tools: ClientToolDefinition[]}`                      | replace this connection's declared client tools (§11.1). The list is the connection's whole new set; `[]` withdraws every tool. Inert unless the server opted in.                                              |
 | `abort`       | `{type}`                                                      | cancel the in-flight run. The graph stops at the next superstep boundary; the last checkpoint stands, so the thread stays resumable.                                                                           |
 
 Malformed frames (bad JSON, missing `type`, unknown required fields) draw an
@@ -117,7 +118,7 @@ stays open).
 | `text`               | yes        | `{type, id, seq, from:"bot"\|"user", data:{text}, timestamp}`                                                          |
 | `tool_call`          | yes        | `{type, seq, data:{id, name, status:"running"\|"completed"\|"error", params?, result?, error?}}` - upsert by `data.id` |
 | `genui`              | yes        | `{type, seq, streamId, done, chunk: AIChunk}`                                                                          |
-| `interrupt`          | yes        | `{type, seq, id, data:{payload, ui?, actions?}}`                                                                       |
+| `interrupt`          | yes        | `{type, seq, id, data:{payload, ui?, actions?, event?, tool?}}`                                                        |
 | `interrupt_resolved` | yes        | `{type, seq, id, data:{answer?}}`                                                                                      |
 | _rich message_ (§4.5) | yes       | `{type: <rendererName>, id, seq, from:"bot"\|"user", data, timestamp}` - `type` is a client message-renderer name      |
 | `genui_components`   | no         | `{type, hash, unchanged?, components?: ComponentDefinition[]}` — the server-defined component catalog (§10)              |
@@ -217,6 +218,16 @@ which surfaces as a third split-out field:
 `event` says the pause is waiting for a **component interaction** rather than an
 answer, so a client must not offer default Approve/Cancel chips for it. It is also
 what the engine matches an incoming `genui_event` against.
+
+`mekik.callClientTool()` (§11.3) uses the envelope a third way, with
+`$mekik: {tool: {name, params?}}`, which surfaces as the split-out `tool` field:
+
+```jsonc
+{ "payload": {}, "tool": { "name": "pick_date", "params": { "min": "2026-08-01" } } }
+```
+
+`tool` says the pause is a **client tool call**: the client runs the named tool
+and answers with the result envelope (§11.3) — again, no default chips.
 
 ### 4.3 The reply text frame
 
@@ -324,6 +335,8 @@ The graph run receives context from three merged sources, placed on ilmek
   `meta` (the server decides via `MekikOptions.acceptClientMeta`; default: drop
   everything).
 - `meta.auth` - the verified `claims` from the Authenticator, if any.
+- `meta.clientTools` - the turn's client tool snapshot (§11.2), present only when
+  the server opted in via `MekikOptions.clientTools` and something is declared.
 
 Nodes read these via ilmek `ctx.meta`. This is how a graph is parameterized per
 conversation without the graph knowing anything about mekik.
@@ -342,6 +355,8 @@ ambient storage is needed (ilmek already threads `ctx` everywhere):
 | `mekik.action(label, value?)` / `Shuttle.Action`                     | build one `MessageAction` chip (typed constructor; no hand-written JSON)                    |
 | `mekik.choose(ctx, payload, options, {ui?, key?})` / `Shuttle.Choose` | `approve` sugar: options become `actions` chips; resolves to the picked option's `value` (its label string when it has none) |
 | `mekik.message(ctx, type, data, {id?})` / `Shuttle.Message`          | emit a rich message frame (§4.5)                                                            |
+| `mekik.clientTools(ctx, {tags?, mode?})` / `Shuttle.ClientTools`     | the turn's client tool snapshot, filtered by tag/mode (§11.2)                               |
+| `mekik.callClientTool(ctx, name, params?, {key?})` / `Shuttle.CallClientToolAsync` | invoke a client tool — a durable interrupt round-trip, or a fire-and-forget chunk for a `notify` tool (§11.3) |
 | `mekik.component<P>(name)` / `GenUI.*`, `GenUI.Names.*`              | bind a GenUI component name once, typed — chativa's built-ins are `mekik.genui.*`          |
 | `mekik.messageKind<D>(type)` / `Messages.*`                          | bind a message type once, typed — chativa's built-ins are `mekik.messages.*`               |
 
@@ -406,6 +421,8 @@ Naming (extends MODEL.md §11):
 | history port      | `HistoryStore`                      | `IHistoryStore`                                  |
 | conversation port | `ConversationStore`                 | `IConversationStore`                             |
 | auth port         | `Authenticator`                     | `IAuthenticator`                                 |
+| client tools read | `mekik.clientTools`                 | `Shuttle.ClientTools`                            |
+| client tool call  | `mekik.callClientTool`              | `Shuttle.CallClientToolAsync`                    |
 
 **.NET caveat (MODEL.md §11 divergence 2):** any `try/catch` in the adapter or
 helpers that wraps node execution MUST rethrow when
@@ -640,4 +657,159 @@ card(ctx, props(choice === "handover" ? "Delivered" : "Rescheduled"), { id: "car
 
 Runnable: `ts/examples/server-components.ts`,
 `dotnet/examples/Mekik.ServerComponents`.
+
+---
+
+## 11. Client tools (§11)
+
+§10 lets the server ship a widget to the client. §11 is the mirror image: the
+**client declares what it can do** — render a card, open a picker, read the
+device — as *tools*, described well enough for a server-side model to call. The
+server exposes them to a node (or a model) exactly like server tools, and an
+invocation either round-trips a result or fires and forgets. The frontend's own
+UI becomes part of the agent's toolbox without a server deploy.
+
+Everything here is **additive** within `mekik/1`: an older server ignores the
+declarations, an older client never receives an invocation it did not declare.
+
+### 11.1 Declaration
+
+```ts
+interface ClientToolDefinition {
+  /** Unique per connection; a redeclared name replaces the earlier one. */
+  name: string;
+  /** What the tool does — this is what a model reads. */
+  description?: string;
+  /** JSON Schema for the tool's parameters (a model's input_schema). */
+  parameters?: Record<string, unknown>;
+  /** Server-side filter labels (§11.2). */
+  tags?: string[];
+  /** "call" (round-trip, default) or "notify" (fire-and-forget) — §11.3. */
+  mode?: "call" | "notify";
+}
+```
+
+Tools travel client → server two ways, both carrying the connection's **whole
+set** (replace, never merge):
+
+- `hello.tools` — declared at the handshake, like `componentsHash`;
+- a `client_tools` frame `{type, tools}` — redeclared mid-session. `[]`
+  withdraws everything. A `client_tools` whose `tools` is not an array draws
+  `error{bad_request}`.
+
+**Sanitization.** The server drops any entry that is not an object with a
+non-empty string `name`, keeps only the known, correctly-typed fields
+(`description` string, `parameters` object, `tags` non-empty strings, `mode`
+one of the two literals), and dedupes by `name` — the last declaration of a
+name wins.
+
+**Opt-in.** Declarations are **ignored entirely by default** — the same posture
+as `acceptClientMeta`, because a declaration is client-controlled input that a
+model will read (names, descriptions and schemas are a prompt-injection
+surface). `MekikOptions.clientTools` turns them on: `true` accepts every
+well-formed declaration; a function is the allowlist form — it sees the
+sanitized list and returns the subset to accept (pin names, strip tags, cap the
+count). This is also the off switch: leave the option unset and the whole
+feature is inert, wire and all.
+
+**Declarations are per-connection state.** They are not persisted, not part of
+the transcript, and vanish with the socket — a reconnecting client re-declares
+in its next `hello`, exactly as it re-presents `componentsHash`.
+
+### 11.2 The turn snapshot and tags
+
+At run start the engine snapshots the union of every live connection's declared
+tools into `meta.clientTools` (§6): deduped by `name`, ordered by first
+appearance, the **most recent declaration of a name wins**. The snapshot is
+taken once per turn, so a set that changes mid-run does not shift under the
+node's feet; a `client_tools` frame takes effect on the next turn.
+
+Nodes read the snapshot with `mekik.clientTools(ctx, {tags?, mode?})` /
+`Shuttle.ClientTools`. The tag rule:
+
+- a tool with **no tags is unrestricted** — every query returns it;
+- a **tagged** tool is returned only by queries whose `tags` intersect its own;
+- no `tags` filter ⇒ everything.
+
+So a frontend tags the tools it wants scoped ("only the billing node should
+call this") and leaves general-purpose ones untagged — one node sees a tool
+another does not, without the server hard-coding either. The returned
+definitions are ready to hand to a model as its tool list; `@mekik/langchain`'s
+`withClientTools(ctx, {tags?})` does exactly that.
+
+### 11.3 Invocation
+
+`mekik.callClientTool(ctx, name, params?, {key?})` / `Shuttle.CallClientToolAsync`.
+Both modes surface the call as an ordinary `tool_call` running →
+completed/error trace (upsert by a replay-stable id), so the conversation shows
+client-side work exactly like server-side work.
+
+**`"call"` (default) — a durable round-trip.** The call is an ordinary ilmek
+interrupt wearing tool metadata: the node parks, and the `interrupt` frame
+(and, after a reconnect, `welcome.pending`) carries
+
+```jsonc
+{ "type": "interrupt", "seq": 12, "id": "call/0:tool:pick_date",
+  "data": { "payload": {}, "tool": { "name": "pick_date", "params": { "min": "2026-08-01" } } } }
+```
+
+`data.tool` says this pause is answered by the client's tool handler, not by a
+human — a client MUST NOT render default Approve/Cancel chips for it. The
+client runs the handler and answers with a `resume` keyed by the interrupt id,
+carrying the **result envelope**:
+
+```jsonc
+{ "type": "resume", "answers": { "call/0:tool:pick_date": { "ok": true,  "result": { "date": "2026-08-15" } } } }
+{ "type": "resume", "answers": { "call/0:tool:pick_date": { "ok": false, "error": "user closed the picker" } } }
+```
+
+`{ok:true}` resolves the call with `result`; `{ok:false}` makes it **throw**
+(the trace ends `error`) — the node, or the agent loop around it, decides what
+the model sees. An answer that is not the envelope is taken as the bare result,
+so a human answering the pause from another tab cannot wedge the run. Because
+the pause is a real interrupt it inherits everything §4/§5 guarantee: the wait
+survives a disconnect or restart, `welcome.pending` re-announces it (a
+reconnecting client re-executes the still-open call — handlers should be
+idempotent or cheap), concurrent pauses resume all-at-once, and the node
+re-runs from the top on resume — journal pre-call side effects in `mekik.tool`.
+The default journal key is `tool:{name}`.
+
+**`"notify"` — fire and forget.** No pause: the invocation streams in the
+turn's genui stream as an event chunk under the **reserved chunk name**
+`client_tool`,
+
+```jsonc
+{ "type": "genui", "seq": 9, "streamId": "stream-1", "done": false,
+  "chunk": { "type": "event", "name": "client_tool",
+             "payload": { "name": "show_confetti", "params": { "level": 3 } }, "id": "task:tool:0" } }
+```
+
+and the call resolves immediately (with no result). The chunk's `id` is the
+trace id, so a resume pass upserts instead of re-firing, and — being an
+ordinary persistent chunk — a fresh tab replaying history sees it again: right
+for "render this card", which is what notify is for. A client routes
+`client_tool`-named event chunks to its tool registry, not to mounted
+components; connectors should dedupe by chunk id within a session.
+
+Calling a name that is not in the snapshot is not an error at call time (the
+snapshot may lag a reconnect); the call takes the default `"call"` mode and
+parks until some connection answers it.
+
+### 11.4 Security model
+
+- **A declaration is capability, not authority.** It changes what the server
+  *may ask the client to do*, never what the server itself does. Authorization,
+  balances, side effects stay server-side; a client tool result is client input
+  and must be validated like any other.
+- **Off by default, allowlist on.** §11.1's opt-in is the server's kill switch;
+  the function form pins the accepted names so a manipulated client cannot
+  smuggle extra tools or descriptions to the model.
+- **Injection surface.** Tool names, descriptions and schemas reach the model's
+  context. Treat them as untrusted: prefer the allowlist form, and never
+  interpolate them into privileged instructions.
+- **Client-side hardening.** A client library SHOULD keep its tool registry and
+  handlers unreachable from page-level script (chativa's connector holds them
+  in true-private fields, deep-clones the definitions at construction, and
+  refuses runtime mutation unless explicitly enabled) so console access or an
+  XSS cannot silently rewire what the model can trigger.
 

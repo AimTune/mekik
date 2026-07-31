@@ -126,6 +126,8 @@ function mergeConnectParams(req: IncomingMessage, firstFrame: string): ConnectPa
             if (typeof parsed.watermark === "number") hello.watermark = parsed.watermark;
             if (parsed.token) hello.token = parsed.token;
             if (parsed.meta) hello.meta = parsed.meta;
+            if (typeof parsed.componentsHash === "string") hello.componentsHash = parsed.componentsHash;
+            if (Array.isArray(parsed.tools)) hello.tools = parsed.tools;
         }
     }
 

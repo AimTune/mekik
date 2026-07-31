@@ -75,6 +75,7 @@ mekik/
     LANGUAGES.md         # TS ↔ .NET naming parity
     HITL.md              # human-in-the-loop authoring guide
     GENUI.md             # rendering: typed components and rich messages
+    CLIENT-TOOLS.md      # the frontend's own tools, callable by the graph (§11)
   ts/
     packages/core/       # @mekik/core — protocol, mapper, engine, helpers, stores, auth
     packages/ws/         # @mekik/ws — WebSocket transport
@@ -88,6 +89,7 @@ mekik/
     examples/routed-desk.ts # the same desk as a real graph: router + per-domain nodes
     examples/storefront.ts # rendering showcase: every typed component + message type
     examples/server-components.ts # the backend defines the widget itself (§10)
+    examples/client-tools.ts # the frontend's UI as callable tools (§11)
   dotnet/
     src/Mekik.Core/            # mirror of @mekik/core
     src/Mekik.AspNetCore/      # app.MapMekik("/ws", app)
@@ -98,6 +100,7 @@ mekik/
     examples/Mekik.Examples    # mirror of the refund showcase
     examples/Mekik.LlmAgent    # mirror of the LLM-driven desk
     examples/Mekik.ServerComponents # mirror of the server-defined components demo
+    examples/Mekik.ClientTools # mirror of the client-tools demo (§11)
 ```
 
 mekik depends on ilmek as a published package — [`@ilmek/core`](https://www.npmjs.com/package/@ilmek/core)
@@ -180,6 +183,11 @@ watermark. Transient frames (`welcome`, `run`, `error`) are live-only.
   the thread-scoped interrupt `id`, acknowledged by `interrupt_resolved`.
 - **Tools** emit `tool_call` running→completed/error traces; the side effect is
   journaled by ilmek so it runs exactly once across an interrupt/resume.
+- **Client tools** invert the toolbox (§11, opt-in): the frontend declares its
+  own UI capabilities as tools in `hello.tools` (with optional `tags` so one
+  node sees a tool another does not), a node calls one with
+  `mekik.callClientTool`, and the client's handler answers through the same
+  durable interrupt machinery.
 
 Full details in [`PROTOCOL.md`](PROTOCOL.md); the exact event→frame mapping is
 pinned by [`conformance/fixtures/`](conformance/fixtures).
@@ -196,9 +204,10 @@ The two implementations are held to the same wire two ways:
    each language against the identical observable wire.
 
 See [`docs/LANGUAGES.md`](docs/LANGUAGES.md) for the naming map,
-[`docs/HITL.md`](docs/HITL.md) for the human-in-the-loop authoring rules, and
+[`docs/HITL.md`](docs/HITL.md) for the human-in-the-loop authoring rules,
 [`docs/GENUI.md`](docs/GENUI.md) for the two rendering paths (typed GenUI
-components and rich messages).
+components and rich messages), and [`docs/CLIENT-TOOLS.md`](docs/CLIENT-TOOLS.md)
+for client-declared tools.
 
 ## Non-goals (v1)
 

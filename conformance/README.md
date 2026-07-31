@@ -69,6 +69,7 @@ and committed; both suites then treat them as read-only goldens.
 | `run-aborted`          | `run_end{aborted}` → `run{aborted}` only, no text                                           |
 | `mixed-turn`           | ui + tokens + tool + reply in one run (ordering + seq monotonicity)                         |
 | `rich-message`         | `mekik.message` customs → persistent rich message frames (§4.5); caller id wins over the minted one; a reserved frame type is dropped |
+| `client-tool-call`     | `mekik.callClientTool` (§11.3): running `tool_call` trace, then an interrupt whose `$mekik.tool` unwraps to `data.tool={name,params}` with empty payload and no ui/actions/event |
 
 ## Scenario suites (behavioural)
 
@@ -114,6 +115,28 @@ and committed; both suites then treat them as read-only goldens.
     (so `error{interrupted}` while parked, `error{busy}` mid-run, and no `text`
     frame from the user). An absent `scope` tries the component route first, then
     the graph one; an unknown `scope` is `error{bad_request}`.
+17. **client tool declaration** (§11.1) - `hello.tools` are ignored entirely
+    unless the app opts in; opted in, they reach `ctx.meta.clientTools`
+    sanitized (nameless dropped, duplicate name last-wins); the policy function
+    is an allowlist; a `client_tools` frame replaces the connection's set and
+    `[]` withdraws it; one without a `tools` array is `error{bad_request}`; a
+    multi-tab conversation snapshots the union, most recent declaration of a
+    name winning.
+18. **client tool tag filtering** (§11.2) - an untagged tool matches every
+    query; a tagged tool only queries whose tags intersect; `mode` narrows by
+    invocation kind; no filter returns everything.
+19. **client tool round-trip** (§11.3) - `callClientTool` parks the run on an
+    interrupt carrying `data.tool={name,params}` (no ui/actions/event, empty
+    payload) after a running `tool_call` trace; a resume with `{ok:true,result}`
+    resolves the call (completed trace carrying the result, stable trace id
+    across the replay); `{ok:false,error}` makes it throw (error trace, run
+    ends `error`); a bare non-envelope answer is taken as the result;
+    `welcome.pending` re-announces the open call with `data.tool`; a journaled
+    side effect before the call runs exactly once across the pause.
+20. **client tool notify** (§11.3) - a `notify`-mode tool never parks: the
+    invocation is a genui event chunk named `client_tool` with
+    `payload={name,params}`, keyed by the trace id, and the running→completed
+    trace pair emits in the same turn.
 
 Subtle cases fresh ports tend to break (mirroring ilmek's list): 6 and 7
 (id-vs-key routing), 8 (pending re-announce), 12 (refuse new turn while parked),

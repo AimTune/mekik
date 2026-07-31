@@ -106,6 +106,31 @@ phase ran inside `ctx.step`).
 
 See [Components the server defines](./authoring/generative-ui.md#components-the-server-defines).
 
+## The frontend owns the tool
+
+`client-tools.ts` is the §11 mirror of that idea: the **client** declares what it
+can do — `pick_date` (a round-trip into the page's date picker), `celebrate`
+(fire-and-forget confetti), a geo-tagged tool the scheduling node never sees, and
+one the server's allowlist refuses — and the graph calls them like server tools.
+
+```bash
+node ts/examples/client-tools.ts            # self-test: allowlist, tag scoping, round-trip, notify, error envelope
+node ts/examples/client-tools.ts --serve    # ws://localhost:8807 — connect chativa with { tools: [...] }
+
+dotnet run --project dotnet/examples/Mekik.ClientTools   # the same self-test, byte-identical frames
+```
+
+The self-test plays the chativa connector's part — declaring in `hello.tools`,
+answering the tool interrupt with the `{ok, result}` envelope — and asserts the
+whole §11 surface: the node's toolbox is scoped by tag (`pick_date` +
+untagged `celebrate`, not the geo-tagged or refused tools), the call parks as a
+durable interrupt carrying `data.tool`, the completed `tool_call` trace carries
+the client's result, the notify invocation streams as a `client_tool` event
+chunk without pausing, an `{ok:false}` answer surfaces as an error trace and
+fails the run, and a journaled lookup before the pause runs exactly once.
+
+See [Client tools](./authoring/client-tools.md).
+
 ## Rendering end-to-end
 
 The GenUI components these emit — `data-table`, `weather-card`, `approval-form`, `order-card`, plus the `genui-*` built-ins `storefront` uses — are registered in [chativa's sandbox](https://github.com/AimTune/chativa), so `--serve` renders end to end against a real client. `server-components` is the exception that proves the rule: it needs no registration at all, because it ships its own definitions. To see the full loop: run an example with `--serve`, point chativa's `MekikConnector` at `ws://localhost:8800`, and type an order number (`ORD-42` in the refund example) to trigger the approval flow.

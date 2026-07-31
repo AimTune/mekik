@@ -58,6 +58,8 @@ function runAgent(
 ): Promise<string>;
 ```
 
+The loop is budgeted twice. `maxTurns` counts **model rounds** — how many times the model may run again after calling tools, default 25. Individual tool invocations do **not** consume turns: a round that fires five tools still costs one turn. `maxToolCalls` (default 25) separately caps total tool invocations across the run; rather than cutting a batch off halfway, the loop settles with `budgetReply` before executing a batch that would overrun the cap. Node-level looping stays budgeted by ilmek's `recursionLimit`, which tool calls never consume.
+
 You return the result as your node's reply (`{ reply }`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `runAgent` returns an **empty string** — `{ reply: "" }` emits nothing extra, no duplicate. With `stream: false`, it returns the full text for the consolidated `text` reply. Reach for [`withMekikTools`](#withmekiktools) directly when you need to drive the loop yourself (a custom agent framework, a non-standard message shape).
 
 ## `withMekikTools`
@@ -93,6 +95,35 @@ function withMekikTools<T extends StructuredToolInterface>(
 ```
 
 Each returned tool, when the agent calls it: emits a `tool_call` trace (unless `show:false`), optionally pauses for approval, then executes inside `ctx.step` so it runs exactly once across an interrupt/resume.
+
+## `withClientTools` — the frontend's tools
+
+The connected **client** can declare tools of its own — open its date picker, render one of its cards — via [client tools](../authoring/client-tools.md) (PROTOCOL.md §11). `withClientTools` turns the turn's accepted declarations into LangChain tools so the model calls the UI the same way it calls a server tool:
+
+```ts
+import { withMekikTools, withClientTools, runAgent } from "@mekik/langchain";
+
+.node("agent", async (state, ctx) => {
+  const tools = [
+    ...withMekikTools(ctx, serverTools, policy),   // the server's own tools
+    ...withClientTools(ctx, { tags: ["billing"] }), // the frontend's, scoped by tag
+  ];
+  return { reply: await runAgent(ctx, model(), { system: SYSTEM, input: state.input, tools }) };
+})
+```
+
+Signature:
+
+```ts
+function withClientTools(
+  ctx: Context<any>,
+  filter?: { tags?: readonly string[]; mode?: "call" | "notify" },
+): StructuredToolInterface[];
+```
+
+Each wrapper's executor is [`mekik.callClientTool`](../authoring/client-tools.md#calling): a `"call"`-mode tool **parks the loop durably** (the agent state is journaled, so the resume replays the model's decisions instead of re-paying for them), a `"notify"`-mode tool returns a delivery note the model can read, and a handler error comes back as an error *observation* — the loop stays alive and the model can route around it. The declared JSON Schema is handed to the model verbatim, so the tool call it produces binds to the client's handler unchanged.
+
+`filter.tags` is the scoping lever: the frontend tags the tools it wants restricted to particular nodes, untagged tools are visible everywhere, and the server's `clientTools` policy has already allowlisted the whole set before this call ever sees it.
 
 ## Why wrapping, not just callbacks
 

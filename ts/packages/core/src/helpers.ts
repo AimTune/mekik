@@ -12,7 +12,7 @@
 
 import { isInterrupt, type Context } from "@ilmek/core";
 
-import type { AIChunk, MessageAction, ToolCall, UiRef } from "./protocol.ts";
+import { CLIENT_TOOL_EVENT, type AIChunk, type ClientToolDefinition, type ClientToolMode, type MessageAction, type ToolCall, type UiRef } from "./protocol.ts";
 
 const MEKIK_KEY = "$mekik";
 
@@ -322,6 +322,138 @@ export async function tool<T>(
         emitTool({ id, name, status: "error", error: err instanceof Error ? err.message : String(err) });
         throw err;
     }
+}
+
+// ── client tools (PROTOCOL.md §11) ────────────────────────────────────────────
+
+/** Narrow the client tool set a node sees; see {@link clientTools}. */
+export interface ClientToolFilter {
+    /**
+     * Tag filter (§11.2). A tool with **no tags is unrestricted** and matches
+     * every query; a tagged tool matches only when its tags intersect these. So
+     * a frontend tags the tools it wants scoped to particular nodes, and leaves
+     * general-purpose ones untagged.
+     */
+    tags?: readonly string[];
+    /** Keep only tools of this invocation mode. */
+    mode?: ClientToolMode;
+}
+
+/**
+ * The client tools this turn may call (PROTOCOL.md §11.2) — the sanitized,
+ * server-accepted union of what the conversation's live connections declared,
+ * snapshotted at run start into `ctx.meta.clientTools`.
+ *
+ * @remarks
+ * Empty unless the app opted in via `MekikOptions.clientTools` — the default is
+ * to ignore declarations entirely. The returned definitions are ready to hand to
+ * a model as its tool list (`name`, `description`, `parameters` as JSON Schema);
+ * dispatch a model's call with {@link callClientTool}.
+ *
+ * @param ctx - The ilmek node context.
+ * @param filter - Optional tag/mode narrowing; see {@link ClientToolFilter}.
+ * @returns The matching definitions, in declaration order.
+ *
+ * @example
+ * ```ts
+ * // this node only exposes the client's billing widgets to the model
+ * const tools = mekik.clientTools(ctx, { tags: ["billing"] });
+ * ```
+ */
+export function clientTools(ctx: Context<any>, filter: ClientToolFilter = {}): ClientToolDefinition[] {
+    const declared = (ctx.meta as Record<string, unknown> | undefined)?.clientTools;
+    if (!Array.isArray(declared)) return [];
+    let defs = declared.filter(
+        (d): d is ClientToolDefinition =>
+            typeof d === "object" && d !== null && typeof (d as { name?: unknown }).name === "string",
+    );
+    if (filter.mode !== undefined) defs = defs.filter((d) => (d.mode ?? "call") === filter.mode);
+    if (filter.tags !== undefined) {
+        const wanted = new Set(filter.tags);
+        defs = defs.filter((d) => !d.tags || d.tags.length === 0 || d.tags.some((t) => wanted.has(t)));
+    }
+    return defs;
+}
+
+export interface CallClientToolOptions {
+    /** Journal key; defaults to `tool:{name}`, so one node can call several client tools. */
+    key?: string;
+}
+
+/**
+ * Invoke a tool the **client** declared (PROTOCOL.md §11.3) and resolve to the
+ * result its handler returns.
+ *
+ * @remarks
+ * For a `"call"`-mode tool (the default) this is a real pause with everything a
+ * pause buys: the run parks on an interrupt whose frame carries `data.tool =
+ * {name, params}`, the client executes its handler and answers with a `resume`
+ * carrying `{ok: true, result}` (or `{ok: false, error}`, which makes this call
+ * **throw**), and the wait survives a disconnect or restart — `welcome.pending`
+ * re-announces the open call so a reconnecting client can retry it. The node
+ * re-runs from the top on resume, so wrap side effects in {@link tool}, exactly
+ * as around any other pause.
+ *
+ * A `"notify"`-mode tool never parks: the invocation streams as a genui event
+ * chunk (`name: "client_tool"`) in the turn's stream and the call resolves
+ * immediately with `undefined`.
+ *
+ * Either way the call is surfaced as a `tool_call` running → completed/error
+ * trace, so the conversation shows the client-side work like any server tool.
+ *
+ * @typeParam T - The shape of the client handler's result.
+ * @param ctx - The ilmek node context.
+ * @param name - The declared tool name (see {@link clientTools}).
+ * @param params - Parameters for the client handler, matching the declared schema.
+ * @param opts - Journaling options; see {@link CallClientToolOptions}.
+ * @returns The handler's result (`undefined` for a notify tool).
+ *
+ * @example
+ * ```ts
+ * const when = await mekik.callClientTool<{ date: string }>(ctx, "pick_date", { min: "2026-08-01" });
+ * ```
+ */
+export async function callClientTool<T = unknown>(
+    ctx: Context<any>,
+    name: string,
+    params?: Record<string, unknown>,
+    opts: CallClientToolOptions = {},
+): Promise<T> {
+    if (!name) throw new Error("a client tool call needs a tool name");
+    const def = clientTools(ctx).find((d) => d.name === name);
+    const id = nextToolId(ctx);
+    const trace = (call: ToolCall): void => toolTrace(ctx, call);
+
+    trace({ id, name, status: "running", ...(params !== undefined ? { params } : {}) });
+
+    if ((def?.mode ?? "call") === "notify") {
+        // Fire-and-forget: the invocation is an event chunk in the turn stream,
+        // keyed by the (replay-stable) trace id so a resume pass upserts it.
+        event(ctx, CLIENT_TOOL_EVENT, { name, ...(params !== undefined ? { params } : {}) }, { id });
+        trace({ id, name, status: "completed" });
+        return undefined as T;
+    }
+
+    const answer = await ctx.interrupt<unknown>(
+        { [MEKIK_KEY]: { tool: { name, ...(params !== undefined ? { params } : {}) } } },
+        opts.key ?? `tool:${name}`,
+    );
+
+    // The result envelope (§11.3). A hand-rolled resume that skips the envelope
+    // is taken as the bare result - lenient on purpose, so a human answering an
+    // open tool call from another tab does not wedge the run.
+    if (typeof answer === "object" && answer !== null && typeof (answer as { ok?: unknown }).ok === "boolean") {
+        const env = answer as { ok: boolean; result?: unknown; error?: unknown };
+        if (!env.ok) {
+            const message = typeof env.error === "string" && env.error.length > 0 ? env.error : `client tool "${name}" failed`;
+            trace({ id, name, status: "error", error: message });
+            throw new Error(message);
+        }
+        trace({ id, name, status: "completed", result: env.result });
+        return env.result as T;
+    }
+    trace({ id, name, status: "completed", result: answer });
+    return answer as T;
 }
 
 export interface ApproveOptions {

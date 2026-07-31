@@ -14,10 +14,11 @@ Frames are flat (no nested envelope). Persistent server→client frames carry a 
 
 | `type` | shape | meaning |
 |---|---|---|
-| `hello` | `{type, userId?, conversationId?, watermark?, token?, meta?, componentsHash?}` | Handshake. May instead travel as the WS query string. `meta` is a client-supplied context map. `componentsHash` is the [component catalog](../authoring/generative-ui.md#components-the-server-defines) the client has cached — a matching hash means the catalog is not re-sent. All fields optional. |
+| `hello` | `{type, userId?, conversationId?, watermark?, token?, meta?, componentsHash?, tools?}` | Handshake. May instead travel as the WS query string. `meta` is a client-supplied context map. `componentsHash` is the [component catalog](../authoring/generative-ui.md#components-the-server-defines) the client has cached — a matching hash means the catalog is not re-sent. `tools` declares this client's [callable tools](../authoring/client-tools.md). All fields optional. |
 | `text` | `{type, data:{text}, meta?}` | One user turn → starts a run (or is refused `busy` / `interrupted`). |
 | `resume` | `{type, answers:{[interruptId]: any}}` | Answer the open interrupts, keyed by thread-scoped interrupt `id`. Must cover **every** open interrupt. |
 | `genui_event` | `{type, streamId, eventType, scope?, component?, payload}` | An interaction from a mounted GenUI component. `scope` comes from the markup — `"component"` (`component-event`), `"graph"` (`mekik-event`), or absent (`data-event`) — and decides who receives it: the node parked on `onEvent`, the app's handler, or whichever answers first. A `submit` naming an open interrupt is coerced to a `resume` regardless. See [Bidirectional events](../authoring/generative-ui.md#bidirectional-events--genui_event). |
+| `client_tools` | `{type, tools: ClientToolDefinition[]}` | Replace this connection's declared [client tools](../authoring/client-tools.md). The list is the connection's whole new set; `[]` withdraws every tool. Inert unless the server opted in via `MekikOptions.clientTools`. |
 | `abort` | `{type}` | Cancel the in-flight run at the next superstep boundary. The last checkpoint stands. |
 
 A malformed inbound frame (bad JSON, missing `type`) draws `error{code:"bad_request"}` and is otherwise ignored — the connection stays open.
@@ -51,6 +52,19 @@ Answer open interrupts, keyed by the interrupt `id` the `interrupt` frame carrie
 
 Answering by `id` (not ilmek's `key`) and covering *every* open interrupt are both required — see [Human-in-the-loop](../authoring/human-in-the-loop.md#answering).
 
+### `client_tools`
+
+Replace the connection's declared client tools mid-session (the `hello.tools` field covers the handshake). Each definition is `{name, description?, parameters?, tags?, mode?}`:
+
+```jsonc
+{ "type": "client_tools", "tools": [
+    { "name": "pick_date", "description": "Open the in-app date picker",
+      "parameters": { "type": "object", "properties": { "min": { "type": "string" } } },
+      "tags": ["scheduling"] } ] }
+```
+
+Declarations are ignored unless the server opts in — see [Client tools](../authoring/client-tools.md).
+
 ## Server → client
 
 | `type` | persistent | shape |
@@ -59,7 +73,7 @@ Answering by `id` (not ilmek's `key`) and covering *every* open interrupt are bo
 | `text` | **yes** | `{type, id, seq, from:"bot"\|"user", data:{text}, timestamp}` |
 | `tool_call` | **yes** | `{type, seq, data:{id, name, status:"running"\|"completed"\|"error", params?, result?, error?}}` |
 | `genui` | **yes** | `{type, seq, streamId, done, chunk: AIChunk}` |
-| `interrupt` | **yes** | `{type, seq, id, data:{payload, ui?, actions?}}` |
+| `interrupt` | **yes** | `{type, seq, id, data:{payload, ui?, actions?, event?, tool?}}` |
 | `interrupt_resolved` | **yes** | `{type, seq, id, data:{answer?}}` |
 | *rich message* | **yes** | `{type: <rendererName>, id, seq, from:"bot"\|"user", data, timestamp}` |
 | `genui_components` | no | `{type, hash, unchanged?, components?: ComponentDefinition[]}` |
@@ -103,6 +117,13 @@ These carry `seq` and are the durable transcript — exactly what reconnect repl
                  { "label": "Reject",  "value": { "approved": false } } ] } }
 ```
 
+Two variants change *who answers*: `data.event` names a component interaction a node is [waiting on](../authoring/generative-ui.md) (no default chips), and `data.tool` marks a [client tool call](../authoring/client-tools.md) — the client's registered handler runs and answers with the result envelope:
+
+```jsonc
+{ "type": "interrupt", "seq": 9, "id": "call/0:tool:pick_date", "data": {
+    "payload": {}, "tool": { "name": "pick_date", "params": { "min": "2026-08-01" } } } }
+```
+
 **`interrupt_resolved`** — acknowledges an answered pause so every tab and future replay learns it's closed:
 
 ```jsonc
@@ -132,7 +153,7 @@ Live-only. Never stored, never replayed.
     "connectionId": "connection-abc", "watermark": 12, "pending": [] } }
 ```
 
-`pending` is a `PendingView[]` re-announcing open interrupts so a reconnecting UI can re-render approval forms. A `PendingView` is `{id, data:{payload, ui?, actions?}}` — an `interrupt` frame minus `seq`/`timestamp`.
+`pending` is a `PendingView[]` re-announcing open interrupts so a reconnecting UI can re-render approval forms (and re-execute still-open [client tool calls](../authoring/client-tools.md)). A `PendingView` is `{id, data:{payload, ui?, actions?, event?, tool?}}` — an `interrupt` frame minus `seq`/`timestamp`.
 
 **`genui_components`** — the components this server defines itself, sent once per
 connection right after `welcome` (before the replay tail, so a widget named by the
