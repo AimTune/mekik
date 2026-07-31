@@ -172,9 +172,11 @@ async function selftest(): Promise<number> {
     );
 
     // The notify tool: an event chunk under the reserved name, no second pause.
+    // ("chunk" in f is what narrows the union: a rich message frame's `type` is
+    // an open string, so the discriminant alone does not.)
     const notify = t2.find(
         (f): f is Extract<OutgoingFrame, { type: "genui" }> =>
-            f.type === "genui" && f.chunk.type === "event" && f.chunk.name === "client_tool",
+            f.type === "genui" && "chunk" in f && f.chunk.type === "event" && f.chunk.name === "client_tool",
     );
     check(notify, "celebrate streams a client_tool event chunk");
     check(
