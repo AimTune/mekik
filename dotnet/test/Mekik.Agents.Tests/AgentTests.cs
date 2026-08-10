@@ -31,14 +31,21 @@ public class AgentTests
         private readonly Queue<IReadOnlyList<ChatResponseUpdate>> _turns;
         public ScriptedChat(params IReadOnlyList<ChatResponseUpdate>[] turns) => _turns = new(turns);
 
+        /// <summary>The options the last call passed — null when the caller sent none.</summary>
+        public ChatOptions? LastOptions { get; private set; }
+
         public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
-            Task.FromResult(_turns.Dequeue().ToChatResponse());
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            LastOptions = options;
+            return Task.FromResult(_turns.Dequeue().ToChatResponse());
+        }
 
         public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
             IEnumerable<ChatMessage> messages, ChatOptions? options = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            LastOptions = options;
             foreach (var update in _turns.Dequeue())
             {
                 await Task.Yield();
@@ -213,13 +220,14 @@ public class AgentTests
         new Route("general", "everything else"),
     ];
 
-    private static MekikApp RouteApp(IChatClient chat, string? fallback = null)
+    private static MekikApp RouteApp(IChatClient chat, string? fallback = null, float? temperature = null)
     {
         var g = Graph.Create("router")
             .Channel("input", Channels.LastWrite(""))
             .Channel("reply", Channels.LastWrite(""))
             .Node("route", async (State state, IContext ctx) =>
-                Update.Of("reply", await Agent.RouteAsync(ctx, chat, Routes, state.Get<string>("input") ?? string.Empty, fallback)))
+                Update.Of("reply", await Agent.RouteAsync(
+                    ctx, chat, Routes, state.Get<string>("input") ?? string.Empty, fallback, temperature: temperature)))
             .Edge(Graph.Start, "route")
             .Edge("route", Graph.End)
             .Compile();
@@ -255,5 +263,32 @@ public class AgentTests
         await app.ConnectAsync(conn);
         await app.ReceiveAsync(conn, TextFrame("??"));
         Assert.Equal("general", Reply(conn));
+    }
+
+    [Fact]
+    public async Task Route_sends_no_sampling_options_by_default()
+    {
+        // Reasoning models reject a non-default temperature with HTTP 400, which would
+        // fail every classification. Nothing goes on the wire unless the caller asks.
+        var chat = new ScriptedChat([TextUpdate("reporting")]);
+        var app = RouteApp(chat);
+        var conn = new FakeConn();
+        await app.ConnectAsync(conn);
+        await app.ReceiveAsync(conn, TextFrame("show me the sprint report"));
+
+        Assert.Equal("reporting", Reply(conn));
+        Assert.Null(chat.LastOptions?.Temperature);
+    }
+
+    [Fact]
+    public async Task Route_passes_an_explicit_temperature_through()
+    {
+        var chat = new ScriptedChat([TextUpdate("reporting")]);
+        var app = RouteApp(chat, temperature: 0f);
+        var conn = new FakeConn();
+        await app.ConnectAsync(conn);
+        await app.ReceiveAsync(conn, TextFrame("show me the sprint report"));
+
+        Assert.Equal(0f, chat.LastOptions?.Temperature);
     }
 }
