@@ -126,7 +126,7 @@ Notes:
 
 ## `Agent.RouteAsync` — classify into one node
 
-The router pattern (classify the turn, then `goto` a focused expert node) is one call. It builds a strict classification prompt from your route names + descriptions, journals the choice (a resume replays the same route), runs at temperature 0, and normalizes the answer to a valid route — falling back when the model answers off-list:
+The router pattern (classify the turn, then `goto` a focused expert node) is one call. It builds a strict classification prompt from your route names + descriptions, journals the choice (a resume replays the same route), and normalizes the answer to a valid route — falling back when the model answers off-list:
 
 ```csharp
 var target = await Agent.RouteAsync(ctx, chat,
@@ -140,6 +140,16 @@ var target = await Agent.RouteAsync(ctx, chat,
 
 return Command.Create(Update.Of("route", target), target); // set channel + goto node
 ```
+
+**No sampling options are sent unless you ask for them.** Reasoning models (gpt-5.x and friends) reject any explicitly-set `temperature` with an HTTP 400, so a router that pinned `temperature: 0` would fail *every* classification instead of merely varying — the turn would then land on whatever fallback node you gave it. `RouteAsync` therefore calls the model with no `ChatOptions` at all; determinism is not load-bearing here, because the prompt pins the answer to one word and an off-list answer falls back. Pass `temperature:` when your model accepts it:
+
+```csharp
+var target = await Agent.RouteAsync(ctx, chat, routes, input,
+    fallback: "general",
+    temperature: 0f);   // default: unset — nothing goes on the wire
+```
+
+The TypeScript `route` has no such knob for the same reason it never needed one: a LangChain chat model carries its own sampling config, set where you construct it.
 
 ## Reading auth claims
 

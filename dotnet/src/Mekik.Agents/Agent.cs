@@ -190,21 +190,37 @@ public static class Agent
     /// <summary>
     /// Classify <paramref name="input"/> into exactly one of <paramref name="routes"/> and
     /// return the chosen route name — the router-node pattern (classify → goto expert node) in
-    /// one call. The classification is journaled (a resume replays the same route), runs at
-    /// temperature 0, and is normalized to a valid route name, falling back to
-    /// <paramref name="fallback"/> (or the last route) when the model answers off-list.
+    /// one call. The classification is journaled (a resume replays the same route) and is
+    /// normalized to a valid route name, falling back to <paramref name="fallback"/> (or the
+    /// last route) when the model answers off-list.
+    ///
+    /// <para>No sampling options are sent unless you ask for them: reasoning models
+    /// (gpt-5.x and friends) reject any non-default <c>temperature</c> with HTTP 400,
+    /// which would fail every classification rather than degrade it. Pass
+    /// <paramref name="temperature"/> (e.g. <c>0f</c>) when the model behind
+    /// <paramref name="chat"/> accepts it; otherwise configure sampling on the
+    /// <see cref="IChatClient"/> itself. The prompt already pins the answer to one word,
+    /// and an off-list answer falls back — determinism is not load-bearing here.</para>
     /// </summary>
     /// <example><code>
     /// var route = await Agent.RouteAsync(ctx, chat, routes, state.Get&lt;string&gt;("input") ?? "");
     /// return Command.Create(Update.Of("route", route), route);
     /// </code></example>
+    /// <param name="ctx">The ilmek node context.</param>
+    /// <param name="chat">The model that classifies.</param>
+    /// <param name="routes">The candidate nodes — name plus what each handles.</param>
+    /// <param name="input">The user's message for this turn.</param>
+    /// <param name="fallback">Route to use when the model answers off-list. Default: the last route.</param>
+    /// <param name="stepKey">Journal key, when a node routes more than once.</param>
+    /// <param name="temperature">Sampling temperature. Default: unset — nothing is sent.</param>
     public static async ValueTask<string> RouteAsync(
         IContext ctx,
         IChatClient chat,
         IReadOnlyList<Route> routes,
         string input,
         string? fallback = null,
-        string stepKey = "route")
+        string stepKey = "route",
+        float? temperature = null)
     {
         ArgumentNullException.ThrowIfNull(ctx);
         ArgumentNullException.ThrowIfNull(chat);
@@ -218,8 +234,11 @@ public static class Agent
                 new(ChatRole.System, RoutePrompt(routes)),
                 new(ChatRole.User, input),
             };
+            // Null options, not an empty ChatOptions: a provider that rejects an
+            // explicitly-set temperature must never see one it did not ask for.
+            var options = temperature is null ? null : new ChatOptions { Temperature = temperature };
             var response = await chat
-                .GetResponseAsync(messages, new ChatOptions { Temperature = 0f }, ctx.CancellationToken).ConfigureAwait(false);
+                .GetResponseAsync(messages, options, ctx.CancellationToken).ConfigureAwait(false);
             return response.Text ?? string.Empty;
         }).ConfigureAwait(false);
 
