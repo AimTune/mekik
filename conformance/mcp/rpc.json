@@ -1,0 +1,101 @@
+{
+  "description": "JSON-RPC exchanges a MekikMcpServer must answer identically in both languages (PROTOCOL.md §13). The server is configured with name \"support_desk\", description \"Answers questions about orders.\" and serverInfo {mekik, 0.7.1}. tools/call is exercised behaviourally in each suite: conversation ids are minted at random, so those results cannot be pinned here.",
+  "options": {
+    "name": "support_desk",
+    "description": "Answers questions about orders.",
+    "serverInfo": { "name": "mekik", "version": "0.7.1" }
+  },
+  "cases": [
+    {
+      "name": "initialize negotiates a known protocol version",
+      "request": { "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } } },
+      "response": { "jsonrpc": "2.0", "id": 1, "result": { "protocolVersion": "2025-03-26", "capabilities": { "tools": {} }, "serverInfo": { "name": "mekik", "version": "0.7.1" } } }
+    },
+    {
+      "name": "initialize answers an unknown version with the latest",
+      "request": { "jsonrpc": "2.0", "id": "a", "method": "initialize", "params": { "protocolVersion": "1999-01-01" } },
+      "response": { "jsonrpc": "2.0", "id": "a", "result": { "protocolVersion": "2025-06-18", "capabilities": { "tools": {} }, "serverInfo": { "name": "mekik", "version": "0.7.1" } } }
+    },
+    {
+      "name": "notifications get no response",
+      "request": { "jsonrpc": "2.0", "method": "notifications/initialized" },
+      "response": null
+    },
+    {
+      "name": "ping",
+      "request": { "jsonrpc": "2.0", "id": 2, "method": "ping" },
+      "response": { "jsonrpc": "2.0", "id": 2, "result": {} }
+    },
+    {
+      "name": "tools/list advertises the turn tool and the resume tool",
+      "request": { "jsonrpc": "2.0", "id": 3, "method": "tools/list" },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "tools": [
+            {
+              "name": "support_desk",
+              "description": "Answers questions about orders. Send one message and receive the agent's reply. If the result says it is \"interrupted\", the agent is waiting for an answer: call support_desk__resume with the conversationId and answers.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "message": { "type": "string", "description": "The user's message for this turn." },
+                  "conversationId": { "type": "string", "description": "Continue an existing conversation (from a previous result). Omit to start a new one." }
+                },
+                "required": ["message"]
+              }
+            },
+            {
+              "name": "support_desk__resume",
+              "description": "Answer the open interrupts of a paused support_desk conversation and continue it. Every id listed in the previous result's pending[] must be answered.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "conversationId": { "type": "string", "description": "The paused conversation, from the previous result." },
+                  "answers": { "type": "object", "description": "Answers keyed by interrupt id. For a pause with actions, an action's value (or its label).", "additionalProperties": true }
+                },
+                "required": ["conversationId", "answers"]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "an unknown method is -32601",
+      "request": { "jsonrpc": "2.0", "id": 4, "method": "resources/list" },
+      "response": { "jsonrpc": "2.0", "id": 4, "error": { "code": -32601, "message": "method not found: resources/list" } }
+    },
+    {
+      "name": "tools/call without a name is -32602",
+      "request": { "jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": { "arguments": {} } },
+      "response": { "jsonrpc": "2.0", "id": 5, "error": { "code": -32602, "message": "`name` is required" } }
+    },
+    {
+      "name": "tools/call of an unknown tool is -32602",
+      "request": { "jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": { "name": "other", "arguments": {} } },
+      "response": { "jsonrpc": "2.0", "id": 6, "error": { "code": -32602, "message": "unknown tool \"other\"" } }
+    },
+    {
+      "name": "tools/call without the required message is -32602",
+      "request": { "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "support_desk", "arguments": { "conversationId": "c-1" } } },
+      "response": { "jsonrpc": "2.0", "id": 7, "error": { "code": -32602, "message": "`message` (string) is required" } }
+    },
+    {
+      "name": "resume without answers is -32602",
+      "request": { "jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": { "name": "support_desk__resume", "arguments": { "conversationId": "c-1" } } },
+      "response": { "jsonrpc": "2.0", "id": 8, "error": { "code": -32602, "message": "`answers` (object keyed by interrupt id) is required" } }
+    },
+    {
+      "name": "a non-object is -32600",
+      "request": [1, 2],
+      "response": { "jsonrpc": "2.0", "id": null, "error": { "code": -32600, "message": "request must be a JSON-RPC object" } }
+    },
+    {
+      "name": "a missing jsonrpc field is -32600",
+      "request": { "id": 9, "method": "ping" },
+      "response": { "jsonrpc": "2.0", "id": 9, "error": { "code": -32600, "message": "request must carry jsonrpc \"2.0\" and a method" } }
+    }
+  ]
+}

@@ -32,6 +32,14 @@ files), and `AgentRunOptions.Skills = true` appends the `<available_skills>`
 block to the system prompt and adds the functions in one switch. Each load emits
 a persistent `skill` frame so the UI shows which skill the agent is following.
 
+## MCP servers as tools
+
+With the official `ModelContextProtocol` client, its `McpClientTool`s are already
+`AIFunction`s — hand them to `MekikTools.Wrap`. With `Ilmek.Mcp`'s toolbox (or any
+tool list plus an invoker), `McpFunctions.Wrap(ctx, tools, invoke, policies)`
+builds the functions and wraps them the same way, approval keyed by the exposed
+name (`github__create_issue`).
+
 ## Why wrapping
 
 A chat client invokes its own functions. That leaves two gaps `Shuttle.Tool`

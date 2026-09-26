@@ -64,6 +64,16 @@ importers:
         specifier: ^3.25.0
         version: 3.25.76
 
+  packages/mcp:
+    dependencies:
+      '@mekik/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@ilmek/core':
+        specifier: ^0.1.1
+        version: 0.1.1
+
   packages/redis:
     dependencies:
       '@mekik/core':

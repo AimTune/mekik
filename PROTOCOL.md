@@ -437,6 +437,8 @@ Naming (extends MODEL.md §11):
 | skills read       | `mekik.skills` / `mekik.skillsPrompt` | `Shuttle.Skills` / `Shuttle.SkillsPrompt`      |
 | skill load        | `mekik.loadSkill` / `mekik.skillResource` | `Shuttle.LoadSkill` / `Shuttle.SkillResourceAsync` |
 | skill source port | `SkillSource`                       | `ISkillSource`                                   |
+| MCP server        | `MekikMcpServer` / `serveMcp` (`@mekik/mcp`) | `MekikMcpServer` / `MapMekikMcp` (`Mekik.AspNetCore`) |
+| MCP tools wrap    | `withMcpTools` (`@mekik/langchain`) | `McpFunctions.Wrap` (`Mekik.Agents`)          |
 
 **.NET caveat (MODEL.md §11 divergence 2):** any `try/catch` in the adapter or
 helpers that wraps node execution MUST rethrow when
@@ -1008,3 +1010,116 @@ wrapped with the tool-policy machinery: a load emits its own trace.
   never interpolate them into privileged instructions.
 - **Level 3 is sandboxed.** A folder-backed source resolves resource paths
   inside the skill folder only.
+
+---
+
+## 13. MCP (§13)
+
+mekik meets the Model Context Protocol in both directions. Neither adds a
+frame to `mekik/1`: consuming an MCP server produces ordinary `tool_call`
+traces (§6), and serving a graph as MCP tools is a second door into the same
+engine, beside the WebSocket one.
+
+### 13.1 Consuming — an MCP server's tools in a node
+
+ilmek owns the connection: `@ilmek/mcp` / `Ilmek.Mcp` list a server's tools
+once, expose them under a stable prefix (`<server>__<tool>`), normalize
+results to `{text, structured?, isError, content}`, and journal every call
+through `ctx.step` so a pause/resume never re-invokes a remote tool. mekik adds
+the agent wrappers — `withMcpTools(ctx, toolbox, policy?)` in
+`@mekik/langchain`, `McpFunctions.Wrap(ctx, tools, invoke, policies?)` in
+`Mekik.Agents` — which route each exposed tool through the same machinery as a
+server tool (§6, `withMekikTools` / `MekikTools.Wrap`):
+
+- every call is a `tool_call` trace, running → completed/error, upsert by a
+  replay-stable id;
+- the invocation runs inside the wrapper's own `ctx.step` (key `lc:<name>`),
+  so the toolbox's *raw* `invoke` is used — journaling twice would only add
+  journal entries;
+- the tool policy map applies by **exposed** name — `approve` gates a
+  destructive remote tool behind an ordinary interrupt;
+- the model's observation is the result's `text` (or its structured content,
+  serialized, when there is no text); a result the server flagged `isError`
+  reads `Error from <tool>: …` — an observation, never a thrown error.
+
+With the official .NET SDK, its `McpClientTool`s are already `AIFunction`s and
+go straight into `MekikTools.Wrap`.
+
+### 13.2 Serving — a graph as MCP tools
+
+`MekikMcpServer(app, {name, description?, serverInfo?, userId?, includeFrames?})`
+exposes an app as **two tools**:
+
+| tool | `inputSchema` (required) | effect |
+| --- | --- | --- |
+| `<name>` | `{message: string, conversationId?: string}` | one turn — the `text` frame of a fresh or existing conversation |
+| `<name>__resume` | `{conversationId: string, answers: object}` | the `resume` frame of a paused conversation, `answers` keyed by interrupt id |
+
+`name` MUST match `^[A-Za-z0-9_-]{1,64}$`. A call opens an in-process
+connection as user `userId` (default `"mcp"`) with the given `conversationId`
+(an unknown id starts a fresh conversation, per §1 adoption; the result reports
+the id actually used), sends the frame, collects the turn's frames until the
+engine returns, and disconnects. Conversations are ordinary: persisted, shared
+with the WebSocket side, resumable from either door.
+
+**The result** (MCP `CallToolResult`) is the pure reduction of the turn's frames
+— `summarize` / `Summarize`, pinned identically in both suites:
+
+```jsonc
+{ "content": [{ "type": "text", "text": "<see below>" }],
+  "structuredContent": {
+    "conversationId": "conv-…",
+    "status": "finished" | "interrupted" | "error" | "aborted" | "refused",
+    "reply": "<bot text frames joined by newline; else the streamed text chunks>",
+    "pending": [{ "id": "…", "payload": {…}, "actions"?: [...], "tool"?: "pick_date" }],
+    "toolCalls": [{ "id": "…", "name": "get_order", "status": "completed" }],   // last status per id
+    "skills": ["brand-voice"],                                                  // loaded skills
+    "frames"?: [ ...persistent frames... ]                                      // includeFrames only
+  },
+  "isError"?: true }
+```
+
+`status` is the last `run` frame's status; `refused` when no run happened
+because the engine answered with an `error` frame (`busy`, `interrupted`,
+`not_interrupted`). `content[0].text` per status:
+
+- `finished` — the reply, or `(no reply)`;
+- `interrupted` — `The agent paused and needs input before it can continue:`,
+  one line per pending interrupt (`- interrupt "<id>": <payload JSON> — options: <action values>`,
+  or `a client tool call (<tool>) that only the conversation's own UI can answer`),
+  then `Call <name>__resume with conversationId "<id>" and an answers object keyed by those ids.`;
+- `error` — the run's error text; `isError: true`;
+- `aborted` — `The run was aborted; the conversation can be continued.`;
+- `refused` — `<code>: <message>` from the error frame; `isError: true`.
+
+**JSON-RPC.** The server answers `initialize` (`protocolVersion` echoed when it
+is one of `2025-06-18`, `2025-03-26`, `2024-11-05`, else the first;
+`capabilities: {tools: {}}`; `serverInfo`), `ping` (`{}`), `tools/list`,
+`tools/call`; a notification (no `id`) gets no response. Anything else is
+`-32601`. A non-object or a message without `jsonrpc: "2.0"` and a `method` is
+`-32600`; a `tools/call` without `name`, of an unknown tool, or with the wrong
+argument shape is `-32602`; an unexpected failure is `-32603`. A failure
+*inside the graph* is not an RPC error but a result with `isError` — the tool
+ran, the agent failed. The exact exchanges are pinned by
+`conformance/mcp/rpc.json`.
+
+**Transport.** `@mekik/mcp`'s `serveMcp` and `Mekik.AspNetCore`'s
+`MapMekikMcp` implement the stateless half of Streamable HTTP: one JSON-RPC
+message per `POST` → `200` with the response, `202` for a notification, `400`
+for unparseable JSON (`-32700`), `413` over 1 MiB; `GET` → `405` (no
+server-to-client stream); `DELETE` → `200`. Sessions are not tracked — a
+conversation is addressed by `conversationId` in the tool arguments.
+
+### 13.3 Security model
+
+- **The MCP endpoint carries no authorization of its own.** Put it behind a
+  gateway (a bearer token the calling agent presents, an allowlisted network)
+  like any internal tool endpoint. All MCP conversations belong to one mekik
+  user (`userId`), so nothing an MCP caller does can reach a human user's
+  conversation.
+- **The graph's guardrails still apply.** An approval pauses the run and the
+  caller gets `status: "interrupted"` — it cannot proceed until something
+  answers, which is the point of the pause.
+- **Consumed tools are untrusted input.** Names, descriptions and schemas of a
+  remote server reach the model; results are client-ish input. Scope with
+  `allow` at connect time and gate destructive tools with `approve`.

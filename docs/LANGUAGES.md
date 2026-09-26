@@ -29,6 +29,9 @@ mekik ships two implementations that speak the identical `mekik/1` wire
 | client skills accept | `MekikOptions.clientSkills: true \| fn` | `MekikOptions.ClientSkills` (`ClientSkills.AcceptAll` / `ClientSkillsPolicy`) |
 | client skill sanitize | `sanitizeClientSkills` | `ClientSkills.Sanitize` |
 | skill model wrap | `withSkills` / `runAgent({ skills })` (`@mekik/langchain`) | `SkillFunctions.Wrap` / `AgentRunOptions.Skills` (`Mekik.Agents`) |
+| MCP server (§13) | `MekikMcpServer` (`@mekik/core`) / `serveMcp`, `mcpRequestHandler` (`@mekik/mcp`) | `MekikMcpServer` (`Mekik.Core`) / `MapMekikMcp` (`Mekik.AspNetCore`) |
+| MCP result reduction | `summarizeMcpTurn` | `MekikMcpServer.Summarize` |
+| MCP tools wrap (§13) | `withMcpTools(ctx, toolbox, policy?)` (`@mekik/langchain`) | `McpFunctions.Wrap(ctx, tools, invoke, policies?)` (`Mekik.Agents`) |
 | typed component | `mekik.component<P>(name)` | pass the name to `Shuttle.Ui` / `Shuttle.Mount` |
 | built-in components | `mekik.genui.*` | `GenUI.*` (+ `GenUI.Names.*`) |
 | rich messages | `mekik.message` / `mekik.messageKind` / `mekik.messages.*` | `Shuttle.Message` / `Messages.*` |

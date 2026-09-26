@@ -38,7 +38,7 @@ const sidebars: SidebarsConfig = {
     {
       type: "category",
       label: "Serving",
-      items: ["serving/transport", "authentication"],
+      items: ["serving/transport", "serving/mcp", "authentication"],
     },
     {
       type: "category",
@@ -48,6 +48,7 @@ const sidebars: SidebarsConfig = {
         "integrations/langchain",
         "integrations/dotnet-agents",
         "integrations/semantic-kernel",
+        "integrations/mcp",
       ],
     },
     {

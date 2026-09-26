@@ -77,11 +77,13 @@ mekik/
     GENUI.md             # rendering: typed components and rich messages
     CLIENT-TOOLS.md      # the frontend's own tools, callable by the graph (§11)
     SKILLS.md            # Agent Skills: the catalog, progressive disclosure, the skill frame (§12)
+    MCP.md               # MCP both ways: consuming servers, serving the graph as tools (§13)
   ts/
     packages/core/       # @mekik/core — protocol, mapper, engine, helpers, stores, auth
     packages/ws/         # @mekik/ws — WebSocket transport
     packages/langchain/  # @mekik/langchain — wrap an agent's tools
     packages/redis/      # @mekik/redis — Redis turn lock + Pub/Sub backplane (fleet)
+    packages/mcp/        # @mekik/mcp — the graph as MCP tools over Streamable HTTP (§13)
     examples/refund.ts    # showcase: tool + GenUI + form approval + resume
     examples/llm-agent.ts # the same desk, driven by a real Claude model
     examples/sql-agent.ts # a model writing its own SQL over SQLite
@@ -93,7 +95,7 @@ mekik/
     examples/client-tools.ts # the frontend's UI as callable tools (§11)
   dotnet/
     src/Mekik.Core/            # mirror of @mekik/core
-    src/Mekik.AspNetCore/      # app.MapMekik("/ws", app)
+    src/Mekik.AspNetCore/      # app.MapMekik("/ws", app) and app.MapMekikMcp("/mcp", mcp)
     src/Mekik.Agents/          # Microsoft.Extensions.AI function wrapping
     src/Mekik.SemanticKernel/  # one filter covers SK agents and planners
     src/Mekik.Redis/           # Redis turn lock + Pub/Sub backplane (fleet)
@@ -195,6 +197,11 @@ watermark. Transient frames (`welcome`, `run`, `error`) are live-only.
   instructions and emits a persistent `skill` frame, and the catalog is
   announced to the client in a hash-versioned `skills` frame. A frontend may
   declare its own skills behind an opt-in policy.
+- **MCP** (§13) runs both ways: an MCP server's tools join an agent's toolbox
+  with the same trace/exactly-once/approval treatment as server tools
+  (`withMcpTools`, `McpFunctions.Wrap`, over `@ilmek/mcp` / `Ilmek.Mcp`), and
+  `MekikMcpServer` exposes the graph itself as two MCP tools — a turn, and a
+  resume for its human-in-the-loop pauses — over Streamable HTTP.
 
 Full details in [`PROTOCOL.md`](PROTOCOL.md); the exact event→frame mapping is
 pinned by [`conformance/fixtures/`](conformance/fixtures).
@@ -214,7 +221,8 @@ See [`docs/LANGUAGES.md`](docs/LANGUAGES.md) for the naming map,
 [`docs/HITL.md`](docs/HITL.md) for the human-in-the-loop authoring rules,
 [`docs/GENUI.md`](docs/GENUI.md) for the two rendering paths (typed GenUI
 components and rich messages), [`docs/CLIENT-TOOLS.md`](docs/CLIENT-TOOLS.md)
-for client-declared tools, and [`docs/SKILLS.md`](docs/SKILLS.md) for skills.
+for client-declared tools, [`docs/SKILLS.md`](docs/SKILLS.md) for skills, and
+[`docs/MCP.md`](docs/MCP.md) for MCP in both directions.
 
 ## Non-goals (v1)
 

@@ -72,6 +72,15 @@ and committed; both suites then treat them as read-only goldens.
 | `client-tool-call`     | `mekik.callClientTool` (§11.3): running `tool_call` trace, then an interrupt whose `$mekik.tool` unwraps to `data.tool={name,params}` with empty payload and no ui/actions/event |
 | `skill-loaded`         | `mekik.loadSkill` (§12.5): `$mekik.skill` customs → persistent `skill` frames carrying the use record verbatim; an unknown name is a `status:"error"` use; the reply follows |
 
+### The MCP JSON-RPC fixture
+
+[`mcp/rpc.json`](mcp/rpc.json) pins the JSON-RPC surface of `MekikMcpServer`
+(PROTOCOL.md §13): `initialize` version negotiation, `ping`, the two advertised
+tools, the error codes for unknown methods, unknown tools and bad argument
+shapes. Both suites run every case against a server configured with the
+fixture's `options`. `tools/call` results are asserted behaviourally instead —
+conversation ids are minted at random.
+
 ## Scenario suites (behavioural)
 
 1. **handshake** - anonymous connect mints `userId`/`conversationId`; `welcome`
@@ -162,6 +171,24 @@ and committed; both suites then treat them as read-only goldens.
     loads with `source:"client"`; an unknown name emits `status:"error"` and
     throws, ending the run `error`; `skillResource` reaches a folder-backed
     server source and is refused for client skills and sources without files.
+25. **MCP turn** (§13.2) - `tools/call <name>` runs one turn: a finished run
+    returns the reply as text and `{conversationId, status:"finished", reply,
+    toolCalls, skills}`; a `conversationId` continues the conversation and an
+    unknown one starts fresh (the result reports the id used); a graph error is
+    a result with `isError` and the error text; `includeFrames` adds the
+    persistent frames only.
+26. **MCP pause and resume** (§13.2) - a paused run returns
+    `status:"interrupted"` with `pending[{id, payload, actions?, tool?}]` and
+    a text that names each interrupt and the resume tool; `<name>__resume` with
+    answers keyed by id finishes it; a turn on a parked conversation, or a
+    resume with nothing open, is `status:"refused"` with `isError` and the
+    engine's error text — never a crash.
+27. **MCP tools in an agent** (§13.1) - `withMcpTools` / `McpFunctions.Wrap`
+    keep name, description and schema (a missing description gets a default);
+    a call is a `tool_call` trace, runs once across a pause (same trace id on
+    replay), and reads as the result text; `isError` results and structured-only
+    results become observations; the policy map applies by exposed name and an
+    `approve` decline never runs the remote tool.
 
 Subtle cases fresh ports tend to break (mirroring ilmek's list): 6 and 7
 (id-vs-key routing), 8 (pending re-announce), 12 (refuse new turn while parked),

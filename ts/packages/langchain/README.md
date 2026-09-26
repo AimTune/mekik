@@ -37,6 +37,13 @@ and `runAgent({ skills: true })` appends the `<available_skills>` block to the
 system prompt and adds the tools in one switch. Each load emits a persistent
 `skill` frame so the UI shows which skill the agent is following.
 
+## MCP servers as tools
+
+`withMcpTools(ctx, toolbox, policy?)` takes an [`@ilmek/mcp`](https://ilmek.aimtune.dev/mcp)
+toolbox (or anything with its `{ name, tools(), invoke() }` shape) and gives each
+exposed tool the same treatment as a server tool — trace, exactly-once,
+optional approval keyed by the exposed name (`github__create_issue`).
+
 ## Why wrapping, not just callbacks
 
 A LangChain agent invokes its own tools. That leaves two gaps mekik normally

@@ -13,6 +13,9 @@
     },
     {
       "path": "./packages/redis"
+    },
+    {
+      "path": "./packages/mcp"
     }
   ]
 }

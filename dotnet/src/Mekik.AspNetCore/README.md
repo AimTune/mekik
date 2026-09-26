@@ -16,4 +16,9 @@ web.Run();
 Identity may arrive in the URL query string or the first `hello` frame; both are
 merged at connect.
 
+The same package serves the graph to *agents*: `web.MapMekikMcp("/mcp", new
+MekikMcpServer(app, new McpServerOptions { Name = "support_desk" }))` exposes it
+as two Model Context Protocol tools over Streamable HTTP (PROTOCOL.md §13) — a
+turn, and a resume for its human-in-the-loop pauses.
+
 MIT

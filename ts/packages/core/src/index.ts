@@ -87,6 +87,10 @@ export type { ComponentSpec, ComponentSource, DefinedComponent } from "./compone
 export { ConversationEngine, randomMinter } from "./engine.ts";
 export type { ClientSkillsPolicy, ClientToolsPolicy, Connection, ConnectParams, EngineConfig, GenUiEvent, Greeting } from "./engine.ts";
 
+// mekik as an MCP server (PROTOCOL.md §13): a graph as tools another agent calls.
+export { JSON_RPC, MCP_PROTOCOL_VERSIONS, McpArgumentError, MekikMcpServer, summarize as summarizeMcpTurn } from "./mcp.ts";
+export type { JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpPendingView, McpServerOptions, McpToolDefinition, McpTurnResult } from "./mcp.ts";
+
 // Skills (PROTOCOL.md §12): the source port, the prompt renderer, the catalog hash.
 export { DEFAULT_SKILLS_INTRO, hashSkills, renderSkillsPrompt, StaticSkillSource, summaryOf, toSkillSource, TurnSkills } from "./skills.ts";
 export type { SkillSource, SkillsInput, SkillsPromptOptions } from "./skills.ts";

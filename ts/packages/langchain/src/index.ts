@@ -211,6 +211,67 @@ function wrapClientTool(ctx: Context<any>, def: ClientToolDefinition): Structure
     return wrapped as unknown as StructuredToolInterface;
 }
 
+// ── MCP servers as tools (PROTOCOL.md §13) ────────────────────────────────────
+
+/**
+ * What {@link withMcpTools} needs from a connected MCP server — the shape of
+ * `@ilmek/mcp`'s `McpToolbox`, structurally, so that package is not a
+ * dependency here: a name, the exposed tool list, and the raw (unjournaled)
+ * invoke. Journaling, the `tool_call` trace and approval come from
+ * {@link withMekikTools}.
+ */
+export interface McpToolboxLike {
+    readonly name: string;
+    tools(): ReadonlyArray<{ readonly name: string; readonly description?: string; readonly inputSchema: Record<string, unknown> }>;
+    invoke(name: string, args: Record<string, unknown>): Promise<{ readonly text: string; readonly structured?: Record<string, unknown>; readonly isError: boolean }>;
+}
+
+/**
+ * An MCP server's tools as LangChain tools, with the mekik treatment
+ * (PROTOCOL.md §13): each call is a `tool_call` trace, runs exactly once across
+ * an interrupt/resume, and may require human approval — the same {@link ToolPolicy}
+ * map as server tools, keyed by the **exposed** tool name (`github__search`).
+ *
+ * @remarks
+ * The observation the model reads is the result's `text`; when the server
+ * returned only `structuredContent`, that is serialized instead. A result the
+ * server flagged `isError` comes back as `Error from <tool>: …` — an
+ * observation, not a crash. The toolbox's own `call` is not used because
+ * {@link withMekikTools} already journals under `lc:<name>`; double-journaling
+ * would only add entries.
+ *
+ * @example
+ * ```ts
+ * const github = await McpToolbox.connect(client, { name: "github" });   // @ilmek/mcp
+ * const tools = [
+ *     ...withMekikTools(ctx, serverTools, policy),
+ *     ...withMcpTools(ctx, github, { github__create_issue: { approve: true } }),
+ * ];
+ * ```
+ */
+export function withMcpTools(
+    ctx: Context<any>,
+    toolbox: McpToolboxLike,
+    policy: ToolPolicyMap = {},
+    options: WithMekikToolsOptions = {},
+): StructuredToolInterface[] {
+    const raw = toolbox.tools().map(
+        (t) =>
+            new DynamicStructuredTool({
+                name: t.name,
+                description: t.description ?? `The ${t.name} tool of MCP server ${toolbox.name}.`,
+                schema: t.inputSchema as never,
+                func: async (input: unknown) => {
+                    const result = await toolbox.invoke(t.name, asRecord(input));
+                    const text = result.text.length > 0 ? result.text : result.structured !== undefined ? JSON.stringify(result.structured) : "";
+                    if (result.isError) return `Error from ${t.name}: ${text.length > 0 ? text : "the tool reported an error"}`;
+                    return text.length > 0 ? text : "(empty result)";
+                },
+            }) as unknown as StructuredToolInterface,
+    );
+    return withMekikTools(ctx, raw, policy, options);
+}
+
 // ── skills (PROTOCOL.md §12) ──────────────────────────────────────────────────
 
 /** The tool name a model calls to read a skill's instructions (level 2). */
