@@ -22,6 +22,13 @@ mekik ships two implementations that speak the identical `mekik/1` wire
 | client tools accept | `MekikOptions.clientTools: true \| fn` | `MekikOptions.ClientTools` (`ClientTools.AcceptAll` / `ClientToolsPolicy`) |
 | client tool sanitize | `sanitizeClientTools` | `ClientTools.Sanitize` |
 | client tool model wrap | `withClientTools` (`@mekik/langchain`) | `ClientToolFunctions.Wrap` (`Mekik.Agents`) |
+| skills read (§12) | `mekik.skills(ctx, {tags?, source?})` / `mekik.skillsPrompt(ctx, filter?, {intro?})` | `Shuttle.Skills(ctx, tags?, source?)` / `Shuttle.SkillsPrompt(ctx, tags?, source?, intro?)` |
+| skill load (§12) | `mekik.loadSkill(ctx, name)` / `mekik.skillResource(ctx, name, path)` | `Shuttle.LoadSkill(ctx, name)` / `Shuttle.SkillResourceAsync(ctx, name, path)` |
+| skill source port | `SkillSource` / `StaticSkillSource` / `TurnSkills` | `ISkillSource` / `SkillSources.Inline` / `TurnSkillSource` |
+| skills catalog hash / prompt | `hashSkills` / `renderSkillsPrompt` | `Skills.Hash` / `Skills.RenderPrompt` |
+| client skills accept | `MekikOptions.clientSkills: true \| fn` | `MekikOptions.ClientSkills` (`ClientSkills.AcceptAll` / `ClientSkillsPolicy`) |
+| client skill sanitize | `sanitizeClientSkills` | `ClientSkills.Sanitize` |
+| skill model wrap | `withSkills` / `runAgent({ skills })` (`@mekik/langchain`) | `SkillFunctions.Wrap` / `AgentRunOptions.Skills` (`Mekik.Agents`) |
 | typed component | `mekik.component<P>(name)` | pass the name to `Shuttle.Ui` / `Shuttle.Mount` |
 | built-in components | `mekik.genui.*` | `GenUI.*` (+ `GenUI.Names.*`) |
 | rich messages | `mekik.message` / `mekik.messageKind` / `mekik.messages.*` | `Shuttle.Message` / `Messages.*` |
@@ -57,7 +64,8 @@ mekik ships two implementations that speak the identical `mekik/1` wire
 4. **The client-tools opt-in.** TypeScript spells "accept everything" as the
    literal `clientTools: true`; C# has no boolean-or-delegate union, so .NET
    assigns the identity policy `ClientTools.AcceptAll` to the same effect. The
-   function/delegate form is identical in both.
+   function/delegate form is identical in both. `clientSkills` /
+   `ClientSkills.AcceptAll` follows the same pattern.
 
 5. **`Choose`'s answer type.** TypeScript infers it from the options themselves (a
    `const` type parameter turns `["S", "M", "L"]` into `"S" | "M" | "L"`). C# has no

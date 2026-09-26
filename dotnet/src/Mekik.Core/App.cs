@@ -36,6 +36,31 @@ public sealed record MekikOptions
     /// </code></example>
     public ClientToolsPolicy? ClientTools { get; init; }
     /// <summary>
+    /// The <b>skills</b> this server offers its nodes (PROTOCOL.md §12): an
+    /// <see cref="ISkillSource"/> — <see cref="SkillSources.Inline(SkillEntry[])"/> for a
+    /// fixed list, or a source over <c>Ilmek.Skills</c>' catalog. Nodes read level 1 with
+    /// <see cref="Shuttle.Skills"/> / <see cref="Shuttle.SkillsPrompt"/> and load one with
+    /// <see cref="Shuttle.LoadSkill"/>; the catalog's summaries are announced to each
+    /// client after <c>welcome</c> (hash-versioned, like components).
+    /// </summary>
+    /// <example><code>
+    /// Skills = SkillSources.Inline(new SkillEntry { Name = "pdf", Description = "Fill PDF forms.", Instructions = "…" }),
+    /// </code></example>
+    public ISkillSource? Skills { get; init; }
+    /// <summary>
+    /// Accept <b>client-declared skills</b> into the turn's skill set (PROTOCOL.md §12.4).
+    /// Default: off — declarations in <c>hello.skills</c> / <c>client_skills</c> frames are
+    /// ignored entirely, the same posture as <see cref="ClientTools"/>, because a skill's
+    /// description and instructions are text a model will follow. Assign
+    /// <see cref="Mekik.ClientSkills.AcceptAll"/> to accept every well-formed declaration,
+    /// or a filter to pin names, cap instruction length, strip tags. A client skill never
+    /// overrides a server skill of the same name.
+    /// </summary>
+    /// <example><code>
+    /// ClientSkills = (skills, _) => skills.Where(s => s.Instructions.Length &lt;= 4000).ToList(),
+    /// </code></example>
+    public ClientSkillsPolicy? ClientSkills { get; init; }
+    /// <summary>
     /// What the bot sends once when a fresh conversation first connects (before any turn)
     /// — a greeting / instructions. Not sent on reconnect (the transcript already has it).
     /// Return <c>null</c> for no greeting.
@@ -138,6 +163,8 @@ public sealed class MekikApp
             Context = options.Context,
             AcceptClientMeta = options.AcceptClientMeta,
             ClientTools = options.ClientTools,
+            Skills = options.Skills,
+            ClientSkills = options.ClientSkills,
             Greeting = options.Greeting,
             Components = options.Components is { Count: > 0 } ? new ComponentCatalog(options.Components) : null,
             OnGenUiEvent = options.OnGenUiEvent,

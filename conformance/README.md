@@ -70,6 +70,7 @@ and committed; both suites then treat them as read-only goldens.
 | `mixed-turn`           | ui + tokens + tool + reply in one run (ordering + seq monotonicity)                         |
 | `rich-message`         | `mekik.message` customs → persistent rich message frames (§4.5); caller id wins over the minted one; a reserved frame type is dropped |
 | `client-tool-call`     | `mekik.callClientTool` (§11.3): running `tool_call` trace, then an interrupt whose `$mekik.tool` unwraps to `data.tool={name,params}` with empty payload and no ui/actions/event |
+| `skill-loaded`         | `mekik.loadSkill` (§12.5): `$mekik.skill` customs → persistent `skill` frames carrying the use record verbatim; an unknown name is a `status:"error"` use; the reply follows |
 
 ## Scenario suites (behavioural)
 
@@ -137,6 +138,30 @@ and committed; both suites then treat them as read-only goldens.
     invocation is a genui event chunk named `client_tool` with
     `payload={name,params}`, keyed by the trace id, and the running→completed
     trace pair emits in the same turn.
+21. **skill catalog handshake** (§12.2) - a configured catalog is announced once
+    after `welcome` as a transient `skills` frame carrying level-1 summaries
+    (never instructions), each stamped `source:"server"`, with a sha256 hash
+    over the canonical summaries; a matching `hello.skillsHash` draws
+    `{unchanged:true}` and no list; no catalog ⇒ no frame. The hash ignores
+    order and origin stamps and is identical across languages.
+22. **client skill declaration** (§12.4) - `hello.skills` are ignored entirely
+    unless the app opts in; sanitization drops a bad name, a missing or
+    over-long description, missing instructions; duplicates last-win; the
+    policy function is the allowlist; a `client_skills` frame replaces the set
+    and `[]` withdraws it; a non-array draws `bad_request`; a client skill
+    never overrides a server skill of the same name; multi-tab is the union
+    with the latest declaration winning.
+23. **skill snapshot and tags** (§12.3) - server skills list first, then
+    client ones, each with its origin; untagged skills match every query and
+    tagged ones only on intersection; the `source` filter narrows to one
+    origin; the rendered prompt is byte-identical to ilmek's and empty when
+    there is nothing to list.
+24. **skill load** (§12.5) - `loadSkill` returns the instructions and emits a
+    persistent `skill` frame with a replay-stable id (`…:skill:0`) and the
+    origin; the frame replays to a reconnecting tab; a client-declared skill
+    loads with `source:"client"`; an unknown name emits `status:"error"` and
+    throws, ending the run `error`; `skillResource` reaches a folder-backed
+    server source and is refused for client skills and sources without files.
 
 Subtle cases fresh ports tend to break (mirroring ilmek's list): 6 and 7
 (id-vs-key routing), 8 (pending re-announce), 12 (refuse new turn while parked),

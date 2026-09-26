@@ -12,7 +12,20 @@
 
 import { isInterrupt, type Context } from "@ilmek/core";
 
-import { CLIENT_TOOL_EVENT, type AIChunk, type ClientToolDefinition, type ClientToolMode, type MessageAction, type ToolCall, type UiRef } from "./protocol.ts";
+import {
+    CLIENT_TOOL_EVENT,
+    type AIChunk,
+    type ClientToolDefinition,
+    type ClientToolMode,
+    type MessageAction,
+    type SkillEntry,
+    type SkillOrigin,
+    type SkillSummary,
+    type SkillUse,
+    type ToolCall,
+    type UiRef,
+} from "./protocol.ts";
+import { renderSkillsPrompt, type SkillSource, type SkillsPromptOptions } from "./skills.ts";
 
 const MEKIK_KEY = "$mekik";
 
@@ -454,6 +467,136 @@ export async function callClientTool<T = unknown>(
     }
     trace({ id, name, status: "completed", result: answer });
     return answer as T;
+}
+
+// ── skills (PROTOCOL.md §12) ──────────────────────────────────────────────────
+
+/** Per-ctx skill counter — same replay-stability story as {@link nextToolId}. */
+const skillCounters = new WeakMap<object, number>();
+
+function nextSkillId(ctx: Context<any>): string {
+    const n = skillCounters.get(ctx) ?? 0;
+    skillCounters.set(ctx, n + 1);
+    return `${ctx.taskId || "task"}:skill:${n}`;
+}
+
+/** The turn's skill source (§12.3), or undefined when the app configured no skills and accepted none. */
+function skillSourceOf(ctx: Context<any>): SkillSource | undefined {
+    const s = (ctx.meta as Record<string, unknown> | undefined)?.skills;
+    return typeof s === "object" && s !== null && typeof (s as SkillSource).list === "function" && typeof (s as SkillSource).get === "function"
+        ? (s as SkillSource)
+        : undefined;
+}
+
+/** Narrow the skills a node sees; see {@link skills}. */
+export interface SkillFilter {
+    /**
+     * Tag filter — the client-tool rule (§11.2): an untagged skill is
+     * unrestricted and matches every query; a tagged skill matches only when
+     * its tags intersect these.
+     */
+    tags?: readonly string[];
+    /** Keep only skills of one origin: the server's catalog or the client's declarations. */
+    source?: SkillOrigin;
+}
+
+/**
+ * The skills this turn may load (PROTOCOL.md §12.3) — level 1: the summaries a
+ * model reads before choosing. The server's catalog (`MekikOptions.skills`)
+ * plus whatever client-declared skills the app accepted, each stamped with its
+ * `source`. Empty when the app configured neither.
+ *
+ * @param ctx - The ilmek node context.
+ * @param filter - Optional tag/origin narrowing; see {@link SkillFilter}.
+ *
+ * @example
+ * ```ts
+ * const system = base + "\n\n" + mekik.skillsPrompt(ctx, { tags: ["billing"] });
+ * ```
+ */
+export function skills(ctx: Context<any>, filter: SkillFilter = {}): SkillSummary[] {
+    const source = skillSourceOf(ctx);
+    if (!source) return [];
+    let defs = [...source.list()];
+    if (filter.source !== undefined) defs = defs.filter((d) => d.source === filter.source);
+    if (filter.tags !== undefined) {
+        const wanted = new Set(filter.tags);
+        defs = defs.filter((d) => !d.tags || d.tags.length === 0 || d.tags.some((t) => wanted.has(t)));
+    }
+    return defs;
+}
+
+/**
+ * Level 1 as text: the `<available_skills>` block for a system prompt, over
+ * {@link skills} with the same filter. `""` when there is nothing to list —
+ * safe to append unconditionally.
+ *
+ * @param ctx - The ilmek node context.
+ * @param filter - Which skills to list; see {@link SkillFilter}.
+ * @param opts - The intro sentence; see {@link SkillsPromptOptions}.
+ */
+export function skillsPrompt(ctx: Context<any>, filter: SkillFilter = {}, opts: SkillsPromptOptions = {}): string {
+    return renderSkillsPrompt(skills(ctx, filter), opts);
+}
+
+/**
+ * Emit a single `skill` frame — the low-level primitive behind {@link loadSkill},
+ * exported for integrations that resolve skills themselves. Upserts by `use.id`.
+ */
+export function skillTrace(ctx: Context<any>, use: SkillUse): void {
+    ctx.emit({ [MEKIK_KEY]: "skill", use });
+}
+
+/**
+ * Load one skill's instructions — level 2 (PROTOCOL.md §12.5) — and surface
+ * the use as a `skill` frame so the conversation shows which skill the agent
+ * is following.
+ *
+ * @remarks
+ * Loading is a catalog read, not a side effect, so it is not journaled; the
+ * trace id is replay-stable (`taskId` + call order), so a resume pass upserts
+ * the same frame. An unknown name emits a `status: "error"` trace and
+ * **throws** — the agent wrappers turn that into an observation the model can
+ * read instead.
+ *
+ * @param ctx - The ilmek node context.
+ * @param name - The skill's name, as listed by {@link skills}.
+ * @returns The skill with its `instructions`.
+ *
+ * @example
+ * ```ts
+ * const pdf = mekik.loadSkill(ctx, "pdf");
+ * messages.push(new SystemMessage(pdf.instructions));
+ * ```
+ */
+export function loadSkill(ctx: Context<any>, name: string): SkillEntry {
+    if (!name) throw new Error("loadSkill needs a skill name");
+    const id = nextSkillId(ctx);
+    const entry = skillSourceOf(ctx)?.get(name);
+    if (!entry) {
+        const error = `unknown skill ${JSON.stringify(name)}`;
+        skillTrace(ctx, { id, name, status: "error", error });
+        throw new Error(error);
+    }
+    skillTrace(ctx, { id, name, status: "loaded", ...(entry.source !== undefined ? { source: entry.source } : {}) });
+    return entry;
+}
+
+/**
+ * Read one of a skill's bundled files — level 3 (PROTOCOL.md §12.5). Only a
+ * server skill backed by folders has files (`@ilmek/skills`' catalog does);
+ * the call rejects for a client-declared skill or a source without resources.
+ * The catalog confines `path` to the skill folder.
+ */
+export async function skillResource(ctx: Context<any>, name: string, path: string): Promise<string> {
+    const source = skillSourceOf(ctx);
+    if (!source?.readResource) throw new Error(`skill ${JSON.stringify(name)} has no resources`);
+    return source.readResource(name, path);
+}
+
+/** True when the turn's skill source can serve bundled files (level 3). */
+export function skillResourcesAvailable(ctx: Context<any>): boolean {
+    return typeof skillSourceOf(ctx)?.readResource === "function";
 }
 
 export interface ApproveOptions {

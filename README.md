@@ -76,6 +76,7 @@ mekik/
     HITL.md              # human-in-the-loop authoring guide
     GENUI.md             # rendering: typed components and rich messages
     CLIENT-TOOLS.md      # the frontend's own tools, callable by the graph (§11)
+    SKILLS.md            # Agent Skills: the catalog, progressive disclosure, the skill frame (§12)
   ts/
     packages/core/       # @mekik/core — protocol, mapper, engine, helpers, stores, auth
     packages/ws/         # @mekik/ws — WebSocket transport
@@ -188,6 +189,12 @@ watermark. Transient frames (`welcome`, `run`, `error`) are live-only.
   node sees a tool another does not), a node calls one with
   `mekik.callClientTool`, and the client's handler answers through the same
   durable interrupt machinery.
+- **Skills** (§12) give nodes a catalog of `SKILL.md` folders (read by
+  `@ilmek/skills` / `Ilmek.Skills`), disclosed to the model progressively:
+  `mekik.skillsPrompt` lists them, `mekik.loadSkill` hands back one skill's
+  instructions and emits a persistent `skill` frame, and the catalog is
+  announced to the client in a hash-versioned `skills` frame. A frontend may
+  declare its own skills behind an opt-in policy.
 
 Full details in [`PROTOCOL.md`](PROTOCOL.md); the exact event→frame mapping is
 pinned by [`conformance/fixtures/`](conformance/fixtures).
@@ -206,8 +213,8 @@ The two implementations are held to the same wire two ways:
 See [`docs/LANGUAGES.md`](docs/LANGUAGES.md) for the naming map,
 [`docs/HITL.md`](docs/HITL.md) for the human-in-the-loop authoring rules,
 [`docs/GENUI.md`](docs/GENUI.md) for the two rendering paths (typed GenUI
-components and rich messages), and [`docs/CLIENT-TOOLS.md`](docs/CLIENT-TOOLS.md)
-for client-declared tools.
+components and rich messages), [`docs/CLIENT-TOOLS.md`](docs/CLIENT-TOOLS.md)
+for client-declared tools, and [`docs/SKILLS.md`](docs/SKILLS.md) for skills.
 
 ## Non-goals (v1)
 

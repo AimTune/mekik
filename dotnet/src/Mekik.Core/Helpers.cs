@@ -53,6 +53,115 @@ public static class Shuttle
     /// <seealso cref="ToolTrace"/>
     public static string NextToolCallId(IContext ctx) => NextToolId(ctx);
 
+    // ── skills (PROTOCOL.md §12) ──────────────────────────────────────────────
+
+    // Per-ctx skill counter — same replay-stability story as the tool counter.
+    private static readonly ConditionalWeakTable<IContext, StrongBox<int>> SkillCounters = new();
+
+    private static string NextSkillId(IContext ctx)
+    {
+        var box = SkillCounters.GetValue(ctx, _ => new StrongBox<int>(0));
+        var n = box.Value++;
+        return $"{(string.IsNullOrEmpty(ctx.TaskId) ? "task" : ctx.TaskId)}:skill:{n}";
+    }
+
+    /// <summary>The turn's skill source (§12.3), or null when the app configured no skills and accepted none.</summary>
+    private static ISkillSource? SkillSourceOf(IContext ctx) => ctx.Meta?.GetValueOrDefault("skills") as ISkillSource;
+
+    /// <summary>
+    /// The skills this turn may load (PROTOCOL.md §12.3) — level 1: the summaries a
+    /// model reads before choosing. The server's catalog (<see cref="MekikOptions.Skills"/>)
+    /// plus whatever client-declared skills the app accepted, each stamped with its
+    /// <see cref="SkillSummary.Source"/>. Empty when the app configured neither.
+    /// </summary>
+    /// <param name="ctx">The ilmek node context.</param>
+    /// <param name="tags">
+    /// Tag filter — the client-tool rule (§11.2): an untagged skill is unrestricted and
+    /// matches every query; a tagged skill matches only when its tags intersect these.
+    /// </param>
+    /// <param name="source">Keep only skills of one origin: <see cref="SkillOrigin.Server"/> or <see cref="SkillOrigin.Client"/>.</param>
+    /// <example><code>var system = basePrompt + "\n\n" + Shuttle.SkillsPrompt(ctx, tags: ["billing"]);</code></example>
+    public static IReadOnlyList<SkillSummary> Skills(IContext ctx, IReadOnlyList<string>? tags = null, string? source = null)
+    {
+        if (SkillSourceOf(ctx) is not { } src) return [];
+        IEnumerable<SkillSummary> query = src.List();
+        if (source is not null) query = query.Where(s => s.Source == source);
+        if (tags is not null)
+        {
+            var wanted = new HashSet<string>(tags, StringComparer.Ordinal);
+            query = query.Where(s => s.Tags is null || s.Tags.Count == 0 || s.Tags.Any(wanted.Contains));
+        }
+        return query.ToList();
+    }
+
+    /// <summary>
+    /// Level 1 as text: the <c>&lt;available_skills&gt;</c> block for a system prompt, over
+    /// <see cref="Skills"/> with the same filter. <c>""</c> when there is nothing to list —
+    /// safe to append unconditionally.
+    /// </summary>
+    /// <param name="ctx">The ilmek node context.</param>
+    /// <param name="tags">Which skills to list; see <see cref="Skills"/>.</param>
+    /// <param name="source">Which origin to list; see <see cref="Skills"/>.</param>
+    /// <param name="intro">The intro sentence; <see cref="Mekik.Skills.DefaultIntro"/> unless given, null for the block alone.</param>
+    public static string SkillsPrompt(IContext ctx, IReadOnlyList<string>? tags = null, string? source = null, string? intro = Mekik.Skills.DefaultIntro) =>
+        Mekik.Skills.RenderPrompt(Skills(ctx, tags, source), intro);
+
+    /// <summary>
+    /// Emit a single <c>skill</c> frame — the low-level primitive behind
+    /// <see cref="LoadSkill"/>, public for integrations that resolve skills themselves.
+    /// Upserts by <c>use["id"]</c>.
+    /// </summary>
+    public static void SkillTrace(IContext ctx, IReadOnlyDictionary<string, object?> use) =>
+        ctx.Emit(new Dictionary<string, object?> { [MekikKey] = "skill", ["use"] = use });
+
+    /// <summary>
+    /// Load one skill's instructions — level 2 (PROTOCOL.md §12.5) — and surface the use
+    /// as a <c>skill</c> frame so the conversation shows which skill the agent is following.
+    /// </summary>
+    /// <remarks>
+    /// Loading is a catalog read, not a side effect, so it is not journaled; the trace id
+    /// is replay-stable (<c>TaskId</c> + call order), so a resume pass upserts the same
+    /// frame. An unknown name emits a <c>status: "error"</c> trace and <b>throws</b>
+    /// <see cref="KeyNotFoundException"/> — the agent wrappers turn that into an
+    /// observation the model can read instead.
+    /// </remarks>
+    /// <param name="ctx">The ilmek node context.</param>
+    /// <param name="name">The skill's name, as listed by <see cref="Skills"/>.</param>
+    /// <returns>The skill with its <see cref="SkillEntry.Instructions"/>.</returns>
+    /// <example><code>var pdf = Shuttle.LoadSkill(ctx, "pdf"); messages.Add(new(ChatRole.System, pdf.Instructions));</code></example>
+    public static SkillEntry LoadSkill(IContext ctx, string name)
+    {
+        if (string.IsNullOrEmpty(name)) throw new ArgumentException("LoadSkill needs a skill name", nameof(name));
+        var id = NextSkillId(ctx);
+        var entry = SkillSourceOf(ctx)?.Get(name);
+        if (entry is null)
+        {
+            var error = $"unknown skill \"{name}\"";
+            SkillTrace(ctx, new Dictionary<string, object?> { ["id"] = id, ["name"] = name, ["status"] = "error", ["error"] = error });
+            throw new KeyNotFoundException(error);
+        }
+        var use = new Dictionary<string, object?> { ["id"] = id, ["name"] = name, ["status"] = "loaded" };
+        if (entry.Source is not null) use["source"] = entry.Source;
+        SkillTrace(ctx, use);
+        return entry;
+    }
+
+    /// <summary>
+    /// Read one of a skill's bundled files — level 3 (PROTOCOL.md §12.5). Only a server
+    /// skill backed by folders has files; the call throws <see cref="NotSupportedException"/>
+    /// for a client-declared skill or a source without resources. The catalog confines
+    /// <paramref name="path"/> to the skill folder.
+    /// </summary>
+    public static Task<string> SkillResourceAsync(IContext ctx, string name, string path, CancellationToken ct = default)
+    {
+        var src = SkillSourceOf(ctx);
+        if (src is null || !src.HasResources) throw new NotSupportedException($"skill \"{name}\" has no resources");
+        return src.ReadResourceAsync(name, path, ct);
+    }
+
+    /// <summary>True when the turn's skill source can serve bundled files (level 3).</summary>
+    public static bool SkillResourcesAvailable(IContext ctx) => SkillSourceOf(ctx)?.HasResources ?? false;
+
     // Per-ctx ui counter — same replay-stability story as the tool counter.
     private static readonly ConditionalWeakTable<IContext, StrongBox<int>> UiCounters = new();
 

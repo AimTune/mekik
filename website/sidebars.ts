@@ -32,6 +32,7 @@ const sidebars: SidebarsConfig = {
         "authoring/tools",
         "authoring/human-in-the-loop",
         "authoring/client-tools",
+        "authoring/skills",
       ],
     },
     {

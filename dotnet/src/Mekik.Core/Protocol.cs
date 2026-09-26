@@ -18,7 +18,7 @@ public static class Protocol
 
     /// <summary>Server→client frame types that carry `seq`, persist, and replay (PROTOCOL.md §2).</summary>
     public static readonly IReadOnlySet<string> PersistentFrameTypes =
-        new HashSet<string> { "text", "tool_call", "genui", "interrupt", "interrupt_resolved" };
+        new HashSet<string> { "text", "tool_call", "skill", "genui", "interrupt", "interrupt_resolved" };
 
     /// <summary>
     /// Frame types the protocol itself owns, in either direction. A rich message
@@ -28,8 +28,8 @@ public static class Protocol
     /// </summary>
     public static readonly IReadOnlySet<string> ReservedFrameTypes = new HashSet<string>
     {
-        "hello", "welcome", "text", "resume", "genui_event", "client_tools", "abort",
-        "tool_call", "genui", "genui_components", "interrupt", "interrupt_resolved", "run", "error", "typing",
+        "hello", "welcome", "text", "resume", "genui_event", "client_tools", "client_skills", "abort",
+        "tool_call", "skill", "skills", "genui", "genui_components", "interrupt", "interrupt_resolved", "run", "error", "typing",
     };
 
     /// <summary>
@@ -42,7 +42,7 @@ public static class Protocol
     public const string ClientToolEvent = "client_tool";
 
     private static readonly IReadOnlySet<string> IncomingTypes =
-        new HashSet<string> { "hello", "text", "resume", "genui_event", "client_tools", "abort" };
+        new HashSet<string> { "hello", "text", "resume", "genui_event", "client_tools", "client_skills", "abort" };
 
     /// <summary>
     /// True for a rich message frame (PROTOCOL.md §4.5): the text envelope under a
@@ -100,6 +100,10 @@ public static class Protocol
             case "client_tools":
                 if (frame.GetValueOrDefault("tools") is not IReadOnlyList<object?>)
                     throw new ProtocolException("bad_request", "client_tools frame requires tools: array");
+                break;
+            case "client_skills":
+                if (frame.GetValueOrDefault("skills") is not IReadOnlyList<object?>)
+                    throw new ProtocolException("bad_request", "client_skills frame requires skills: array");
                 break;
         }
 

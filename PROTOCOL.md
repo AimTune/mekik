@@ -99,11 +99,12 @@ envelope is persistent under the same rules.
 
 | `type`        | shape                                                         | meaning                                                                                                                                                                                                        |
 | ------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hello`       | `{type, userId?, conversationId?, watermark?, token?, meta?, componentsHash?, tools?}` | handshake; may also travel as WS query string. `meta` is a client-supplied context map (see §6); `tools` declares this client's callable tools (§11.1).                                        |
+| `hello`       | `{type, userId?, conversationId?, watermark?, token?, meta?, componentsHash?, tools?, skillsHash?, skills?}` | handshake; may also travel as WS query string. `meta` is a client-supplied context map (see §6); `tools` declares this client's callable tools (§11.1); `skillsHash` is the server skill catalog the client has cached and `skills` declares the client's own skills (§12). |
 | `text`        | `{type, data:{text}, meta?}`                                  | one user turn → starts a run (or is refused `busy`, §5).                                                                                                                                                       |
 | `resume`      | `{type, answers:{[interruptId]: any}}`                        | answer the open interrupts, keyed by thread-scoped interrupt `id`. Must cover **every** open interrupt (ilmek's `resumeKeyed` requires it); a resume that omits one draws `error{incomplete_resume}`.          |
 | `genui_event` | `{type, streamId, eventType, scope?, component?, payload}`     | an interaction from a mounted GenUI component. `scope` is `"component"` (from `component-event`), `"graph"` (from `mekik-event`), or absent (from `data-event`) and decides who receives it — the node parked on `onEvent`, the app's handler, or whichever answers first (§10.4). A `submit` naming an open interrupt is coerced to a `resume` regardless (§4.4). |
 | `client_tools` | `{type, tools: ClientToolDefinition[]}`                      | replace this connection's declared client tools (§11.1). The list is the connection's whole new set; `[]` withdraws every tool. Inert unless the server opted in.                                              |
+| `client_skills` | `{type, skills: ClientSkillDefinition[]}`                   | replace this connection's declared client skills (§12.4). The list is the connection's whole new set; `[]` withdraws every skill. Inert unless the server opted in.                                          |
 | `abort`       | `{type}`                                                      | cancel the in-flight run. The graph stops at the next superstep boundary; the last checkpoint stands, so the thread stays resumable.                                                                           |
 
 Malformed frames (bad JSON, missing `type`, unknown required fields) draw an
@@ -117,11 +118,13 @@ stays open).
 | `welcome`            | no         | `{type, data:{protocol, conversationId, userId, connectionId, watermark, pending: PendingView[]}}`                     |
 | `text`               | yes        | `{type, id, seq, from:"bot"\|"user", data:{text}, timestamp}`                                                          |
 | `tool_call`          | yes        | `{type, seq, data:{id, name, status:"running"\|"completed"\|"error", params?, result?, error?}}` - upsert by `data.id` |
+| `skill`              | yes        | `{type, seq, data:{id, name, status:"loaded"\|"error", source?, error?}}` - a skill use (§12.5), upsert by `data.id`   |
 | `genui`              | yes        | `{type, seq, streamId, done, chunk: AIChunk}`                                                                          |
 | `interrupt`          | yes        | `{type, seq, id, data:{payload, ui?, actions?, event?, tool?}}`                                                        |
 | `interrupt_resolved` | yes        | `{type, seq, id, data:{answer?}}`                                                                                      |
 | _rich message_ (§4.5) | yes       | `{type: <rendererName>, id, seq, from:"bot"\|"user", data, timestamp}` - `type` is a client message-renderer name      |
 | `genui_components`   | no         | `{type, hash, unchanged?, components?: ComponentDefinition[]}` — the server-defined component catalog (§10)              |
+| `skills`             | no         | `{type, hash, unchanged?, skills?: SkillSummary[]}` — the server's skill catalog, level 1 only (§12.2)                   |
 | `run`                | no         | `{type, data:{status:"started"\|"finished"\|"interrupted"\|"error"\|"aborted"}}`                                       |
 | `error`              | no         | `{type, data:{code, message}}`                                                                                         |
 
@@ -337,6 +340,10 @@ The graph run receives context from three merged sources, placed on ilmek
 - `meta.auth` - the verified `claims` from the Authenticator, if any.
 - `meta.clientTools` - the turn's client tool snapshot (§11.2), present only when
   the server opted in via `MekikOptions.clientTools` and something is declared.
+- `meta.skills` - the turn's skill source (§12.3): the server catalog merged with
+  the accepted client declarations, present only when the app configured
+  `MekikOptions.skills` or a client skill was accepted. Read it through the
+  helpers, not directly.
 
 Nodes read these via ilmek `ctx.meta`. This is how a graph is parameterized per
 conversation without the graph knowing anything about mekik.
@@ -357,6 +364,10 @@ ambient storage is needed (ilmek already threads `ctx` everywhere):
 | `mekik.message(ctx, type, data, {id?})` / `Shuttle.Message`          | emit a rich message frame (§4.5)                                                            |
 | `mekik.clientTools(ctx, {tags?, mode?})` / `Shuttle.ClientTools`     | the turn's client tool snapshot, filtered by tag/mode (§11.2)                               |
 | `mekik.callClientTool(ctx, name, params?, {key?})` / `Shuttle.CallClientToolAsync` | invoke a client tool — a durable interrupt round-trip, or a fire-and-forget chunk for a `notify` tool (§11.3) |
+| `mekik.skills(ctx, {tags?, source?})` / `Shuttle.Skills`            | the turn's skill summaries — level 1, filtered by tag/origin (§12.3)                        |
+| `mekik.skillsPrompt(ctx, filter?, {intro?})` / `Shuttle.SkillsPrompt` | the `<available_skills>` block for a system prompt; `""` when there is nothing to list (§12.3) |
+| `mekik.loadSkill(ctx, name)` / `Shuttle.LoadSkill`                  | one skill's instructions — level 2 — **and** a `skill` trace (§12.5); unknown name ⇒ error trace + throw |
+| `mekik.skillResource(ctx, name, path)` / `Shuttle.SkillResourceAsync` | one bundled file — level 3 — when the source has files behind it (§12.5)                    |
 | `mekik.component<P>(name)` / `GenUI.*`, `GenUI.Names.*`              | bind a GenUI component name once, typed — chativa's built-ins are `mekik.genui.*`          |
 | `mekik.messageKind<D>(type)` / `Messages.*`                          | bind a message type once, typed — chativa's built-ins are `mekik.messages.*`               |
 
@@ -423,6 +434,9 @@ Naming (extends MODEL.md §11):
 | auth port         | `Authenticator`                     | `IAuthenticator`                                 |
 | client tools read | `mekik.clientTools`                 | `Shuttle.ClientTools`                            |
 | client tool call  | `mekik.callClientTool`              | `Shuttle.CallClientToolAsync`                    |
+| skills read       | `mekik.skills` / `mekik.skillsPrompt` | `Shuttle.Skills` / `Shuttle.SkillsPrompt`      |
+| skill load        | `mekik.loadSkill` / `mekik.skillResource` | `Shuttle.LoadSkill` / `Shuttle.SkillResourceAsync` |
+| skill source port | `SkillSource`                       | `ISkillSource`                                   |
 
 **.NET caveat (MODEL.md §11 divergence 2):** any `try/catch` in the adapter or
 helpers that wraps node execution MUST rethrow when
@@ -813,3 +827,184 @@ parks until some connection answers it.
   refuses runtime mutation unless explicitly enabled) so console access or an
   XSS cannot silently rewire what the model can trigger.
 
+---
+
+## 12. Skills (§12)
+
+A **skill** is a folder with a `SKILL.md` — YAML frontmatter that names and
+describes it, then markdown instructions — the Agent Skills format, read by
+ilmek's `@ilmek/skills` / `Ilmek.Skills`. §12 is how a mekik app gives its
+nodes a catalog of them, shows a client which one the agent is following, and
+lets a frontend declare skills of its own. The organising idea is **progressive
+disclosure**: a model sees every skill's name and description up front (level
+1), reads one skill's instructions when a task matches (level 2), and opens a
+bundled file only when the instructions point at it (level 3). Only what the
+task needs enters the context.
+
+Everything here is **additive** within `mekik/1`: an older client ignores the
+`skills` catalog and the `skill` trace (unknown frame types are ignored), and
+an older server ignores a client's declarations.
+
+### 12.1 The shapes
+
+```ts
+/** Level 1 — what a model sees before choosing (the catalog frame, mekik.skills). */
+interface SkillSummary {
+  /** 1–64 lowercase letters, digits and single hyphens — the Agent Skills name rule. */
+  name: string;
+  /** What the skill does and when to use it — the whole trigger surface. */
+  description: string;
+  /** Server-side filter labels; the client-tool tag rule (§11.2). */
+  tags?: string[];
+  /** Stamped by the turn snapshot: "server" | "client". */
+  source?: "server" | "client";
+}
+
+/** Level 2 — as a source hands it back. */
+interface SkillEntry extends SkillSummary { instructions: string }
+
+/** A client's inline declaration (§12.4). */
+interface ClientSkillDefinition { name: string; description: string; instructions: string; tags?: string[] }
+
+/** One skill use, as it travels on a `skill` frame (§12.5). */
+interface SkillUse { id: string; name: string; status: "loaded" | "error"; source?: "server" | "client"; error?: string }
+```
+
+The server side reads skills through a **source** — `SkillSource` /
+`ISkillSource`: `list()` (level 1, sorted by name), `get(name)` (level 2),
+and an optional `readResource(name, path)` (level 3). `@ilmek/skills`'
+`SkillCatalog` is one; a plain list of entries is wrapped into one; a database
+or a remote registry can implement it. mekik never reads folders itself.
+
+### 12.2 The server catalog and its handshake
+
+`MekikOptions.skills` is the server's catalog. On connect, right after
+`welcome` (and after `genui_components` when both exist), the server sends the
+transient `skills` frame:
+
+```jsonc
+{ "type": "skills", "hash": "9f3a…", "skills": [
+    { "name": "brand-voice", "description": "Write in the house voice.", "source": "server" },
+    { "name": "pdf", "description": "Fill, merge and read PDF forms.", "tags": ["docs"], "source": "server" } ] }
+```
+
+Level 1 only — instructions never travel here. `hash` is `sha256` over the
+canonical JSON of the summaries (`name`, `description`, `tags`; never
+`source`) sorted by name, so both implementations mint the same hash for the
+same catalog. A client that cached the catalog hands the hash back in
+`hello.skillsHash`; a match draws `{type:"skills", hash, unchanged:true}` and
+no list — the same handshake as `genui_components` (§10.2). No configured
+skills ⇒ no frame at all. Client-declared skills are never echoed here: a
+client already knows what it declared, and the catalog frame is about what the
+*server* offers.
+
+### 12.3 The turn snapshot, tags and origin
+
+At run start the engine places one **skill source** at `meta.skills` (§6):
+the server catalog merged with the client declarations the app accepted, taken
+once per turn so a set that changes mid-run does not shift under the node's
+feet. Every summary it lists is stamped with its `source`. A client skill whose
+name collides with a server skill is **dropped** — the server's definition is
+authoritative, and a client must not be able to rewrite what a server skill
+tells the model.
+
+Nodes read it with `mekik.skills(ctx, {tags?, source?})` / `Shuttle.Skills`.
+The tag rule is §11.2's: an untagged skill is unrestricted and matches every
+query; a tagged skill matches only when its tags intersect the query's. The
+`source` filter narrows to one origin. `mekik.skillsPrompt(ctx, filter,
+{intro?})` / `Shuttle.SkillsPrompt` renders the filtered list as the block a
+system prompt carries — byte-identical to ilmek's own renderer:
+
+```text
+<intro sentence>
+
+<available_skills>
+  <skill>
+    <name>pdf</name>
+    <description>Fill, merge and read PDF forms.</description>
+  </skill>
+</available_skills>
+```
+
+`&`, `<` and `>` in a name or description are XML-escaped; an empty list
+renders `""`. The default intro tells the model to load a skill by name before
+acting on a matching task; `intro: null` renders the block alone.
+
+### 12.4 Client-declared skills
+
+A frontend may declare skills **inline** — it has no folder to serve, so the
+whole skill travels in the declaration — in `hello.skills` or a
+`client_skills` frame `{type, skills}`. Both carry the connection's **whole
+set** (replace, never merge); `[]` withdraws everything; a `client_skills`
+whose `skills` is not an array draws `error{bad_request}`.
+
+**Sanitization.** The server keeps an entry only if `name` satisfies the name
+rule, `description` is a non-empty string of at most 1024 characters (trimmed),
+and `instructions` is a string; it keeps only the known fields (`tags` as
+non-empty strings, deduped) and dedupes by name — the last declaration of a
+name wins, keeping the position of its first appearance.
+
+**Opt-in.** Declarations are **ignored entirely by default** — the same posture
+as `clientTools` (§11.1) and `acceptClientMeta`, because a skill's description
+and instructions are text a model will follow: a prompt-injection surface by
+construction. `MekikOptions.clientSkills` turns them on: `true` accepts every
+well-formed declaration; a function is the allowlist form — it sees the
+sanitized list and returns the subset to accept (pin names, cap instruction
+length, strip tags). Unset, the whole feature is inert, wire and all.
+
+**Declarations are per-connection state**, like client tools: not persisted,
+not in the transcript, gone with the socket; a reconnecting client re-declares
+in its next `hello`. The turn snapshot (§12.3) is the union across the
+conversation's live connections, ordered by first appearance, the most recent
+declaration of a name winning.
+
+### 12.5 Loading and the `skill` frame
+
+`mekik.loadSkill(ctx, name)` / `Shuttle.LoadSkill` returns the entry
+(instructions included) and emits a **persistent** `skill` frame, upsert by
+`data.id`:
+
+```jsonc
+{ "type": "skill", "seq": 7, "data": { "id": "conv-1:ckpt-a:agent/0:skill:0", "name": "pdf", "status": "loaded", "source": "server" } }
+```
+
+An unknown name emits `{status:"error", error}` and **throws** — the node, or
+the agent loop around it, decides what the model sees (the `@mekik/langchain`
+and `Mekik.Agents` wrappers return an error observation and keep the loop
+alive). A load is a catalog read, not a side effect, so it is **not journaled**;
+the id is replay-stable (`taskId` + call order, exactly like a tool id), so a
+resume pass re-emits the same id and the client upserts instead of duplicating.
+Being persistent, the frame replays on reconnect: the transcript shows which
+skills the agent followed.
+
+`mekik.skillResource(ctx, name, path)` / `Shuttle.SkillResourceAsync` is level
+3: the text of one bundled file, when the source has files behind it. Only
+server skills can — client skills travel inline — and a folder-backed source
+confines `path` to the skill folder (`..` and absolute paths are refused).
+`skillResourcesAvailable(ctx)` / `Shuttle.SkillResourcesAvailable` says
+whether the turn's source supports it, so an agent wrapper can offer the tool
+only when it works.
+
+### 12.6 Agent wrappers
+
+`@mekik/langchain`: `withSkills(ctx, filter?)` returns a `load_skill` tool
+(schema `{name}`) and, when resources are available, `read_skill_resource`
+(`{name, path}`). `runAgent({ skills: true | filter })` appends the prompt
+block to `system` and adds the tools. `Mekik.Agents`: `SkillFunctions.Wrap(ctx,
+tags?, source?)` and `AgentRunOptions.Skills` / `SkillTags` / `SkillSource`.
+Both refuse a name their filter hides, so the prompt and the tool agree on the
+toolbox, and both return errors as observations. The skill tools are not
+wrapped with the tool-policy machinery: a load emits its own trace.
+
+### 12.7 Security model
+
+- **Off by default for the client side, allowlist on.** §12.4's opt-in is the
+  kill switch; the function form pins the accepted names and can cap sizes.
+- **The server's catalog is the trusted one.** A client declaration can never
+  shadow a server skill, and every summary says where it came from.
+- **Injection surface.** Descriptions and instructions reach the model's
+  context by design. Treat client-declared ones as untrusted: prefer the
+  allowlist form, scope them by tag to the nodes that should see them, and
+  never interpolate them into privileged instructions.
+- **Level 3 is sandboxed.** A folder-backed source resolves resource paths
+  inside the skill folder only.

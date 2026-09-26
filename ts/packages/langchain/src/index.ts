@@ -37,8 +37,20 @@ import { AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage } f
 import type { BaseMessage } from "@langchain/core/messages";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 
-import { approve as mekikApprove, callClientTool, clientTools, nextToolCallId, text as emitText, toolTrace } from "@mekik/core";
-import type { ClientToolDefinition, ClientToolFilter, MessageAction, ToolCall, UiRef } from "@mekik/core";
+import {
+    approve as mekikApprove,
+    callClientTool,
+    clientTools,
+    loadSkill,
+    nextToolCallId,
+    skillResource,
+    skillResourcesAvailable,
+    skills,
+    skillsPrompt,
+    text as emitText,
+    toolTrace,
+} from "@mekik/core";
+import type { ClientToolDefinition, ClientToolFilter, MessageAction, SkillFilter, ToolCall, UiRef } from "@mekik/core";
 import type { Context } from "@ilmek/core";
 
 /** What a redacted field is replaced with in a surfaced trace. */
@@ -199,6 +211,93 @@ function wrapClientTool(ctx: Context<any>, def: ClientToolDefinition): Structure
     return wrapped as unknown as StructuredToolInterface;
 }
 
+// ── skills (PROTOCOL.md §12) ──────────────────────────────────────────────────
+
+/** The tool name a model calls to read a skill's instructions (level 2). */
+export const LOAD_SKILL_TOOL = "load_skill";
+/** The tool name a model calls to read one of a skill's bundled files (level 3). */
+export const READ_SKILL_RESOURCE_TOOL = "read_skill_resource";
+
+/**
+ * The turn's skills as LangChain tools — progressive disclosure, wired
+ * (PROTOCOL.md §12). Pair it with `skillsPrompt(ctx, filter)` in the system
+ * prompt: the prompt lists names and descriptions (level 1), and these tools
+ * let the model pull one skill's instructions (`load_skill`) and, when the
+ * server's catalog has files behind it, a bundled file
+ * (`read_skill_resource`) — only what the task needs enters the context.
+ *
+ * @remarks
+ * Each load surfaces as a `skill` frame, so the conversation shows which skill
+ * the agent is following. An unknown name comes back as an error observation
+ * (the loop stays alive) after the `status: "error"` trace. The `filter` scopes
+ * which skills this node exposes, exactly like {@link withClientTools}; the
+ * `load_skill` tool refuses a name the filter hides, so the prompt and the tool
+ * agree on the toolbox. Returns `[]` when the turn has no skills, so it is safe
+ * to spread unconditionally.
+ *
+ * @example
+ * ```ts
+ * const system = base + "\n\n" + skillsPrompt(ctx, { tags: ["docs"] });
+ * const tools = [...withMekikTools(ctx, serverTools), ...withSkills(ctx, { tags: ["docs"] })];
+ * ```
+ */
+export function withSkills(ctx: Context<any>, filter: SkillFilter = {}): StructuredToolInterface[] {
+    const visible = skills(ctx, filter);
+    if (visible.length === 0) return [];
+    const names = new Set(visible.map((s) => s.name));
+
+    const load = new DynamicStructuredTool({
+        name: LOAD_SKILL_TOOL,
+        description:
+            "Load the full instructions of one of the available skills by name. Call this before acting on a task that matches a skill's description.",
+        schema: {
+            type: "object",
+            properties: { name: { type: "string", description: "The skill's name, exactly as listed in <available_skills>." } },
+            required: ["name"],
+        } as never,
+        func: async (input: unknown) => {
+            const name = String(asRecord(input).name ?? "");
+            if (!names.has(name)) return `Unknown skill ${JSON.stringify(name)}. Available: ${[...names].join(", ")}.`;
+            try {
+                const skill = loadSkill(ctx, name);
+                return skill.instructions.length > 0 ? skill.instructions : `(skill ${name} has no instructions)`;
+            } catch (err) {
+                return `Error loading skill ${name}: ${err instanceof Error ? err.message : String(err)}`;
+            }
+        },
+    });
+
+    const tools: StructuredToolInterface[] = [load as unknown as StructuredToolInterface];
+
+    if (skillResourcesAvailable(ctx)) {
+        const read = new DynamicStructuredTool({
+            name: READ_SKILL_RESOURCE_TOOL,
+            description: "Read one file bundled with a loaded skill, by the path the skill's instructions give (relative to the skill).",
+            schema: {
+                type: "object",
+                properties: {
+                    name: { type: "string", description: "The skill's name." },
+                    path: { type: "string", description: "The bundled file's path, e.g. references/forms.md." },
+                },
+                required: ["name", "path"],
+            } as never,
+            func: async (input: unknown) => {
+                const args = asRecord(input);
+                const name = String(args.name ?? "");
+                const path = String(args.path ?? "");
+                if (!names.has(name)) return `Unknown skill ${JSON.stringify(name)}.`;
+                try {
+                    return await skillResource(ctx, name, path);
+                } catch (err) {
+                    return `Error reading ${path} from skill ${name}: ${err instanceof Error ? err.message : String(err)}`;
+                }
+            },
+        });
+        tools.push(read as unknown as StructuredToolInterface);
+    }
+    return tools;
+}
+
 // ── the agent loop ────────────────────────────────────────────────────────────
 
 /** Options for one {@link runAgent} model↔tool loop. */
@@ -228,6 +327,13 @@ export interface RunAgentOptions {
     emptyReply?: string;
     /** Reply when `maxTurns` or `maxToolCalls` is exhausted without the model settling. */
     budgetReply?: string;
+    /**
+     * Give the model the turn's skills (PROTOCOL.md §12): `true` for all of them,
+     * or a {@link SkillFilter} to scope by tag/origin. The `<available_skills>`
+     * block is appended to `system` and the {@link withSkills} tools join
+     * `tools`. Off by default — a node that never mentions skills is unchanged.
+     */
+    skills?: boolean | SkillFilter;
 }
 
 interface AgentToolCall {
@@ -280,10 +386,22 @@ export async function runAgent(
     // Wrap per run: each wrapper closes over *this* run's ctx, which is what lets a
     // tool emit its trace frame and journal itself.
     const wrapped = withMekikTools(ctx, tools, policy, options.defaultPolicy ? { defaultPolicy: options.defaultPolicy } : {});
+
+    // Skills (§12): level 1 goes in the prompt, levels 2–3 become tools. The skill
+    // tools are not wrapped with withMekikTools — a load is a catalog read that
+    // emits its own `skill` trace, not a side effect to journal.
+    let systemText = system;
+    if (options.skills) {
+        const filter: SkillFilter = options.skills === true ? {} : options.skills;
+        const block = skillsPrompt(ctx, filter);
+        if (block) systemText = systemText ? `${systemText}\n\n${block}` : block;
+        wrapped.push(...withSkills(ctx, filter));
+    }
+
     const byName = new Map(wrapped.map((t) => [t.name, t]));
     const bound = model.bindTools(wrapped);
 
-    const messages: BaseMessage[] = [new SystemMessage(system), new HumanMessage(input)];
+    const messages: BaseMessage[] = [new SystemMessage(systemText), new HumanMessage(input)];
 
     // `turn` counts model rounds, not tool invocations — a round that fires
     // several tools still costs one turn. `toolCallsUsed` tracks the raw tool

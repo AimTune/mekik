@@ -60,6 +60,7 @@ The comparison is byte-for-byte over **canonical** JSON: UTF-8, object keys sort
 | `run-aborted` | `run_end{aborted}` → `run{aborted}` only, no text |
 | `mixed-turn` | ui + tokens + tool + reply in one run (ordering + seq monotonicity) |
 | `rich-message` | `mekik.message` customs → persistent [rich message frames](../authoring/messages.md); a caller-supplied id wins over the minted one; a reserved frame type is dropped |
+| `skill-loaded` | `mekik.loadSkill` customs → persistent [`skill` frames](../authoring/skills.md) carrying the use record verbatim; an unknown name is a `status:"error"` use |
 
 Each row is a claim about the [event→frame mapping](../protocol/event-mapping.md), frozen as JSON.
 

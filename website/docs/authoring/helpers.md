@@ -106,6 +106,9 @@ Shuttle.Ui(ctx, "card", new Dictionary<string, object?>()); // helper — called
 | `mekik.choose(ctx, payload, options)` | `Shuttle.Choose<T>(ctx, payload, options)` | an `interrupt` frame whose `actions` are the options | **yes** — returns the pick | [HITL → Buttons](./human-in-the-loop.md#buttons-typed-no-hand-written-json) |
 | `mekik.clientTools(ctx, filter?)` | `Shuttle.ClientTools(ctx, tags?, mode?)` | nothing — reads the turn's client tool snapshot | **yes** — returns the definitions | [Client tools](./client-tools.md) |
 | `mekik.callClientTool(ctx, name, params?)` | `Shuttle.CallClientToolAsync<T>(ctx, name, params?)` | a `tool_call` trace + an `interrupt` (or a notify chunk) | **yes** — returns the client's result | [Client tools](./client-tools.md#calling) |
+| `mekik.skills(ctx, filter?)` / `mekik.skillsPrompt(ctx, filter?)` | `Shuttle.Skills(ctx, tags?, source?)` / `Shuttle.SkillsPrompt(…)` | nothing — reads the turn's skill catalog (level 1) | no | [Skills](./skills.md) |
+| `mekik.loadSkill(ctx, name)` | `Shuttle.LoadSkill(ctx, name)` | a `skill` trace; returns the instructions (level 2) | no | [Skills](./skills.md#loading-a-skill--and-the-skill-frame) |
+| `mekik.skillResource(ctx, name, path)` | `Shuttle.SkillResourceAsync(ctx, name, path)` | nothing — reads one bundled file (level 3) | **yes** — returns the file text | [Skills](./skills.md#loading-a-skill--and-the-skill-frame) |
 
 `text`, `ui`, `event` and `message` are fire-and-forget: they emit and return. `streamText` is the token-by-token convenience — it drives an async delta source through `text` and returns the joined string to hand back as the reply. `tool`, `approve` and `choose` `await` because they wrap ilmek machinery (`ctx.step` / `ctx.StepAsync` for `tool`, `ctx.interrupt` / `ctx.InterruptAsync` for the other two).
 

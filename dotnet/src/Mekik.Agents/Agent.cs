@@ -46,6 +46,20 @@ public sealed record AgentRunOptions
 
     /// <summary>Reply when <see cref="MaxTurns"/> or <see cref="MaxToolCalls"/> is exhausted without the model settling.</summary>
     public string BudgetReply { get; init; } = "I could not finish that within my step budget — please try again.";
+
+    /// <summary>
+    /// Give the model the turn's skills (PROTOCOL.md §12): the <c>&lt;available_skills&gt;</c>
+    /// block is appended to <see cref="System"/> and the <see cref="SkillFunctions"/> join
+    /// <see cref="Tools"/>. Off by default — a node that never mentions skills is unchanged.
+    /// Scope with <see cref="SkillTags"/> / <see cref="SkillSource"/>.
+    /// </summary>
+    public bool Skills { get; init; }
+
+    /// <summary>Tag filter for <see cref="Skills"/>; see <see cref="Shuttle.Skills"/>.</summary>
+    public IReadOnlyList<string>? SkillTags { get; init; }
+
+    /// <summary>Origin filter for <see cref="Skills"/> (<see cref="SkillOrigin.Server"/> / <see cref="SkillOrigin.Client"/>).</summary>
+    public string? SkillSource { get; init; }
 }
 
 /// <summary>
@@ -86,13 +100,25 @@ public static class Agent
 
         // Wrap per run: each wrapper closes over *this* run's ctx, which is what lets a
         // function emit its trace frame and journal itself.
-        var tools = MekikTools.Wrap(ctx, options.Tools, options.Policies, options.DefaultPolicy);
+        var tools = MekikTools.Wrap(ctx, options.Tools, options.Policies, options.DefaultPolicy).ToList();
+
+        // Skills (§12): level 1 goes in the prompt, levels 2–3 become functions. The
+        // skill functions are not wrapped with MekikTools — a load is a catalog read
+        // that emits its own `skill` trace, not a side effect to journal.
+        var system = options.System;
+        if (options.Skills)
+        {
+            var block = Shuttle.SkillsPrompt(ctx, options.SkillTags, options.SkillSource);
+            if (block.Length > 0) system = system.Length > 0 ? $"{system}\n\n{block}" : block;
+            tools.AddRange(SkillFunctions.Wrap(ctx, options.SkillTags, options.SkillSource));
+        }
+
         var byName = tools.ToDictionary(t => t.Name);
         var chatOptions = new ChatOptions { Tools = [.. tools] };
 
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.System, options.System),
+            new(ChatRole.System, system),
             new(ChatRole.User, options.Input),
         };
 

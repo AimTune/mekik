@@ -29,6 +29,14 @@ public sealed record HelloInfo
     /// <see cref="EngineConfig.ClientTools"/> opts in.
     /// </summary>
     public IReadOnlyList<object?>? Tools { get; init; }
+    /// <summary>Hash of the server skill catalog this client has cached (PROTOCOL.md §12.2).</summary>
+    public string? SkillsHash { get; init; }
+    /// <summary>
+    /// Skills this client declares (PROTOCOL.md §12.4), as raw parsed JSON — the
+    /// engine sanitizes with <see cref="ClientSkills.Sanitize"/>. Inert unless
+    /// <see cref="EngineConfig.ClientSkills"/> opts in.
+    /// </summary>
+    public IReadOnlyList<object?>? Skills { get; init; }
 }
 
 public sealed record ConnectParams
@@ -77,6 +85,10 @@ public sealed record EngineConfig
     public Func<IReadOnlyDictionary<string, object?>, IReadOnlyDictionary<string, object?>?>? AcceptClientMeta { get; init; }
     /// <summary>Accept client-declared tools → <c>ctx.Meta["clientTools"]</c> (PROTOCOL.md §11). Default: ignore them.</summary>
     public ClientToolsPolicy? ClientTools { get; init; }
+    /// <summary>The server's skill catalog (PROTOCOL.md §12), announced on connect and offered to nodes at <c>ctx.Meta["skills"]</c>.</summary>
+    public ISkillSource? Skills { get; init; }
+    /// <summary>Accept client-declared skills into <c>ctx.Meta["skills"]</c> (PROTOCOL.md §12.4). Default: ignore them.</summary>
+    public ClientSkillsPolicy? ClientSkills { get; init; }
     /// <summary>
     /// A one-time bot greeting sent when a fresh conversation first connects (PROTOCOL.md §1).
     /// Returns a <see cref="string"/> (one <c>text</c> frame), a described rich message
@@ -115,6 +127,8 @@ public sealed class ConversationEngine
         /// the same tool name, the most recent declaration wins in the snapshot.
         /// </summary>
         public (IReadOnlyList<ClientToolDefinition> Defs, long Stamp)? Tools { get; set; }
+        /// <summary>The skills this connection declared (§12.4), sanitized and policy-filtered; <c>Stamp</c> as for tools.</summary>
+        public (IReadOnlyList<ClientSkillDefinition> Defs, long Stamp)? Skills { get; set; }
     }
 
     private sealed class Live
@@ -178,6 +192,7 @@ public sealed class ConversationEngine
         // same default-drop posture as client meta, because a declaration is
         // client-controlled input a model will read.
         if (hello.Tools is not null) ApplyClientTools(state, hello.Tools, conversationId, userId);
+        if (hello.Skills is not null) ApplyClientSkills(state, hello.Skills, conversationId, userId);
 
         var pending = await _cfg.Adapter.PendingAsync(conversationId).ConfigureAwait(false);
         var pendingViews = pending
@@ -207,6 +222,19 @@ public sealed class ConversationEngine
             var frame = new Frame { ["type"] = "genui_components", ["hash"] = catalog.Hash };
             if (hello.ComponentsHash == catalog.Hash) frame["unchanged"] = true;
             else frame["components"] = catalog.Definitions.Cast<object?>().ToList();
+            conn.Send(frame);
+        }
+
+        // The skill catalog (§12.2): the server's level-1 summaries, hash-versioned
+        // exactly like the component catalog, so a UI can show what the agent can
+        // do and a returning client pays one tiny frame.
+        var skills = _cfg.Skills?.List() ?? [];
+        if (skills.Count > 0)
+        {
+            var hash = Mekik.Skills.Hash(skills);
+            var frame = new Frame { ["type"] = "skills", ["hash"] = hash };
+            if (hello.SkillsHash == hash) frame["unchanged"] = true;
+            else frame["skills"] = skills.Select(s => (object?)(s with { Source = SkillOrigin.Server }).ToWire()).ToList();
             conn.Send(frame);
         }
 
@@ -314,7 +342,57 @@ public sealed class ConversationEngine
             case "abort": HandleAbort(convId); break;
             case "genui_event": await HandleGenUIEventAsync(conn, convId, frame).ConfigureAwait(false); break;
             case "client_tools": HandleClientTools(conn, convId, frame); break;
+            case "client_skills": HandleClientSkills(conn, convId, frame); break;
         }
+    }
+
+    /// <summary>
+    /// Replace this connection's declared client skills (§12.4) — the whole new set,
+    /// <c>[]</c> withdrawing everything. Takes effect on the next turn, like client tools.
+    /// </summary>
+    private void HandleClientSkills(IConnection conn, string convId, IReadOnlyDictionary<string, object?> frame)
+    {
+        if (!_live.TryGetValue(convId, out var live)) return;
+        ConnState? state;
+        lock (live.Gate) live.Connections.TryGetValue(conn.Id, out state);
+        if (state is null) return;
+        ApplyClientSkills(state, frame.GetValueOrDefault("skills"), convId, state.UserId);
+    }
+
+    /// <summary>Sanitize a skill declaration, pass it through the policy, and store it on the connection.</summary>
+    private void ApplyClientSkills(ConnState state, object? raw, string convId, string userId)
+    {
+        var policy = _cfg.ClientSkills;
+        if (policy is null) return; // opted out: declarations are inert
+        var defs = Mekik.ClientSkills.Sanitize(raw);
+        defs = policy(defs, (convId, userId)) ?? [];
+        state.Skills = (defs, Interlocked.Increment(ref _declStamp));
+    }
+
+    /// <summary>The conversation's client skills as one turn sees them (§12.4): the union across live connections, last declaration of a name wins.</summary>
+    private IReadOnlyList<ClientSkillDefinition> ClientSkillsFor(string convId)
+    {
+        if (!_live.TryGetValue(convId, out var live)) return [];
+        List<(IReadOnlyList<ClientSkillDefinition> Defs, long Stamp)> declared;
+        lock (live.Gate)
+        {
+            declared = live.Connections.Values
+                .Where(s => s.Skills is not null)
+                .Select(s => s.Skills!.Value)
+                .OrderBy(t => t.Stamp)
+                .ToList();
+        }
+        var order = new List<string>();
+        var byName = new Dictionary<string, ClientSkillDefinition>();
+        foreach (var (defs, _) in declared)
+        {
+            foreach (var def in defs)
+            {
+                if (!byName.ContainsKey(def.Name)) order.Add(def.Name);
+                byName[def.Name] = def;
+            }
+        }
+        return order.Select(n => byName[n]).ToList();
     }
 
     /// <summary>
@@ -627,6 +705,11 @@ public sealed class ConversationEngine
         // The turn's client-tool snapshot (§11.2): taken here, at run start, so a
         // set that changes mid-run does not shift under the node's feet.
         if (ClientToolsFor(convId) is { } clientTools) meta["clientTools"] = clientTools;
+        // The turn's skill set (§12.3): the server catalog plus accepted client
+        // declarations, merged once at run start for the same reason.
+        var clientSkills = ClientSkillsFor(convId);
+        if (_cfg.Skills is not null || clientSkills.Count > 0)
+            meta["skills"] = new TurnSkillSource(_cfg.Skills, clientSkills);
         return meta;
     }
 

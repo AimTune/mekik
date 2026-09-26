@@ -22,6 +22,11 @@ mekik ships two implementations that speak the identical `mekik/1` wire: **TypeS
 | authoring helpers | `mekik.text / ui / event / tool / approve` | `Shuttle.Text / Ui / Event / Tool / Approve` |
 | button chips | `mekik.action` / `mekik.choose` | `Shuttle.Action` / `Shuttle.Choose<T>` |
 | managed ui instance | `mekik.mount` → `UiHandle` | `Shuttle.Mount` → `UiHandle` |
+| skills read (§12) | `mekik.skills(ctx, {tags?, source?})` / `mekik.skillsPrompt` | `Shuttle.Skills(ctx, tags?, source?)` / `Shuttle.SkillsPrompt` |
+| skill load (§12) | `mekik.loadSkill` / `mekik.skillResource` | `Shuttle.LoadSkill` / `Shuttle.SkillResourceAsync` |
+| skill source port | `SkillSource` / `StaticSkillSource` | `ISkillSource` / `SkillSources.Inline` |
+| client skills accept | `MekikOptions.clientSkills: true \| fn` | `MekikOptions.ClientSkills` (`ClientSkills.AcceptAll` / `ClientSkillsPolicy`) |
+| skill model wrap | `withSkills` (`@mekik/langchain`) | `SkillFunctions.Wrap` (`Mekik.Agents`) |
 | typed component | `mekik.component<P>(name)` | pass the name to `Shuttle.Ui` / `Shuttle.Mount` |
 | built-in components | `mekik.genui.*` | `GenUI.*` (+ `GenUI.Names.*`) |
 | rich messages | `mekik.message` / `mekik.messageKind` / `mekik.messages.*` | `Shuttle.Message` / `Messages.*` |

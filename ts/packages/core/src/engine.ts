@@ -17,7 +17,10 @@ import {
     PROTOCOL_VERSION,
     ProtocolError,
     RESERVED_FRAME_TYPES,
+    sanitizeClientSkills,
     sanitizeClientTools,
+    type ClientSkillDefinition,
+    type ClientSkillsFrame,
     type ClientToolDefinition,
     type ClientToolsFrame,
     type GenUIEventFrame,
@@ -27,6 +30,7 @@ import {
     type TextInFrame,
 } from "./protocol.ts";
 import type { ComponentCatalog } from "./components.ts";
+import { hashSkills, TurnSkills, type SkillSource } from "./skills.ts";
 import type { MessageSpec } from "./messages.ts";
 import type { ConversationStore, HistoryStore, PersistentFrame } from "./stores.ts";
 import type { Authenticator, Credential } from "./auth.ts";
@@ -84,6 +88,10 @@ export interface ConnectParams {
         componentsHash?: string;
         /** Tools this client can execute (§11.1). Inert unless {@link EngineConfig.clientTools} opts in. */
         tools?: ClientToolDefinition[];
+        /** Hash of the server skill catalog the client has cached (§12.2). */
+        skillsHash?: string;
+        /** Skills this client declares (§12.4). Inert unless {@link EngineConfig.clientSkills} opts in. */
+        skills?: ClientSkillDefinition[];
     };
     /** Raw credential (headers/query) for the Authenticator, if configured. */
     credential?: Credential;
@@ -103,6 +111,21 @@ export type ClientToolsPolicy =
           tools: ClientToolDefinition[],
           conv: { conversationId: string; userId: string },
       ) => ClientToolDefinition[] | undefined);
+
+/**
+ * Whether — and which — client-declared skills the server accepts (PROTOCOL.md
+ * §12.4). `true` accepts every well-formed declaration; a function is the
+ * allowlist form — it sees the sanitized declarations and returns the subset to
+ * accept (or `undefined` for none). Absent, client skill declarations are
+ * **ignored entirely**, the same posture as {@link ClientToolsPolicy}: a skill
+ * is text a model will follow.
+ */
+export type ClientSkillsPolicy =
+    | true
+    | ((
+          skills: ClientSkillDefinition[],
+          conv: { conversationId: string; userId: string },
+      ) => ClientSkillDefinition[] | undefined);
 
 /**
  * One graph-addressed interaction from a mounted GenUI component — what a
@@ -146,6 +169,10 @@ export interface EngineConfig {
     acceptClientMeta?: (meta: Record<string, unknown>) => Record<string, unknown> | undefined;
     /** Accept client-declared tools → `ctx.meta.clientTools` (§11). Default: ignore them. */
     clientTools?: ClientToolsPolicy;
+    /** The server's skill catalog (§12), announced on connect and offered to nodes at `ctx.meta.skills`. */
+    skills?: SkillSource;
+    /** Accept client-declared skills into `ctx.meta.skills` (§12.4). Default: ignore them. */
+    clientSkills?: ClientSkillsPolicy;
     /** Components the server defines itself, announced on connect (PROTOCOL.md §5). */
     components?: ComponentCatalog;
     /** Turn a component interaction into a graph input update, or undefined to ignore it (PROTOCOL.md §10.4). */
@@ -171,6 +198,8 @@ interface ConnState {
      * the most recent declaration wins in the per-turn snapshot.
      */
     tools?: { defs: ClientToolDefinition[]; stamp: number };
+    /** The skills this connection declared (§12.4), sanitized and policy-filtered; `stamp` as for tools. */
+    skills?: { defs: ClientSkillDefinition[]; stamp: number };
 }
 
 /** Per-conversation, process-local runtime state. `seq` is the persistent-frame counter. */
@@ -229,6 +258,7 @@ export class ConversationEngine {
         // same default-drop posture as client meta, because a declaration is
         // client-controlled input a model will read.
         if (hello.tools !== undefined) this.applyClientTools(state, hello.tools, conversationId, userId);
+        if (hello.skills !== undefined) this.applyClientSkills(state, hello.skills, conversationId, userId);
 
         const pending = await this.cfg.adapter.pending(conversationId);
         const pendingViews: PendingView[] = pending.map((p) => ({ id: p.id, data: interruptFrameData(p) }));
@@ -253,6 +283,19 @@ export class ConversationEngine {
                 hello.componentsHash === catalog.hash
                     ? { type: "genui_components", hash: catalog.hash, unchanged: true }
                     : { type: "genui_components", hash: catalog.hash, components: [...catalog.definitions] },
+            );
+        }
+
+        // The skill catalog (§12.2): the server's level-1 summaries, hash-versioned
+        // exactly like the component catalog, so a UI can show what the agent can
+        // do and a returning client pays one tiny frame.
+        const skills = this.cfg.skills?.list() ?? [];
+        if (skills.length > 0) {
+            const hash = hashSkills(skills);
+            conn.send(
+                hello.skillsHash === hash
+                    ? { type: "skills", hash, unchanged: true }
+                    : { type: "skills", hash, skills: skills.map((s) => ({ ...s, source: "server" as const })) },
             );
         }
 
@@ -321,7 +364,42 @@ export class ConversationEngine {
                 return this.handleGenUIEvent(conn, convId, frame);
             case "client_tools":
                 return this.handleClientTools(conn, convId, frame);
+            case "client_skills":
+                return this.handleClientSkills(conn, convId, frame);
         }
+    }
+
+    /**
+     * Replace this connection's declared client skills (§12.4) — the whole new
+     * set, `[]` withdrawing everything. Takes effect on the next turn, like
+     * client tools.
+     */
+    private handleClientSkills(conn: Connection, convId: string, frame: ClientSkillsFrame): void {
+        const state = this.live.get(convId)?.connections.get(conn.id);
+        if (!state) return;
+        this.applyClientSkills(state, frame.skills, convId, state.userId);
+    }
+
+    /** Sanitize a skill declaration, pass it through the policy, and store it on the connection. */
+    private applyClientSkills(state: ConnState, raw: unknown, convId: string, userId: string): void {
+        const policy = this.cfg.clientSkills;
+        if (policy === undefined) return; // opted out: declarations are inert
+        let defs = sanitizeClientSkills(raw);
+        if (policy !== true) defs = policy(defs, { conversationId: convId, userId }) ?? [];
+        state.skills = { defs, stamp: ++this.declStamp };
+    }
+
+    /** The conversation's client skills as one turn sees them (§12.4): the union across live connections, last declaration of a name wins. */
+    private clientSkillsFor(convId: string): ClientSkillDefinition[] {
+        const live = this.live.get(convId);
+        if (!live) return [];
+        const declared = [...live.connections.values()]
+            .map((s) => s.skills)
+            .filter((t): t is { defs: ClientSkillDefinition[]; stamp: number } => t !== undefined)
+            .sort((a, b) => a.stamp - b.stamp);
+        const byName = new Map<string, ClientSkillDefinition>();
+        for (const { defs } of declared) for (const def of defs) byName.set(def.name, def);
+        return [...byName.values()];
     }
 
     /**
@@ -578,6 +656,12 @@ export class ConversationEngine {
         // set that changes mid-run does not shift under the node's feet.
         const clientTools = this.clientToolsFor(convId);
         if (clientTools !== undefined) meta.clientTools = clientTools;
+        // The turn's skill set (§12.3): the server catalog plus accepted client
+        // declarations, merged once at run start for the same reason.
+        const clientSkills = this.clientSkillsFor(convId);
+        if (this.cfg.skills !== undefined || clientSkills.length > 0) {
+            meta.skills = new TurnSkills(this.cfg.skills, clientSkills);
+        }
         return meta;
     }
 

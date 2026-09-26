@@ -24,6 +24,14 @@ var response = await chatClient.GetResponseAsync(
 The wrappers are `DelegatingAIFunction`s, so name, description and JSON schema
 are preserved and the model sees exactly the same tools.
 
+## Skills — progressive disclosure
+
+`SkillFunctions.Wrap(ctx, tags: [...])` turns the app's [skills](https://mekik.aimtune.dev/authoring/skills)
+into a `load_skill` function (plus `read_skill_resource` when the catalog has
+files), and `AgentRunOptions.Skills = true` appends the `<available_skills>`
+block to the system prompt and adds the functions in one switch. Each load emits
+a persistent `skill` frame so the UI shows which skill the agent is following.
+
 ## Why wrapping
 
 A chat client invokes its own functions. That leaves two gaps `Shuttle.Tool`

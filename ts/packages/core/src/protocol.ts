@@ -16,7 +16,7 @@ export const PROTOCOL_VERSION = "mekik/1";
  * *rich message frame* family (PROTOCOL.md §4.5): frames whose `type` is a
  * client message-renderer name are persistent too; see {@link isMessageFrame}.
  */
-export const PERSISTENT_FRAME_TYPES = ["text", "tool_call", "genui", "interrupt", "interrupt_resolved"] as const;
+export const PERSISTENT_FRAME_TYPES = ["text", "tool_call", "skill", "genui", "interrupt", "interrupt_resolved"] as const;
 
 export type PersistentFrameType = (typeof PERSISTENT_FRAME_TYPES)[number];
 
@@ -33,8 +33,11 @@ export const RESERVED_FRAME_TYPES: ReadonlySet<string> = new Set([
     "resume",
     "genui_event",
     "client_tools",
+    "client_skills",
     "abort",
     "tool_call",
+    "skill",
+    "skills",
     "genui",
     "genui_components",
     "interrupt",
@@ -148,6 +151,101 @@ export function sanitizeClientTools(value: unknown): ClientToolDefinition[] {
     return [...byName.values()];
 }
 
+// ── skills (PROTOCOL.md §12) ──────────────────────────────────────────────────
+
+/** Where a skill came from: the server's catalog, or a client's declaration (§12.3). */
+export type SkillOrigin = "server" | "client";
+
+/**
+ * Level 1 of a skill — what a model sees before choosing one (PROTOCOL.md
+ * §12.1). This is what the `skills` catalog frame carries and what
+ * `mekik.skills(ctx)` returns.
+ */
+export interface SkillSummary {
+    /** 1–64 lowercase letters, digits and single hyphens (the Agent Skills name rule). */
+    name: string;
+    /** What the skill does and when to use it — the whole trigger surface. */
+    description: string;
+    /**
+     * Server-side filter labels, the same rule as client tool tags (§11.2): an
+     * untagged skill is unrestricted, a tagged one is returned only by queries
+     * whose tags intersect its own.
+     */
+    tags?: string[];
+    /** Stamped by the turn snapshot; absent on a source's own entries. */
+    source?: SkillOrigin;
+}
+
+/** Level 2 — a skill with its instructions, as a source hands it back. */
+export interface SkillEntry extends SkillSummary {
+    /** The markdown a model reads once it has chosen the skill. */
+    instructions: string;
+}
+
+/**
+ * One skill the **client** declares (PROTOCOL.md §12.4): instructions the
+ * frontend wants the model to follow when a task matches — a house style, a
+ * product's UI conventions. Inline, because a client has no folder to serve:
+ * the whole skill travels in the declaration. Accepted only when
+ * {@link MekikOptions.clientSkills} opts in — the default is off.
+ */
+export interface ClientSkillDefinition {
+    name: string;
+    description: string;
+    instructions: string;
+    tags?: string[];
+}
+
+/** Trace status for a `skill` frame: the instructions were handed to the node, or the name was unknown. */
+export type SkillStatus = "loaded" | "error";
+
+/** One skill use as it travels on a `skill` frame (PROTOCOL.md §12.5). */
+export interface SkillUse {
+    /** Replay-stable id, minted like a tool call's. */
+    id: string;
+    name: string;
+    status: SkillStatus;
+    source?: SkillOrigin;
+    error?: string;
+}
+
+export const SKILL_NAME_MAX = 64;
+export const SKILL_DESCRIPTION_MAX = 1024;
+const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** The Agent Skills name rule: lowercase letters, digits and single hyphens, 1–64 characters. */
+export function isValidSkillName(name: string): boolean {
+    return name.length > 0 && name.length <= SKILL_NAME_MAX && SKILL_NAME_PATTERN.test(name);
+}
+
+/**
+ * Sanitize a client-declared skill list (PROTOCOL.md §12.4): keep only entries
+ * with a valid `name`, a non-empty `description` of at most 1024 characters
+ * and a string `instructions`; keep only the known fields; dedupe by name
+ * (last declaration wins). Pure — the engine applies it to `hello.skills` and
+ * `client_skills.skills`.
+ */
+export function sanitizeClientSkills(value: unknown): ClientSkillDefinition[] {
+    if (!Array.isArray(value)) return [];
+    const byName = new Map<string, ClientSkillDefinition>();
+    for (const entry of value) {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+        const e = entry as Record<string, unknown>;
+        if (typeof e.name !== "string" || !isValidSkillName(e.name)) continue;
+        if (typeof e.description !== "string") continue;
+        const description = e.description.trim();
+        if (description.length === 0 || description.length > SKILL_DESCRIPTION_MAX) continue;
+        if (typeof e.instructions !== "string") continue;
+        const def: ClientSkillDefinition = { name: e.name, description, instructions: e.instructions };
+        if (Array.isArray(e.tags)) {
+            const tags = e.tags.filter((t): t is string => typeof t === "string" && t.length > 0);
+            if (tags.length > 0) def.tags = [...new Set(tags)];
+        }
+        byName.set(def.name, def);
+    }
+    return [...byName.values()];
+}
+
 // ── client → server ───────────────────────────────────────────────────────────
 
 export interface HelloFrame {
@@ -169,6 +267,17 @@ export interface HelloFrame {
      * `client_tools` frame.
      */
     tools?: ClientToolDefinition[];
+    /**
+     * Hash of the server skill catalog this client has cached (PROTOCOL.md §12.2).
+     * Equal to the server's hash ⇒ the summaries are not re-sent.
+     */
+    skillsHash?: string;
+    /**
+     * Skills this client declares (PROTOCOL.md §12.4). Inert unless the server
+     * opts in via {@link MekikOptions.clientSkills}; replaced wholesale by a later
+     * `client_skills` frame.
+     */
+    skills?: ClientSkillDefinition[];
 }
 
 export interface TextInFrame {
@@ -211,11 +320,28 @@ export interface ClientToolsFrame {
     tools: ClientToolDefinition[];
 }
 
+/**
+ * Replace this connection's declared client skills (PROTOCOL.md §12.4). The
+ * list is the connection's whole new set — sending `[]` withdraws every skill.
+ * Like `hello.skills`, inert unless the server opted in.
+ */
+export interface ClientSkillsFrame {
+    type: "client_skills";
+    skills: ClientSkillDefinition[];
+}
+
 export interface AbortFrame {
     type: "abort";
 }
 
-export type IncomingFrame = HelloFrame | TextInFrame | ResumeFrame | GenUIEventFrame | ClientToolsFrame | AbortFrame;
+export type IncomingFrame =
+    | HelloFrame
+    | TextInFrame
+    | ResumeFrame
+    | GenUIEventFrame
+    | ClientToolsFrame
+    | ClientSkillsFrame
+    | AbortFrame;
 
 // ── server → client ───────────────────────────────────────────────────────────
 
@@ -283,6 +409,31 @@ export interface ToolCallFrame {
     type: "tool_call";
     seq: number;
     data: ToolCall;
+}
+
+/**
+ * A skill was loaded into a node (PROTOCOL.md §12.5) — the trace that lets a
+ * client show "using skill: pdf" the way it shows a tool call. Persistent;
+ * upserts by `data.id`.
+ */
+export interface SkillFrame {
+    type: "skill";
+    seq: number;
+    data: SkillUse;
+}
+
+/**
+ * The server's skill catalog, sent once per connection after `welcome`
+ * (PROTOCOL.md §12.2). Transient, like `genui_components`: `unchanged: true`
+ * means the client's cached catalog matches `hash` and no summaries follow.
+ * Client-declared skills are never echoed here — a client already knows what
+ * it declared.
+ */
+export interface SkillsFrame {
+    type: "skills";
+    hash: string;
+    unchanged?: boolean;
+    skills?: SkillSummary[];
 }
 
 export interface GenUIFrame {
@@ -362,6 +513,8 @@ export type OutgoingFrame =
     | TextOutFrame
     | MessageOutFrame
     | ToolCallFrame
+    | SkillFrame
+    | SkillsFrame
     | GenUIFrame
     | GenUiComponentsFrame
     | InterruptFrame
@@ -388,7 +541,7 @@ export function isMessageFrame(frame: OutgoingFrame): frame is MessageOutFrame {
 /** True for the server→client frames that carry `seq` and are transcript-persisted. */
 export function isPersistent(
     frame: OutgoingFrame,
-): frame is TextOutFrame | MessageOutFrame | ToolCallFrame | GenUIFrame | InterruptFrame | InterruptResolvedFrame {
+): frame is TextOutFrame | MessageOutFrame | ToolCallFrame | SkillFrame | GenUIFrame | InterruptFrame | InterruptResolvedFrame {
     return (PERSISTENT_FRAME_TYPES as readonly string[]).includes(frame.type) || isMessageFrame(frame);
 }
 
@@ -403,7 +556,7 @@ export class ProtocolError extends Error {
     }
 }
 
-const INCOMING_TYPES: ReadonlySet<string> = new Set(["hello", "text", "resume", "genui_event", "client_tools", "abort"]);
+const INCOMING_TYPES: ReadonlySet<string> = new Set(["hello", "text", "resume", "genui_event", "client_tools", "client_skills", "abort"]);
 
 /**
  * Parse one client→server message. Accepts a JSON string or an already-parsed
@@ -457,6 +610,12 @@ export function parseIncoming(raw: string | unknown): IncomingFrame {
         const tools = (value as { tools?: unknown }).tools;
         if (!Array.isArray(tools)) {
             throw new ProtocolError("bad_request", "client_tools frame requires tools: array");
+        }
+    }
+    if (type === "client_skills") {
+        const skills = (value as { skills?: unknown }).skills;
+        if (!Array.isArray(skills)) {
+            throw new ProtocolError("bad_request", "client_skills frame requires skills: array");
         }
     }
 

@@ -29,6 +29,14 @@ import { withMekikTools } from "@mekik/langchain";
 The wrapped tools keep their name, description and schema, so the agent binds
 them to the model exactly as before.
 
+## Skills — progressive disclosure
+
+`withSkills(ctx, { tags? })` turns the app's [skills](https://mekik.aimtune.dev/authoring/skills)
+into a `load_skill` tool (plus `read_skill_resource` when the catalog has files),
+and `runAgent({ skills: true })` appends the `<available_skills>` block to the
+system prompt and adds the tools in one switch. Each load emits a persistent
+`skill` frame so the UI shows which skill the agent is following.
+
 ## Why wrapping, not just callbacks
 
 A LangChain agent invokes its own tools. That leaves two gaps mekik normally

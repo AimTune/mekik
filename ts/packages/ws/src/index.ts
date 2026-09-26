@@ -128,6 +128,8 @@ function mergeConnectParams(req: IncomingMessage, firstFrame: string): ConnectPa
             if (parsed.meta) hello.meta = parsed.meta;
             if (typeof parsed.componentsHash === "string") hello.componentsHash = parsed.componentsHash;
             if (Array.isArray(parsed.tools)) hello.tools = parsed.tools;
+            if (typeof parsed.skillsHash === "string") hello.skillsHash = parsed.skillsHash;
+            if (Array.isArray(parsed.skills)) hello.skills = parsed.skills;
         }
     }
 

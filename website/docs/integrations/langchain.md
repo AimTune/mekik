@@ -54,6 +54,7 @@ function runAgent(
     stream?: boolean;            // live text deltas; default true
     emptyReply?: string;
     budgetReply?: string;
+    skills?: boolean | SkillFilter; // append <available_skills> to system + add the withSkills tools; default off
   },
 ): Promise<string>;
 ```
@@ -124,6 +125,41 @@ function withClientTools(
 Each wrapper's executor is [`mekik.callClientTool`](../authoring/client-tools.md#calling): a `"call"`-mode tool **parks the loop durably** (the agent state is journaled, so the resume replays the model's decisions instead of re-paying for them), a `"notify"`-mode tool returns a delivery note the model can read, and a handler error comes back as an error *observation* — the loop stays alive and the model can route around it. The declared JSON Schema is handed to the model verbatim, so the tool call it produces binds to the client's handler unchanged.
 
 `filter.tags` is the scoping lever: the frontend tags the tools it wants restricted to particular nodes, untagged tools are visible everywhere, and the server's `clientTools` policy has already allowlisted the whole set before this call ever sees it.
+
+## `withSkills` — progressive disclosure
+
+The app's [skills](../authoring/skills.md) (PROTOCOL.md §12) reach a model in three levels: the `<available_skills>` block in the system prompt lists names and descriptions, `load_skill` pulls one skill's instructions when a task matches, and `read_skill_resource` opens a bundled file when the instructions point at it. `withSkills` builds the tools; `skillsPrompt` (from `@mekik/core`) builds the block:
+
+```ts
+import { skillsPrompt } from "@mekik/core";
+import { withMekikTools, withSkills, runAgent } from "@mekik/langchain";
+
+.node("agent", async (state, ctx) => {
+  const system = SYSTEM + "\n\n" + skillsPrompt(ctx, { tags: ["docs"] });
+  const tools = [
+    ...withMekikTools(ctx, serverTools, policy),
+    ...withSkills(ctx, { tags: ["docs"] }),
+  ];
+  return { reply: await runAgent(ctx, model(), { system, input: state.input, tools }) };
+})
+
+// …or let runAgent do both with one option:
+return { reply: await runAgent(ctx, model(), { system: SYSTEM, input: state.input, tools, skills: { tags: ["docs"] } }) };
+```
+
+Signature:
+
+```ts
+function withSkills(
+  ctx: Context<any>,
+  filter?: { tags?: readonly string[]; source?: "server" | "client" },
+): StructuredToolInterface[];   // [] when the turn has no skills
+
+const LOAD_SKILL_TOOL = "load_skill";                 // schema { name }
+const READ_SKILL_RESOURCE_TOOL = "read_skill_resource"; // schema { name, path } — only when the catalog has files
+```
+
+`load_skill` returns the instructions as the observation and emits the persistent `skill` frame, so the conversation shows which skill the agent is following. An unknown name — or one the `filter` hides — comes back as an error observation listing what *is* available, so the loop stays alive and the prompt and the tool always agree. The skill tools are not wrapped with the tool policy: a load is a catalog read that emits its own trace, not a side effect to journal.
 
 ## Why wrapping, not just callbacks
 
