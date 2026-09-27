@@ -81,6 +81,14 @@ shapes. Both suites run every case against a server configured with the
 fixture's `options`. `tools/call` results are asserted behaviourally instead —
 conversation ids are minted at random.
 
+### The A2A fixture
+
+[`a2a/rpc.json`](a2a/rpc.json) pins `MekikA2aServer`'s Agent Card and JSON-RPC
+surface (PROTOCOL.md §14): the card built from the fixture's `options` (the
+agent as the first skill, then the app's skills), and the error codes for unknown
+tasks, unsupported methods and bad message shapes. `message/send` results carry
+minted ids and timestamps and are asserted behaviourally.
+
 ## Scenario suites (behavioural)
 
 1. **handshake** - anonymous connect mints `userId`/`conversationId`; `welcome`
@@ -189,6 +197,23 @@ conversation ids are minted at random.
     replay), and reads as the result text; `isError` results and structured-only
     results become observations; the policy map applies by exposed name and an
     `approve` decline never runs the remote tool.
+28. **A2A turn as task** (§14.2) - `message/send` without a task id runs one
+    turn and returns a `completed` task with the reply as a text artifact named
+    `reply`, the user message in `history` stamped with task and context ids,
+    and `metadata.mekik`; a `contextId` continues the conversation with a new
+    task id; a graph error is `failed` with the error text as the status
+    message; a turn on a parked conversation is `rejected` with the engine's
+    `interrupted` text.
+29. **A2A input-required and resume** (§14.3) - a paused turn is
+    `input-required` with an agent status message (prose + a `{pending}` data
+    part) and `metadata.pending`; a text reply on the task resolves a single
+    interrupt (an action label maps to its value) and completes the task with
+    three history entries; several open interrupts require a data part
+    `{answers}` and refuse text alone; a message on a completed task is
+    refused.
+30. **A2A tasks/get and tasks/cancel** (§14.4) - `tasks/get` returns the task
+    and `historyLength` truncates (0 ⇒ empty); `tasks/cancel` marks an
+    `input-required` task `canceled` and answers `-32002` for a completed one.
 
 Subtle cases fresh ports tend to break (mirroring ilmek's list): 6 and 7
 (id-vs-key routing), 8 (pending re-announce), 12 (refuse new turn while parked),

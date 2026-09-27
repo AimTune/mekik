@@ -1,0 +1,91 @@
+{
+  "description": "Agent Card and JSON-RPC exchanges a MekikA2aServer must answer identically in both languages (PROTOCOL.md §14). The agent is configured with the `options` below; message/send results carry minted ids and timestamps and are asserted behaviourally in each suite.",
+  "options": {
+    "name": "Support desk",
+    "description": "Answers questions about orders.",
+    "url": "https://bot.example.com/a2a",
+    "version": "1.2.0",
+    "skills": [
+      { "name": "brand-voice", "description": "House style." },
+      { "name": "pdf", "description": "Fill PDF forms.", "tags": ["docs"] }
+    ]
+  },
+  "agentCard": {
+    "protocolVersion": "0.3.0",
+    "name": "Support desk",
+    "description": "Answers questions about orders.",
+    "url": "https://bot.example.com/a2a",
+    "preferredTransport": "JSONRPC",
+    "version": "1.2.0",
+    "capabilities": { "streaming": false, "pushNotifications": false, "stateTransitionHistory": false },
+    "defaultInputModes": ["text/plain"],
+    "defaultOutputModes": ["text/plain"],
+    "skills": [
+      { "id": "chat", "name": "Support desk", "description": "Answers questions about orders.", "tags": ["chat"] },
+      { "id": "brand-voice", "name": "brand-voice", "description": "House style.", "tags": [] },
+      { "id": "pdf", "name": "pdf", "description": "Fill PDF forms.", "tags": ["docs"] }
+    ]
+  },
+  "cases": [
+    {
+      "name": "notifications get no response",
+      "request": { "jsonrpc": "2.0", "method": "notifications/whatever" },
+      "response": null
+    },
+    {
+      "name": "tasks/get of an unknown task is TaskNotFound",
+      "request": { "jsonrpc": "2.0", "id": 1, "method": "tasks/get", "params": { "id": "task-nope" } },
+      "response": { "jsonrpc": "2.0", "id": 1, "error": { "code": -32001, "message": "task \"task-nope\" not found" } }
+    },
+    {
+      "name": "tasks/cancel of an unknown task is TaskNotFound",
+      "request": { "jsonrpc": "2.0", "id": 2, "method": "tasks/cancel", "params": { "id": "task-nope" } },
+      "response": { "jsonrpc": "2.0", "id": 2, "error": { "code": -32001, "message": "task \"task-nope\" not found" } }
+    },
+    {
+      "name": "tasks/get without an id is -32602",
+      "request": { "jsonrpc": "2.0", "id": 3, "method": "tasks/get", "params": {} },
+      "response": { "jsonrpc": "2.0", "id": 3, "error": { "code": -32602, "message": "`id` (string) is required" } }
+    },
+    {
+      "name": "message/stream is UnsupportedOperation",
+      "request": { "jsonrpc": "2.0", "id": 4, "method": "message/stream", "params": {} },
+      "response": { "jsonrpc": "2.0", "id": 4, "error": { "code": -32004, "message": "message/stream is not supported: this agent does not stream" } }
+    },
+    {
+      "name": "push notification config is UnsupportedOperation",
+      "request": { "jsonrpc": "2.0", "id": 5, "method": "tasks/pushNotificationConfig/set", "params": {} },
+      "response": { "jsonrpc": "2.0", "id": 5, "error": { "code": -32004, "message": "tasks/pushNotificationConfig/set is not supported: this agent does not push notifications" } }
+    },
+    {
+      "name": "an unknown method is -32601",
+      "request": { "jsonrpc": "2.0", "id": 6, "method": "agent/authenticatedExtendedCard" },
+      "response": { "jsonrpc": "2.0", "id": 6, "error": { "code": -32601, "message": "method not found: agent/authenticatedExtendedCard" } }
+    },
+    {
+      "name": "message/send without a message is -32602",
+      "request": { "jsonrpc": "2.0", "id": 7, "method": "message/send", "params": {} },
+      "response": { "jsonrpc": "2.0", "id": 7, "error": { "code": -32602, "message": "`message` is required" } }
+    },
+    {
+      "name": "message/send with an empty parts list is -32602",
+      "request": { "jsonrpc": "2.0", "id": 8, "method": "message/send", "params": { "message": { "role": "user", "parts": [] } } },
+      "response": { "jsonrpc": "2.0", "id": 8, "error": { "code": -32602, "message": "`message.parts` must be a non-empty array" } }
+    },
+    {
+      "name": "message/send with only a file part is ContentTypeNotSupported",
+      "request": { "jsonrpc": "2.0", "id": 9, "method": "message/send", "params": { "message": { "role": "user", "parts": [{ "kind": "file", "file": { "uri": "https://x/y.pdf" } }] } } },
+      "response": { "jsonrpc": "2.0", "id": 9, "error": { "code": -32005, "message": "message needs at least one text part" } }
+    },
+    {
+      "name": "message/send on an unknown task is TaskNotFound",
+      "request": { "jsonrpc": "2.0", "id": 10, "method": "message/send", "params": { "message": { "role": "user", "taskId": "task-nope", "parts": [{ "kind": "text", "text": "yes" }] } } },
+      "response": { "jsonrpc": "2.0", "id": 10, "error": { "code": -32001, "message": "task \"task-nope\" not found" } }
+    },
+    {
+      "name": "a non-object is -32600",
+      "request": 42,
+      "response": { "jsonrpc": "2.0", "id": null, "error": { "code": -32600, "message": "request must be a JSON-RPC object" } }
+    }
+  ]
+}

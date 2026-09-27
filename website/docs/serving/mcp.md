@@ -108,4 +108,5 @@ The MCP endpoint is unauthenticated by construction of the protocol subset it im
 ## Where to go next
 
 - [Consuming MCP servers](../integrations/mcp.md) — the other direction: an MCP server's tools inside your graph.
+- [A2A agent](./a2a.md) — the same graph as a peer agent instead of a tool.
 - [Transport](./transport.md) — the WebSocket side of the same app.

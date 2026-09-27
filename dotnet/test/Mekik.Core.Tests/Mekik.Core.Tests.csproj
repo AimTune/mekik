@@ -29,6 +29,9 @@
     <Content Include="../../../conformance/mcp/*.json"
              Link="mcp/%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../../conformance/a2a/*.json"
+             Link="a2a/%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

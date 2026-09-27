@@ -88,8 +88,24 @@ export { ConversationEngine, randomMinter } from "./engine.ts";
 export type { ClientSkillsPolicy, ClientToolsPolicy, Connection, ConnectParams, EngineConfig, GenUiEvent, Greeting } from "./engine.ts";
 
 // mekik as an MCP server (PROTOCOL.md §13): a graph as tools another agent calls.
-export { JSON_RPC, MCP_PROTOCOL_VERSIONS, McpArgumentError, MekikMcpServer, summarize as summarizeMcpTurn } from "./mcp.ts";
+export { driveTurn, JSON_RPC, MCP_PROTOCOL_VERSIONS, McpArgumentError, MekikMcpServer, summarize as summarizeMcpTurn } from "./mcp.ts";
 export type { JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpPendingView, McpServerOptions, McpToolDefinition, McpTurnResult } from "./mcp.ts";
+
+// mekik as an A2A agent (PROTOCOL.md §14): the graph behind an Agent Card, turns as tasks.
+export { A2A_ERRORS, A2A_PROTOCOL_VERSION, A2aRequestError, answersFor, InMemoryA2aTaskStore, MekikA2aServer, parseMessage, stateOf as a2aStateOf, textOf as a2aTextOf } from "./a2a.ts";
+export type {
+    A2aAgentCard,
+    A2aAgentSkill,
+    A2aArtifact,
+    A2aJsonRpcResponse,
+    A2aMessage,
+    A2aPart,
+    A2aServerOptions,
+    A2aTask,
+    A2aTaskState,
+    A2aTaskStatus,
+    A2aTaskStore,
+} from "./a2a.ts";
 
 // Skills (PROTOCOL.md §12): the source port, the prompt renderer, the catalog hash.
 export { DEFAULT_SKILLS_INTRO, hashSkills, renderSkillsPrompt, StaticSkillSource, summaryOf, toSkillSource, TurnSkills } from "./skills.ts";

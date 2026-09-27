@@ -198,23 +198,34 @@ public sealed class MekikMcpServer
 
     private async Task<Frame> TurnAsync(string? conversationId, Frame frame)
     {
-        var conn = new CollectingConnection($"mcp-{Interlocked.Increment(ref _connSeq)}");
+        var (convId, frames) = await DriveTurnAsync(_app, $"mcp-{Interlocked.Increment(ref _connSeq)}", _options.UserId ?? "mcp", conversationId, frame).ConfigureAwait(false);
+        return Summarize(convId, frames, ResumeName, _options.IncludeFrames);
+    }
+
+    /// <summary>
+    /// Run one turn of an app over an in-process connection and collect the frames it
+    /// produced (PROTOCOL.md §13.2, §14.2): connect as <paramref name="userId"/> on
+    /// <paramref name="conversationId"/> (a fresh conversation when null or unknown),
+    /// drop the handshake and replay, send <paramref name="frame"/>, return what came
+    /// back. Shared by the MCP and A2A servers. Mirror of TypeScript's <c>driveTurn</c>.
+    /// </summary>
+    public static async Task<(string ConversationId, IReadOnlyList<IReadOnlyDictionary<string, object?>> Frames)> DriveTurnAsync(
+        MekikApp app, string connectionId, string userId, string? conversationId, IReadOnlyDictionary<string, object?> frame)
+    {
+        var conn = new CollectingConnection(connectionId);
         try
         {
-            await _app.ConnectAsync(conn, new ConnectParams
-            {
-                Hello = new HelloInfo { UserId = _options.UserId ?? "mcp", ConversationId = conversationId },
-            }).ConfigureAwait(false);
+            await app.ConnectAsync(conn, new ConnectParams { Hello = new HelloInfo { UserId = userId, ConversationId = conversationId } }).ConfigureAwait(false);
             var welcome = conn.Frames.FirstOrDefault(f => f.GetValueOrDefault("type") as string == "welcome");
             var convId = (welcome?.GetValueOrDefault("data") as IReadOnlyDictionary<string, object?>)?.GetValueOrDefault("conversationId") as string
                 ?? conversationId ?? "";
             conn.Frames.Clear(); // the handshake and replay are not this turn's output
-            await _app.ReceiveAsync(conn, frame).ConfigureAwait(false);
-            return Summarize(convId, conn.Frames, ResumeName, _options.IncludeFrames);
+            await app.ReceiveAsync(conn, frame).ConfigureAwait(false);
+            return (convId, conn.Frames.ToList());
         }
         finally
         {
-            _app.Disconnect(conn);
+            app.Disconnect(conn);
         }
     }
 
@@ -285,8 +296,8 @@ public sealed class MekikMcpServer
             }
         }
 
-        var reply = replies.Count > 0 ? string.Join("\n", replies) : string.Concat(streamed);
         status ??= "refused";
+        var reply = status == "refused" ? refused ?? "the turn was refused" : replies.Count > 0 ? string.Join("\n", replies) : string.Concat(streamed);
         var result = new Frame
         {
             ["conversationId"] = conversationId,
@@ -321,7 +332,7 @@ public sealed class MekikMcpServer
                 text = "The run was aborted; the conversation can be continued.";
                 break;
             default:
-                text = refused ?? "the turn was refused";
+                text = reply;
                 isError = true;
                 break;
         }

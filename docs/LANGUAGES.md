@@ -32,6 +32,9 @@ mekik ships two implementations that speak the identical `mekik/1` wire
 | MCP server (§13) | `MekikMcpServer` (`@mekik/core`) / `serveMcp`, `mcpRequestHandler` (`@mekik/mcp`) | `MekikMcpServer` (`Mekik.Core`) / `MapMekikMcp` (`Mekik.AspNetCore`) |
 | MCP result reduction | `summarizeMcpTurn` | `MekikMcpServer.Summarize` |
 | MCP tools wrap (§13) | `withMcpTools(ctx, toolbox, policy?)` (`@mekik/langchain`) | `McpFunctions.Wrap(ctx, tools, invoke, policies?)` (`Mekik.Agents`) |
+| A2A agent (§14) | `MekikA2aServer` (`@mekik/core`) / `serveA2a`, `a2aRequestHandler` (`@mekik/a2a`) | `MekikA2aServer` (`Mekik.Core`) / `MapMekikA2a` (`Mekik.AspNetCore`) |
+| A2A task store port | `A2aTaskStore` / `InMemoryA2aTaskStore` | `IA2aTaskStore` / `InMemoryA2aTaskStore` |
+| turn driver (§13.2, §14.2) | `driveTurn` | `MekikMcpServer.DriveTurnAsync` |
 | typed component | `mekik.component<P>(name)` | pass the name to `Shuttle.Ui` / `Shuttle.Mount` |
 | built-in components | `mekik.genui.*` | `GenUI.*` (+ `GenUI.Names.*`) |
 | rich messages | `mekik.message` / `mekik.messageKind` / `mekik.messages.*` | `Shuttle.Message` / `Messages.*` |

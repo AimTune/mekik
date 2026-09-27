@@ -64,7 +64,7 @@ The comparison is byte-for-byte over **canonical** JSON: UTF-8, object keys sort
 
 Each row is a claim about the [event→frame mapping](../protocol/event-mapping.md), frozen as JSON.
 
-A second fixture file, [`conformance/mcp/rpc.json`](https://github.com/AimTune/mekik/blob/main/conformance/mcp/rpc.json), pins the JSON-RPC surface of the [MCP server](../serving/mcp.md) — `initialize`, `ping`, `tools/list`, the error codes — request by request, replayed by both suites.
+A second fixture file, [`conformance/mcp/rpc.json`](https://github.com/AimTune/mekik/blob/main/conformance/mcp/rpc.json), pins the JSON-RPC surface of the [MCP server](../serving/mcp.md) — `initialize`, `ping`, `tools/list`, the error codes — request by request, replayed by both suites. A third, [`conformance/a2a/rpc.json`](https://github.com/AimTune/mekik/blob/main/conformance/a2a/rpc.json), pins the [A2A agent](../serving/a2a.md)'s Agent Card and JSON-RPC surface the same way.
 
 ## The scenario suites
 

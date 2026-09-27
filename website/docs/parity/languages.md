@@ -29,6 +29,7 @@ mekik ships two implementations that speak the identical `mekik/1` wire: **TypeS
 | skill model wrap | `withSkills` (`@mekik/langchain`) | `SkillFunctions.Wrap` (`Mekik.Agents`) |
 | MCP server (§13) | `MekikMcpServer` / `serveMcp` (`@mekik/mcp`) | `MekikMcpServer` / `MapMekikMcp` (`Mekik.AspNetCore`) |
 | MCP tools wrap (§13) | `withMcpTools` (`@mekik/langchain`) | `McpFunctions.Wrap` (`Mekik.Agents`) |
+| A2A agent (§14) | `MekikA2aServer` / `serveA2a` (`@mekik/a2a`) | `MekikA2aServer` / `MapMekikA2a` (`Mekik.AspNetCore`) |
 | typed component | `mekik.component<P>(name)` | pass the name to `Shuttle.Ui` / `Shuttle.Mount` |
 | built-in components | `mekik.genui.*` | `GenUI.*` (+ `GenUI.Names.*`) |
 | rich messages | `mekik.message` / `mekik.messageKind` / `mekik.messages.*` | `Shuttle.Message` / `Messages.*` |

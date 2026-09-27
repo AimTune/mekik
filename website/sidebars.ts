@@ -38,7 +38,7 @@ const sidebars: SidebarsConfig = {
     {
       type: "category",
       label: "Serving",
-      items: ["serving/transport", "serving/mcp", "authentication"],
+      items: ["serving/transport", "serving/mcp", "serving/a2a", "authentication"],
     },
     {
       type: "category",

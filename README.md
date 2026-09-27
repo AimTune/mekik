@@ -78,12 +78,14 @@ mekik/
     CLIENT-TOOLS.md      # the frontend's own tools, callable by the graph (§11)
     SKILLS.md            # Agent Skills: the catalog, progressive disclosure, the skill frame (§12)
     MCP.md               # MCP both ways: consuming servers, serving the graph as tools (§13)
+    A2A.md               # the graph as an Agent2Agent peer: card, tasks, input-required (§14)
   ts/
     packages/core/       # @mekik/core — protocol, mapper, engine, helpers, stores, auth
     packages/ws/         # @mekik/ws — WebSocket transport
     packages/langchain/  # @mekik/langchain — wrap an agent's tools
     packages/redis/      # @mekik/redis — Redis turn lock + Pub/Sub backplane (fleet)
     packages/mcp/        # @mekik/mcp — the graph as MCP tools over Streamable HTTP (§13)
+    packages/a2a/        # @mekik/a2a — the graph as an A2A agent: card + JSON-RPC over HTTP (§14)
     examples/refund.ts    # showcase: tool + GenUI + form approval + resume
     examples/llm-agent.ts # the same desk, driven by a real Claude model
     examples/sql-agent.ts # a model writing its own SQL over SQLite
@@ -95,7 +97,7 @@ mekik/
     examples/client-tools.ts # the frontend's UI as callable tools (§11)
   dotnet/
     src/Mekik.Core/            # mirror of @mekik/core
-    src/Mekik.AspNetCore/      # app.MapMekik("/ws", app) and app.MapMekikMcp("/mcp", mcp)
+    src/Mekik.AspNetCore/      # MapMekik("/ws"), MapMekikMcp("/mcp"), MapMekikA2a("/a2a")
     src/Mekik.Agents/          # Microsoft.Extensions.AI function wrapping
     src/Mekik.SemanticKernel/  # one filter covers SK agents and planners
     src/Mekik.Redis/           # Redis turn lock + Pub/Sub backplane (fleet)
@@ -202,6 +204,10 @@ watermark. Transient frames (`welcome`, `run`, `error`) are live-only.
   (`withMcpTools`, `McpFunctions.Wrap`, over `@ilmek/mcp` / `Ilmek.Mcp`), and
   `MekikMcpServer` exposes the graph itself as two MCP tools — a turn, and a
   resume for its human-in-the-loop pauses — over Streamable HTTP.
+- **A2A** (§14) makes the graph a peer agent: `MekikA2aServer` serves an Agent
+  Card and `message/send` / `tasks/get` / `tasks/cancel`, one turn per task,
+  with a paused run as an `input-required` task the calling agent answers by
+  replying on it. ilmek's `@ilmek/a2a` / `Ilmek.A2A` is the calling side.
 
 Full details in [`PROTOCOL.md`](PROTOCOL.md); the exact event→frame mapping is
 pinned by [`conformance/fixtures/`](conformance/fixtures).
@@ -222,7 +228,8 @@ See [`docs/LANGUAGES.md`](docs/LANGUAGES.md) for the naming map,
 [`docs/GENUI.md`](docs/GENUI.md) for the two rendering paths (typed GenUI
 components and rich messages), [`docs/CLIENT-TOOLS.md`](docs/CLIENT-TOOLS.md)
 for client-declared tools, [`docs/SKILLS.md`](docs/SKILLS.md) for skills, and
-[`docs/MCP.md`](docs/MCP.md) for MCP in both directions.
+[`docs/MCP.md`](docs/MCP.md) for MCP in both directions, and
+[`docs/A2A.md`](docs/A2A.md) for the graph as an A2A peer.
 
 ## Non-goals (v1)
 

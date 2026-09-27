@@ -55,7 +55,7 @@ export interface McpPendingView {
 export interface McpTurnResult {
     conversationId: string;
     status: "finished" | "interrupted" | "error" | "aborted" | "refused";
-    /** The consolidated reply text (finished), the error text (error), or `""`. */
+    /** The consolidated reply text (finished), the error text (error, refused), or `""`. */
     reply: string;
     /** Open pauses to answer through `<name>__resume`. Empty unless `status` is `interrupted`. */
     pending: McpPendingView[];
@@ -251,19 +251,35 @@ export class MekikMcpServer {
     // ── one turn over an in-process connection ────────────────────────────────
 
     private async turn(conversationId: string | undefined, frame: Record<string, unknown>): Promise<McpCallToolResult> {
-        const conn = new CollectingConnection(`mcp-${++this.connSeq}`);
-        try {
-            await this.app.connect(conn, {
-                hello: { userId: this.options.userId ?? "mcp", ...(conversationId !== undefined ? { conversationId } : {}) },
-            });
-            const welcome = conn.frames.find((f) => f.type === "welcome") as WelcomeFrame | undefined;
-            const convId = welcome?.data.conversationId ?? conversationId ?? "";
-            conn.frames.length = 0; // the handshake and replay are not this turn's output
-            await this.app.receive(conn, frame);
-            return summarize(convId, conn.frames, this.resumeName, this.options.includeFrames === true);
-        } finally {
-            this.app.disconnect(conn);
-        }
+        const { conversationId: convId, frames } = await driveTurn(this.app, `mcp-${++this.connSeq}`, this.options.userId ?? "mcp", conversationId, frame);
+        return summarize(convId, frames, this.resumeName, this.options.includeFrames === true);
+    }
+}
+
+/**
+ * Run one turn of an app over an in-process connection and collect the frames
+ * it produced (PROTOCOL.md §13.2, §14.2): connect as `userId` on
+ * `conversationId` (a fresh conversation when undefined or unknown), drop the
+ * handshake and replay, send `frame`, return what came back. Shared by the MCP
+ * and A2A servers; a bridge to any other agent protocol starts here.
+ */
+export async function driveTurn(
+    app: MekikApp,
+    connectionId: string,
+    userId: string,
+    conversationId: string | undefined,
+    frame: Record<string, unknown>,
+): Promise<{ conversationId: string; frames: OutgoingFrame[] }> {
+    const conn = new CollectingConnection(connectionId);
+    try {
+        await app.connect(conn, { hello: { userId, ...(conversationId !== undefined ? { conversationId } : {}) } });
+        const welcome = conn.frames.find((f) => f.type === "welcome") as WelcomeFrame | undefined;
+        const convId = welcome?.data.conversationId ?? conversationId ?? "";
+        conn.frames.length = 0; // the handshake and replay are not this turn's output
+        await app.receive(conn, frame);
+        return { conversationId: convId, frames: [...conn.frames] };
+    } finally {
+        app.disconnect(conn);
     }
 }
 
@@ -349,10 +365,11 @@ export function summarize(conversationId: string, frames: readonly OutgoingFrame
         }
     }
 
-    const reply = replies.length > 0 ? replies.join("\n") : streamed.join("");
+    const finalStatus: McpTurnResult["status"] = status ?? "refused";
+    const reply = finalStatus === "refused" ? (refused ?? "the turn was refused") : replies.length > 0 ? replies.join("\n") : streamed.join("");
     const result: McpTurnResult = {
         conversationId,
-        status: status ?? "refused",
+        status: finalStatus,
         reply,
         pending,
         toolCalls: [...tools.values()].map((t) => ({ id: t.id, name: t.name, status: t.status })),
@@ -380,7 +397,7 @@ export function summarize(conversationId: string, frames: readonly OutgoingFrame
             text = "The run was aborted; the conversation can be continued.";
             break;
         case "refused":
-            text = refused ?? "the turn was refused";
+            text = reply;
             isError = true;
             break;
     }

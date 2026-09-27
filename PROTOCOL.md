@@ -439,6 +439,7 @@ Naming (extends MODEL.md §11):
 | skill source port | `SkillSource`                       | `ISkillSource`                                   |
 | MCP server        | `MekikMcpServer` / `serveMcp` (`@mekik/mcp`) | `MekikMcpServer` / `MapMekikMcp` (`Mekik.AspNetCore`) |
 | MCP tools wrap    | `withMcpTools` (`@mekik/langchain`) | `McpFunctions.Wrap` (`Mekik.Agents`)          |
+| A2A agent         | `MekikA2aServer` / `serveA2a` (`@mekik/a2a`) | `MekikA2aServer` / `MapMekikA2a` (`Mekik.AspNetCore`) |
 
 **.NET caveat (MODEL.md §11 divergence 2):** any `try/catch` in the adapter or
 helpers that wraps node execution MUST rethrow when
@@ -1070,7 +1071,7 @@ with the WebSocket side, resumable from either door.
   "structuredContent": {
     "conversationId": "conv-…",
     "status": "finished" | "interrupted" | "error" | "aborted" | "refused",
-    "reply": "<bot text frames joined by newline; else the streamed text chunks>",
+    "reply": "<bot text frames joined by newline; else the streamed text chunks; the error frame's text when refused>",
     "pending": [{ "id": "…", "payload": {…}, "actions"?: [...], "tool"?: "pick_date" }],
     "toolCalls": [{ "id": "…", "name": "get_order", "status": "completed" }],   // last status per id
     "skills": ["brand-voice"],                                                  // loaded skills
@@ -1123,3 +1124,109 @@ conversation is addressed by `conversationId` in the tool arguments.
 - **Consumed tools are untrusted input.** Names, descriptions and schemas of a
   remote server reach the model; results are client-ish input. Scope with
   `allow` at connect time and gate destructive tools with `approve`.
+
+---
+
+## 14. A2A (§14)
+
+Where §13 makes a graph a *tool*, §14 makes it a *peer*: an Agent2Agent (A2A
+0.3) agent with an Agent Card, addressed by messages, answering with tasks.
+`MekikA2aServer(app, {name, description?, url, version?, skills?, userId?, tasks?})`
+does the mapping over any JSON-RPC transport; `@mekik/a2a`'s `serveA2a` and
+`Mekik.AspNetCore`'s `MapMekikA2a` put it behind HTTP. Calling A2A agents
+*from* a graph is ilmek's job (`@ilmek/a2a` / `Ilmek.A2A`). Nothing here adds
+a frame to `mekik/1`.
+
+### 14.1 The Agent Card
+
+Served at `/.well-known/agent-card.json`:
+
+```jsonc
+{ "protocolVersion": "0.3.0", "name", "description", "url", "preferredTransport": "JSONRPC", "version",
+  "capabilities": { "streaming": false, "pushNotifications": false, "stateTransitionHistory": false },
+  "defaultInputModes": ["text/plain"], "defaultOutputModes": ["text/plain"],
+  "skills": [ { "id": "chat", "name": <name>, "description": <description>, "tags": ["chat"] },
+              …one { id: name, name, description, tags } per SkillSummary in options.skills… ] }
+```
+
+`description` defaults to `The <name> agent, served by mekik.`; `version` to
+`"0"`. The agent itself is always the first skill.
+
+### 14.2 Turns as tasks
+
+**One conversation is one `contextId`; one turn is one task.** `message/send`
+takes `{message: {role, parts, messageId?, taskId?, contextId?}}` — `role` MUST
+be `user` or `agent`, `parts` a non-empty list of text, data or file parts
+(else `-32602`); a message with no text part is `-32005`.
+
+- **No `taskId`** — a new task: connect as user `userId` (default `"a2a"`) on
+  the conversation `contextId` names (fresh when absent or unknown; the task
+  reports the id used), send a `text` frame with the text parts joined by
+  newlines, collect the turn, disconnect (the `driveTurn` of §13.2).
+- **`taskId` of an `input-required` task** — the resume (§14.3). A `taskId`
+  that is unknown is `-32001`; one whose task is not `input-required` is
+  `-32602` (`task "…" is completed and takes no more input`).
+
+The task is built from the turn's summary (§13.2, `summarize`):
+
+| turn status | `status.state` | `status.message` | artifacts |
+| --- | --- | --- | --- |
+| `finished` | `completed` | none | + `{artifactId, name: "reply", parts: [{kind: "text", text: reply}]}` when the reply is non-empty |
+| `interrupted` | `input-required` | agent message: a text part describing each pending interrupt and how to answer, plus a data part `{pending: […]}` | unchanged |
+| `error` | `failed` | agent message: the error text | unchanged |
+| `refused` | `rejected` | agent message: the engine's `<code>: <message>` | unchanged |
+| `aborted` | `canceled` | agent message: `The run was aborted; the conversation can be continued.` | unchanged |
+
+Every task carries `kind: "task"`, `id`, `contextId` (the conversation),
+`status.timestamp` (ISO 8601), `artifacts` (accumulated across the task's
+turns), `history` (the user messages and agent status messages, in order, each
+stamped with `taskId` and `contextId`), and `metadata.mekik = {conversationId,
+status, toolCalls, skills}`; an `input-required` task also carries
+`metadata.pending` — the §13.2 `pending[]` views.
+
+### 14.3 Answering a pause
+
+A message sent with the `taskId` of an `input-required` task becomes the
+`resume` frame's `answers`:
+
+- a data part carrying `answers` (an object keyed by interrupt id) is used
+  as-is — the form for several open interrupts;
+- otherwise exactly one interrupt must be open (else `-32602`: `the task has N
+  open interrupts; answer them all with a data part {"answers": {<id>: <answer>}}`);
+  a data part answers it with the part's `data`; else the text answers it — the
+  **value** of the action whose `label` equals the text (its label when it has
+  no value), or the text itself.
+
+A pause that is a client tool call (§11.3) is listed with its `tool` and cannot
+be answered from A2A. The continued task keeps its `id`, appends to `history`
+and `artifacts`, and takes the new turn's state.
+
+### 14.4 tasks/get, tasks/cancel, everything else
+
+`tasks/get {id, historyLength?}` returns the task, its history truncated to the
+last `historyLength` messages when given (`0` ⇒ none); unknown ⇒ `-32001`.
+`tasks/cancel {id}` marks an `input-required` task `canceled` (a new
+`status` with no message) and returns it; any other state is `-32002`. **The
+conversation stays parked** — mekik never discards a pause on a caller's
+behalf — so a later message on that context is `rejected` with the engine's
+`interrupted` text until a mekik client answers it.
+
+`message/stream` and `tasks/resubscribe` are `-32004` (`this agent does not
+stream`); the `tasks/pushNotificationConfig/*` methods are `-32004` (`does not
+push notifications`); a notification (no `id`) gets no response; anything else
+is `-32601`. A non-object request, or one without `jsonrpc: "2.0"` and a
+`method`, is `-32600`. The Agent Card and these exchanges are pinned by
+`conformance/a2a/rpc.json`.
+
+**Transport.** `GET` on the card path returns the card; `POST` on the endpoint
+carries one JSON-RPC message → `200` with the response, `202` for a
+notification, `400` for unparseable JSON (`-32700`), `413` over 1 MiB;
+`GET` on the endpoint and `POST` on the card path are `405`.
+
+### 14.5 Security model
+
+As §13.3: the endpoint carries no authorization of its own and belongs behind a
+gateway; all A2A conversations belong to one mekik user; the graph's approvals
+still gate what a calling agent can make happen. Task stores are per-process
+by default (`InMemoryA2aTaskStore`); a durable `A2aTaskStore` /
+`IA2aTaskStore` is a two-method port.
