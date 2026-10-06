@@ -18,6 +18,8 @@ import type {
     MessageAction,
     MessageOutFrame,
     OutgoingFrame,
+    SkillFrame,
+    SkillUse,
     TextOutFrame,
     ToolCall,
     ToolCallFrame,
@@ -56,6 +58,10 @@ interface MekikToolPayload {
     [MEKIK_KEY]: "tool";
     call: ToolCall;
 }
+interface MekikSkillPayload {
+    [MEKIK_KEY]: "skill";
+    use: SkillUse;
+}
 interface MekikMessagePayload {
     [MEKIK_KEY]: "message";
     messageType: string;
@@ -71,6 +77,9 @@ function isGenUIPayload(v: unknown): v is MekikGenUIPayload {
 }
 function isToolPayload(v: unknown): v is MekikToolPayload {
     return isRecord(v) && v[MEKIK_KEY] === "tool" && isRecord(v.call);
+}
+function isSkillPayload(v: unknown): v is MekikSkillPayload {
+    return isRecord(v) && v[MEKIK_KEY] === "skill" && isRecord(v.use) && typeof v.use.name === "string";
 }
 function isMessagePayload(v: unknown): v is MekikMessagePayload {
     return isRecord(v) && v[MEKIK_KEY] === "message" && typeof v.messageType === "string" && isRecord(v.data);
@@ -170,6 +179,10 @@ export class TurnMapper {
         }
         if (isToolPayload(payload)) {
             const frame: ToolCallFrame = { type: "tool_call", seq: this.deps.allocSeq(), data: payload.call };
+            return [frame];
+        }
+        if (isSkillPayload(payload)) {
+            const frame: SkillFrame = { type: "skill", seq: this.deps.allocSeq(), data: payload.use };
             return [frame];
         }
         if (isMessagePayload(payload)) {

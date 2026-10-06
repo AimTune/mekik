@@ -29,7 +29,26 @@
 import { createMekikApp } from "./app.ts";
 import { component, genui } from "./genui.ts";
 import { message, messageKind, messageSpec, messages } from "./messages.ts";
-import { action, approve, authClaims, callClientTool, choose, claimStrings, clientTools, event, mount, onEvent, streamText, text, tool, ui } from "./helpers.ts";
+import {
+    action,
+    approve,
+    authClaims,
+    callClientTool,
+    choose,
+    claimStrings,
+    clientTools,
+    event,
+    loadSkill,
+    mount,
+    onEvent,
+    skillResource,
+    skills,
+    skillsPrompt,
+    streamText,
+    text,
+    tool,
+    ui,
+} from "./helpers.ts";
 
 /** The app factory with the authoring helpers attached (PROTOCOL.md §6). */
 export const mekik = Object.assign(createMekikApp, {
@@ -45,6 +64,10 @@ export const mekik = Object.assign(createMekikApp, {
     choose,
     clientTools,
     callClientTool,
+    skills,
+    skillsPrompt,
+    loadSkill,
+    skillResource,
     component,
     genui,
     message,
@@ -62,7 +85,31 @@ export { GenUiComponent, ComponentCatalog, defineComponent, toComponentDefinitio
 export type { ComponentSpec, ComponentSource, DefinedComponent } from "./components.ts";
 
 export { ConversationEngine, randomMinter } from "./engine.ts";
-export type { ClientToolsPolicy, Connection, ConnectParams, EngineConfig, GenUiEvent, Greeting } from "./engine.ts";
+export type { ClientSkillsPolicy, ClientToolsPolicy, Connection, ConnectParams, EngineConfig, GenUiEvent, Greeting } from "./engine.ts";
+
+// mekik as an MCP server (PROTOCOL.md §13): a graph as tools another agent calls.
+export { driveTurn, JSON_RPC, MCP_PROTOCOL_VERSIONS, McpArgumentError, MekikMcpServer, summarize as summarizeMcpTurn } from "./mcp.ts";
+export type { JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpPendingView, McpServerOptions, McpToolDefinition, McpTurnResult } from "./mcp.ts";
+
+// mekik as an A2A agent (PROTOCOL.md §14): the graph behind an Agent Card, turns as tasks.
+export { A2A_ERRORS, A2A_PROTOCOL_VERSION, A2aRequestError, answersFor, InMemoryA2aTaskStore, MekikA2aServer, parseMessage, stateOf as a2aStateOf, textOf as a2aTextOf } from "./a2a.ts";
+export type {
+    A2aAgentCard,
+    A2aAgentSkill,
+    A2aArtifact,
+    A2aJsonRpcResponse,
+    A2aMessage,
+    A2aPart,
+    A2aServerOptions,
+    A2aTask,
+    A2aTaskState,
+    A2aTaskStatus,
+    A2aTaskStore,
+} from "./a2a.ts";
+
+// Skills (PROTOCOL.md §12): the source port, the prompt renderer, the catalog hash.
+export { DEFAULT_SKILLS_INTRO, hashSkills, renderSkillsPrompt, StaticSkillSource, summaryOf, toSkillSource, TurnSkills } from "./skills.ts";
+export type { SkillSource, SkillsInput, SkillsPromptOptions } from "./skills.ts";
 
 export { IlmekAdapter } from "./adapter.ts";
 export type { RunContext } from "./adapter.ts";
@@ -71,8 +118,41 @@ export { TurnMapper, eventToFrames, unwrapInterrupt, interruptFrameData } from "
 export type { IdMinter, TurnMapperDeps } from "./mapper.ts";
 
 // The helpers are also available as named imports, for callers who prefer them.
-export { action, approve, authClaims, callClientTool, choose, claimStrings, clientTools, event, mount, onEvent, streamText, text, tool, ui } from "./helpers.ts";
-export type { ActionOf, ApproveOptions, CallClientToolOptions, ChoiceOption, ChoiceValue, ChooseOptions, ChunkOptions, ClientToolFilter, OnEventOptions, UiHandle } from "./helpers.ts";
+export {
+    action,
+    approve,
+    authClaims,
+    callClientTool,
+    choose,
+    claimStrings,
+    clientTools,
+    event,
+    loadSkill,
+    mount,
+    onEvent,
+    skillResource,
+    skillResourcesAvailable,
+    skills,
+    skillsPrompt,
+    skillTrace,
+    streamText,
+    text,
+    tool,
+    ui,
+} from "./helpers.ts";
+export type {
+    ActionOf,
+    ApproveOptions,
+    CallClientToolOptions,
+    ChoiceOption,
+    ChoiceValue,
+    ChooseOptions,
+    ChunkOptions,
+    ClientToolFilter,
+    OnEventOptions,
+    SkillFilter,
+    UiHandle,
+} from "./helpers.ts";
 
 // Typed rich messages: the factory and chativa's built-in message types.
 export { message, messageKind, messageSpec, messages } from "./messages.ts";
@@ -131,15 +211,21 @@ export {
     CLIENT_TOOL_EVENT,
     isMessageFrame,
     isPersistent,
+    isValidSkillName,
     parseIncoming,
     PERSISTENT_FRAME_TYPES,
     PROTOCOL_VERSION,
     ProtocolError,
     RESERVED_FRAME_TYPES,
+    sanitizeClientSkills,
     sanitizeClientTools,
+    SKILL_DESCRIPTION_MAX,
+    SKILL_NAME_MAX,
 } from "./protocol.ts";
 export type {
     AIChunk,
+    ClientSkillDefinition,
+    ClientSkillsFrame,
     ClientToolCall,
     ClientToolDefinition,
     ClientToolMode,
@@ -160,6 +246,13 @@ export type {
     ResumeFrame,
     RunFrame,
     RunStatus,
+    SkillEntry,
+    SkillFrame,
+    SkillOrigin,
+    SkillsFrame,
+    SkillStatus,
+    SkillSummary,
+    SkillUse,
     TextInFrame,
     TextOutFrame,
     ToolCall,

@@ -98,3 +98,4 @@ When a policy marks a tool `approve`, the pause is a normal mekik `interrupt` fr
 - [**LangChain**](./langchain.md) — `withMekikTools` and the callback fallback.
 - [**Microsoft.Extensions.AI**](./dotnet-agents.md) — `MekikTools.Wrap` and the relationship to `ApprovalRequiredAIFunction`.
 - [**Semantic Kernel**](./semantic-kernel.md) — the one filter that covers agents and planners.
+- [**MCP servers as tools**](./mcp.md) — `withMcpTools` / `McpFunctions.Wrap`: a Model Context Protocol server's tools with the mekik treatment.

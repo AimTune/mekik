@@ -76,11 +76,16 @@ mekik/
     HITL.md              # human-in-the-loop authoring guide
     GENUI.md             # rendering: typed components and rich messages
     CLIENT-TOOLS.md      # the frontend's own tools, callable by the graph (§11)
+    SKILLS.md            # Agent Skills: the catalog, progressive disclosure, the skill frame (§12)
+    MCP.md               # MCP both ways: consuming servers, serving the graph as tools (§13)
+    A2A.md               # the graph as an Agent2Agent peer: card, tasks, input-required (§14)
   ts/
     packages/core/       # @mekik/core — protocol, mapper, engine, helpers, stores, auth
     packages/ws/         # @mekik/ws — WebSocket transport
     packages/langchain/  # @mekik/langchain — wrap an agent's tools
     packages/redis/      # @mekik/redis — Redis turn lock + Pub/Sub backplane (fleet)
+    packages/mcp/        # @mekik/mcp — the graph as MCP tools over Streamable HTTP (§13)
+    packages/a2a/        # @mekik/a2a — the graph as an A2A agent: card + JSON-RPC over HTTP (§14)
     examples/refund.ts    # showcase: tool + GenUI + form approval + resume
     examples/llm-agent.ts # the same desk, driven by a real Claude model
     examples/sql-agent.ts # a model writing its own SQL over SQLite
@@ -92,7 +97,7 @@ mekik/
     examples/client-tools.ts # the frontend's UI as callable tools (§11)
   dotnet/
     src/Mekik.Core/            # mirror of @mekik/core
-    src/Mekik.AspNetCore/      # app.MapMekik("/ws", app)
+    src/Mekik.AspNetCore/      # MapMekik("/ws"), MapMekikMcp("/mcp"), MapMekikA2a("/a2a")
     src/Mekik.Agents/          # Microsoft.Extensions.AI function wrapping
     src/Mekik.SemanticKernel/  # one filter covers SK agents and planners
     src/Mekik.Redis/           # Redis turn lock + Pub/Sub backplane (fleet)
@@ -188,6 +193,21 @@ watermark. Transient frames (`welcome`, `run`, `error`) are live-only.
   node sees a tool another does not), a node calls one with
   `mekik.callClientTool`, and the client's handler answers through the same
   durable interrupt machinery.
+- **Skills** (§12) give nodes a catalog of `SKILL.md` folders (read by
+  `@ilmek/skills` / `Ilmek.Skills`), disclosed to the model progressively:
+  `mekik.skillsPrompt` lists them, `mekik.loadSkill` hands back one skill's
+  instructions and emits a persistent `skill` frame, and the catalog is
+  announced to the client in a hash-versioned `skills` frame. A frontend may
+  declare its own skills behind an opt-in policy.
+- **MCP** (§13) runs both ways: an MCP server's tools join an agent's toolbox
+  with the same trace/exactly-once/approval treatment as server tools
+  (`withMcpTools`, `McpFunctions.Wrap`, over `@ilmek/mcp` / `Ilmek.Mcp`), and
+  `MekikMcpServer` exposes the graph itself as two MCP tools — a turn, and a
+  resume for its human-in-the-loop pauses — over Streamable HTTP.
+- **A2A** (§14) makes the graph a peer agent: `MekikA2aServer` serves an Agent
+  Card and `message/send` / `tasks/get` / `tasks/cancel`, one turn per task,
+  with a paused run as an `input-required` task the calling agent answers by
+  replying on it. ilmek's `@ilmek/a2a` / `Ilmek.A2A` is the calling side.
 
 Full details in [`PROTOCOL.md`](PROTOCOL.md); the exact event→frame mapping is
 pinned by [`conformance/fixtures/`](conformance/fixtures).
@@ -206,8 +226,10 @@ The two implementations are held to the same wire two ways:
 See [`docs/LANGUAGES.md`](docs/LANGUAGES.md) for the naming map,
 [`docs/HITL.md`](docs/HITL.md) for the human-in-the-loop authoring rules,
 [`docs/GENUI.md`](docs/GENUI.md) for the two rendering paths (typed GenUI
-components and rich messages), and [`docs/CLIENT-TOOLS.md`](docs/CLIENT-TOOLS.md)
-for client-declared tools.
+components and rich messages), [`docs/CLIENT-TOOLS.md`](docs/CLIENT-TOOLS.md)
+for client-declared tools, [`docs/SKILLS.md`](docs/SKILLS.md) for skills, and
+[`docs/MCP.md`](docs/MCP.md) for MCP in both directions, and
+[`docs/A2A.md`](docs/A2A.md) for the graph as an A2A peer.
 
 ## Non-goals (v1)
 

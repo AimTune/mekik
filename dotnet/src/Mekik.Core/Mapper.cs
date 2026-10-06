@@ -67,6 +67,12 @@ public sealed class TurnMapper
             if (d.GetValueOrDefault(MekikKey) is "tool" && d.GetValueOrDefault("call") is IReadOnlyDictionary<string, object?> call)
                 return [new Dictionary<string, object?> { ["type"] = "tool_call", ["seq"] = _deps.AllocSeq(), ["data"] = call }];
 
+            // A skill use (PROTOCOL.md §12.5): the use record travels verbatim as `data`.
+            if (d.GetValueOrDefault(MekikKey) is "skill" &&
+                d.GetValueOrDefault("use") is IReadOnlyDictionary<string, object?> use &&
+                use.GetValueOrDefault("name") is string)
+                return [new Dictionary<string, object?> { ["type"] = "skill", ["seq"] = _deps.AllocSeq(), ["data"] = use }];
+
             if (d.GetValueOrDefault(MekikKey) is "message" &&
                 d.GetValueOrDefault("messageType") is string messageType &&
                 d.GetValueOrDefault("data") is IReadOnlyDictionary<string, object?> data)

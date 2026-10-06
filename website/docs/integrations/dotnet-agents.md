@@ -88,6 +88,36 @@ Each wrapper's executor is [`Shuttle.CallClientToolAsync`](../authoring/client-t
 
 `tags` is the scoping lever: the frontend tags the tools it wants restricted to particular nodes, untagged tools are visible everywhere, and the server's [`MekikOptions.ClientTools` policy](../authoring/client-tools.md#accepting-the-server-side--off-by-default) has already allowlisted the whole set before this call ever sees it. Runnable: [`dotnet/examples/Mekik.ClientTools`](https://github.com/AimTune/mekik/tree/main/dotnet/examples/Mekik.ClientTools).
 
+## `SkillFunctions.Wrap` — progressive disclosure
+
+The app's [skills](../authoring/skills.md) (PROTOCOL.md §12) reach a model in three levels: the `<available_skills>` block in the system prompt lists names and descriptions, `load_skill` pulls one skill's instructions when a task matches, and `read_skill_resource` opens a bundled file when the instructions point at it. `SkillFunctions.Wrap` builds the functions; `Shuttle.SkillsPrompt` builds the block. It is the .NET mirror of `@mekik/langchain`'s `withSkills`:
+
+```csharp
+using Mekik.Agents;
+
+.Node("agent", async (State state, IContext ctx) =>
+{
+    var system = SYSTEM + "\n\n" + Shuttle.SkillsPrompt(ctx, tags: ["docs"]);
+    var tools = MekikTools.Wrap(ctx, serverFunctions, policies)
+        .Concat(SkillFunctions.Wrap(ctx, tags: ["docs"]))
+        .ToList();
+    return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions { System = system, Input = input, Tools = tools }));
+})
+
+// …or let Agent.RunAsync do both with one option:
+new AgentRunOptions { System = SYSTEM, Input = input, Tools = tools, Skills = true, SkillTags = ["docs"] }
+```
+
+Signature:
+
+```csharp
+static IReadOnlyList<AIFunction> Wrap(IContext ctx, IReadOnlyList<string>? tags = null, string? source = null);
+// SkillFunctions.LoadSkillTool = "load_skill"                 — schema { name }
+// SkillFunctions.ReadSkillResourceTool = "read_skill_resource" — schema { name, path }; only when the catalog has files
+```
+
+`load_skill` returns the instructions as the observation and emits the persistent `skill` frame. An unknown name — or one the filter hides — comes back as an error observation listing what *is* available, so the loop stays alive and the prompt and the function always agree. `AgentRunOptions.Skills` (with `SkillTags` / `SkillSource`) appends the block to `System` and adds the functions in one switch. The skill functions are not wrapped with the tool policy: a load is a catalog read that emits its own trace, not a side effect to journal.
+
 ## Why wrapping
 
 A chat client invokes its own functions. That leaves the two gaps `Shuttle.Tool` normally closes:

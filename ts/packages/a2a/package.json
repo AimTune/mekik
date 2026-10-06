@@ -1,0 +1,48 @@
+{
+  "name": "@mekik/a2a",
+  "version": "0.7.1",
+  "description": "A2A transport for mekik — serve a MekikApp as an Agent2Agent agent: Agent Card plus JSON-RPC over HTTP.",
+  "type": "module",
+  "license": "MIT",
+  "author": "AimTune",
+  "homepage": "https://github.com/AimTune/mekik/tree/main/ts/packages/a2a#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AimTune/mekik.git",
+    "directory": "ts/packages/a2a"
+  },
+  "bugs": "https://github.com/AimTune/mekik/issues",
+  "keywords": [
+    "mekik",
+    "a2a",
+    "agent2agent",
+    "agent",
+    "transport"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@mekik/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@ilmek/core": "^0.1.1"
+  }
+}

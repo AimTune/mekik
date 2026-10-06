@@ -32,12 +32,13 @@ const sidebars: SidebarsConfig = {
         "authoring/tools",
         "authoring/human-in-the-loop",
         "authoring/client-tools",
+        "authoring/skills",
       ],
     },
     {
       type: "category",
       label: "Serving",
-      items: ["serving/transport", "authentication"],
+      items: ["serving/transport", "serving/mcp", "serving/a2a", "authentication"],
     },
     {
       type: "category",
@@ -47,6 +48,7 @@ const sidebars: SidebarsConfig = {
         "integrations/langchain",
         "integrations/dotnet-agents",
         "integrations/semantic-kernel",
+        "integrations/mcp",
       ],
     },
     {

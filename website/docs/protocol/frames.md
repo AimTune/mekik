@@ -14,11 +14,12 @@ Frames are flat (no nested envelope). Persistent server→client frames carry a 
 
 | `type` | shape | meaning |
 |---|---|---|
-| `hello` | `{type, userId?, conversationId?, watermark?, token?, meta?, componentsHash?, tools?}` | Handshake. May instead travel as the WS query string. `meta` is a client-supplied context map. `componentsHash` is the [component catalog](../authoring/generative-ui.md#components-the-server-defines) the client has cached — a matching hash means the catalog is not re-sent. `tools` declares this client's [callable tools](../authoring/client-tools.md). All fields optional. |
+| `hello` | `{type, userId?, conversationId?, watermark?, token?, meta?, componentsHash?, tools?, skillsHash?, skills?}` | Handshake. May instead travel as the WS query string. `meta` is a client-supplied context map. `componentsHash` is the [component catalog](../authoring/generative-ui.md#components-the-server-defines) the client has cached — a matching hash means the catalog is not re-sent. `tools` declares this client's [callable tools](../authoring/client-tools.md). `skillsHash` is the [skill catalog](../authoring/skills.md) the client has cached; `skills` declares the client's own skills. All fields optional. |
 | `text` | `{type, data:{text}, meta?}` | One user turn → starts a run (or is refused `busy` / `interrupted`). |
 | `resume` | `{type, answers:{[interruptId]: any}}` | Answer the open interrupts, keyed by thread-scoped interrupt `id`. Must cover **every** open interrupt. |
 | `genui_event` | `{type, streamId, eventType, scope?, component?, payload}` | An interaction from a mounted GenUI component. `scope` comes from the markup — `"component"` (`component-event`), `"graph"` (`mekik-event`), or absent (`data-event`) — and decides who receives it: the node parked on `onEvent`, the app's handler, or whichever answers first. A `submit` naming an open interrupt is coerced to a `resume` regardless. See [Bidirectional events](../authoring/generative-ui.md#bidirectional-events--genui_event). |
 | `client_tools` | `{type, tools: ClientToolDefinition[]}` | Replace this connection's declared [client tools](../authoring/client-tools.md). The list is the connection's whole new set; `[]` withdraws every tool. Inert unless the server opted in via `MekikOptions.clientTools`. |
+| `client_skills` | `{type, skills: ClientSkillDefinition[]}` | Replace this connection's declared [client skills](../authoring/skills.md#client-declared-skills-off-by-default). Each is `{name, description, instructions, tags?}`; the list is the connection's whole new set; `[]` withdraws every skill. Inert unless the server opted in via `MekikOptions.clientSkills`. |
 | `abort` | `{type}` | Cancel the in-flight run at the next superstep boundary. The last checkpoint stands. |
 
 A malformed inbound frame (bad JSON, missing `type`) draws `error{code:"bad_request"}` and is otherwise ignored — the connection stays open.
@@ -72,11 +73,13 @@ Declarations are ignored unless the server opts in — see [Client tools](../aut
 | `welcome` | no | `{type, data:{protocol, conversationId, userId, connectionId, watermark, pending: PendingView[]}}` |
 | `text` | **yes** | `{type, id, seq, from:"bot"\|"user", data:{text}, timestamp}` |
 | `tool_call` | **yes** | `{type, seq, data:{id, name, status:"running"\|"completed"\|"error", params?, result?, error?}}` |
+| `skill` | **yes** | `{type, seq, data:{id, name, status:"loaded"\|"error", source?, error?}}` |
 | `genui` | **yes** | `{type, seq, streamId, done, chunk: AIChunk}` |
 | `interrupt` | **yes** | `{type, seq, id, data:{payload, ui?, actions?, event?, tool?}}` |
 | `interrupt_resolved` | **yes** | `{type, seq, id, data:{answer?}}` |
 | *rich message* | **yes** | `{type: <rendererName>, id, seq, from:"bot"\|"user", data, timestamp}` |
 | `genui_components` | no | `{type, hash, unchanged?, components?: ComponentDefinition[]}` |
+| `skills` | no | `{type, hash, unchanged?, skills?: SkillSummary[]}` |
 | `run` | no | `{type, data:{status:"started"\|"finished"\|"interrupted"\|"error"\|"aborted"}}` |
 | `error` | no | `{type, data:{code, message}}` |
 
@@ -98,6 +101,13 @@ These carry `seq` and are the durable transcript — exactly what reconnect repl
     "id": "call-1", "name": "get_order", "status": "running", "params": { "id": "ORD-42" } } }
 { "type": "tool_call", "seq": 7, "data": {
     "id": "call-1", "name": "get_order", "status": "completed", "result": { "total": 249.9 } } }
+```
+
+**`skill`** — a [skill](../authoring/skills.md) was loaded into a node, **upserted by `data.id`** like a tool call. `source` says whether it came from the server's catalog or a client's declaration; an unknown name arrives as `status:"error"`:
+
+```jsonc
+{ "type": "skill", "seq": 7, "data": {
+    "id": "conv-1:ckpt-a:agent/0:skill:0", "name": "pdf", "status": "loaded", "source": "server" } }
 ```
 
 **`genui`** — one `AIChunk` under a turn `streamId`. `done:false` while the stream is open; the mapper closes it at run end with a `stream_done` event chunk (`done:true`):

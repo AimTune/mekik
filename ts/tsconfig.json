@@ -13,6 +13,12 @@
     },
     {
       "path": "./packages/redis"
+    },
+    {
+      "path": "./packages/mcp"
+    },
+    {
+      "path": "./packages/a2a"
     }
   ]
 }

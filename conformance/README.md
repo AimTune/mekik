@@ -70,6 +70,24 @@ and committed; both suites then treat them as read-only goldens.
 | `mixed-turn`           | ui + tokens + tool + reply in one run (ordering + seq monotonicity)                         |
 | `rich-message`         | `mekik.message` customs → persistent rich message frames (§4.5); caller id wins over the minted one; a reserved frame type is dropped |
 | `client-tool-call`     | `mekik.callClientTool` (§11.3): running `tool_call` trace, then an interrupt whose `$mekik.tool` unwraps to `data.tool={name,params}` with empty payload and no ui/actions/event |
+| `skill-loaded`         | `mekik.loadSkill` (§12.5): `$mekik.skill` customs → persistent `skill` frames carrying the use record verbatim; an unknown name is a `status:"error"` use; the reply follows |
+
+### The MCP JSON-RPC fixture
+
+[`mcp/rpc.json`](mcp/rpc.json) pins the JSON-RPC surface of `MekikMcpServer`
+(PROTOCOL.md §13): `initialize` version negotiation, `ping`, the two advertised
+tools, the error codes for unknown methods, unknown tools and bad argument
+shapes. Both suites run every case against a server configured with the
+fixture's `options`. `tools/call` results are asserted behaviourally instead —
+conversation ids are minted at random.
+
+### The A2A fixture
+
+[`a2a/rpc.json`](a2a/rpc.json) pins `MekikA2aServer`'s Agent Card and JSON-RPC
+surface (PROTOCOL.md §14): the card built from the fixture's `options` (the
+agent as the first skill, then the app's skills), and the error codes for unknown
+tasks, unsupported methods and bad message shapes. `message/send` results carry
+minted ids and timestamps and are asserted behaviourally.
 
 ## Scenario suites (behavioural)
 
@@ -137,6 +155,65 @@ and committed; both suites then treat them as read-only goldens.
     invocation is a genui event chunk named `client_tool` with
     `payload={name,params}`, keyed by the trace id, and the running→completed
     trace pair emits in the same turn.
+21. **skill catalog handshake** (§12.2) - a configured catalog is announced once
+    after `welcome` as a transient `skills` frame carrying level-1 summaries
+    (never instructions), each stamped `source:"server"`, with a sha256 hash
+    over the canonical summaries; a matching `hello.skillsHash` draws
+    `{unchanged:true}` and no list; no catalog ⇒ no frame. The hash ignores
+    order and origin stamps and is identical across languages.
+22. **client skill declaration** (§12.4) - `hello.skills` are ignored entirely
+    unless the app opts in; sanitization drops a bad name, a missing or
+    over-long description, missing instructions; duplicates last-win; the
+    policy function is the allowlist; a `client_skills` frame replaces the set
+    and `[]` withdraws it; a non-array draws `bad_request`; a client skill
+    never overrides a server skill of the same name; multi-tab is the union
+    with the latest declaration winning.
+23. **skill snapshot and tags** (§12.3) - server skills list first, then
+    client ones, each with its origin; untagged skills match every query and
+    tagged ones only on intersection; the `source` filter narrows to one
+    origin; the rendered prompt is byte-identical to ilmek's and empty when
+    there is nothing to list.
+24. **skill load** (§12.5) - `loadSkill` returns the instructions and emits a
+    persistent `skill` frame with a replay-stable id (`…:skill:0`) and the
+    origin; the frame replays to a reconnecting tab; a client-declared skill
+    loads with `source:"client"`; an unknown name emits `status:"error"` and
+    throws, ending the run `error`; `skillResource` reaches a folder-backed
+    server source and is refused for client skills and sources without files.
+25. **MCP turn** (§13.2) - `tools/call <name>` runs one turn: a finished run
+    returns the reply as text and `{conversationId, status:"finished", reply,
+    toolCalls, skills}`; a `conversationId` continues the conversation and an
+    unknown one starts fresh (the result reports the id used); a graph error is
+    a result with `isError` and the error text; `includeFrames` adds the
+    persistent frames only.
+26. **MCP pause and resume** (§13.2) - a paused run returns
+    `status:"interrupted"` with `pending[{id, payload, actions?, tool?}]` and
+    a text that names each interrupt and the resume tool; `<name>__resume` with
+    answers keyed by id finishes it; a turn on a parked conversation, or a
+    resume with nothing open, is `status:"refused"` with `isError` and the
+    engine's error text — never a crash.
+27. **MCP tools in an agent** (§13.1) - `withMcpTools` / `McpFunctions.Wrap`
+    keep name, description and schema (a missing description gets a default);
+    a call is a `tool_call` trace, runs once across a pause (same trace id on
+    replay), and reads as the result text; `isError` results and structured-only
+    results become observations; the policy map applies by exposed name and an
+    `approve` decline never runs the remote tool.
+28. **A2A turn as task** (§14.2) - `message/send` without a task id runs one
+    turn and returns a `completed` task with the reply as a text artifact named
+    `reply`, the user message in `history` stamped with task and context ids,
+    and `metadata.mekik`; a `contextId` continues the conversation with a new
+    task id; a graph error is `failed` with the error text as the status
+    message; a turn on a parked conversation is `rejected` with the engine's
+    `interrupted` text.
+29. **A2A input-required and resume** (§14.3) - a paused turn is
+    `input-required` with an agent status message (prose + a `{pending}` data
+    part) and `metadata.pending`; a text reply on the task resolves a single
+    interrupt (an action label maps to its value) and completes the task with
+    three history entries; several open interrupts require a data part
+    `{answers}` and refuse text alone; a message on a completed task is
+    refused.
+30. **A2A tasks/get and tasks/cancel** (§14.4) - `tasks/get` returns the task
+    and `historyLength` truncates (0 ⇒ empty); `tasks/cancel` marks an
+    `input-required` task `canceled` and answers `-32002` for a completed one.
 
 Subtle cases fresh ports tend to break (mirroring ilmek's list): 6 and 7
 (id-vs-key routing), 8 (pending re-announce), 12 (refuse new turn while parked),

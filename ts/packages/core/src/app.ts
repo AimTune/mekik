@@ -5,7 +5,17 @@
 import { InMemoryCheckpointer, type Checkpointer, type CompiledGraph } from "@ilmek/core";
 
 import { IlmekAdapter } from "./adapter.ts";
-import { ConversationEngine, randomMinter, type ClientToolsPolicy, type ConnectParams, type Connection, type EngineConfig, type GenUiEvent, type Greeting } from "./engine.ts";
+import {
+    ConversationEngine,
+    randomMinter,
+    type ClientSkillsPolicy,
+    type ClientToolsPolicy,
+    type ConnectParams,
+    type Connection,
+    type EngineConfig,
+    type GenUiEvent,
+    type Greeting,
+} from "./engine.ts";
 import type { IdMinter } from "./mapper.ts";
 import type { TextInFrame } from "./protocol.ts";
 import type { Authenticator } from "./auth.ts";
@@ -17,6 +27,7 @@ import {
     type HistoryStore,
 } from "./stores.ts";
 import { LocalTurnLock, NoopBackplane, type Backplane, type TurnLock } from "./scaling.ts";
+import { toSkillSource, type SkillsInput } from "./skills.ts";
 
 export interface MekikOptions {
     /** The ilmek graph this app serves. One run == one conversational turn. */
@@ -52,6 +63,36 @@ export interface MekikOptions {
      * invoke one with `mekik.callClientTool(ctx, name, params)`.
      */
     clientTools?: ClientToolsPolicy;
+    /**
+     * The **skills** this server offers its nodes (PROTOCOL.md §12): a
+     * `SkillSource` — `@ilmek/skills`' `SkillCatalog` fits as-is — or a plain
+     * list of `{ name, description, instructions, tags? }`. Nodes read level 1
+     * with `mekik.skills(ctx)` / `mekik.skillsPrompt(ctx)` and load one with
+     * `mekik.loadSkill(ctx, name)`; the catalog's summaries are announced to
+     * each client after `welcome` (hash-versioned, like components).
+     *
+     * @example
+     * ```ts
+     * import { SkillCatalog } from "@ilmek/skills";
+     * const app = mekik({ graph, skills: await SkillCatalog.fromDirectories(["./skills"]) });
+     * ```
+     */
+    skills?: SkillsInput;
+    /**
+     * Accept **client-declared skills** into the turn's skill set (PROTOCOL.md
+     * §12.4). Default: off — declarations in `hello.skills` / `client_skills`
+     * frames are ignored entirely, the same posture as {@link clientTools},
+     * because a skill's description and instructions are text a model will
+     * follow. Pass `true` to accept every well-formed declaration, or a function
+     * to filter — pin names, cap instruction length, strip tags. A client skill
+     * never overrides a server skill of the same name.
+     *
+     * @example
+     * ```ts
+     * clientSkills: (skills) => skills.filter((s) => s.instructions.length <= 4000),
+     * ```
+     */
+    clientSkills?: ClientSkillsPolicy;
     /**
      * What the bot sends once when a fresh conversation first connects (before any
      * turn) — a greeting / instructions. Not sent on reconnect (the transcript
@@ -171,6 +212,8 @@ export class MekikApp {
             ...(options.context ? { context: options.context } : {}),
             ...(options.acceptClientMeta ? { acceptClientMeta: options.acceptClientMeta } : {}),
             ...(options.clientTools !== undefined ? { clientTools: options.clientTools } : {}),
+            ...(options.skills !== undefined ? { skills: toSkillSource(options.skills) } : {}),
+            ...(options.clientSkills !== undefined ? { clientSkills: options.clientSkills } : {}),
             ...(options.greeting ? { greeting: options.greeting } : {}),
             ...(options.components?.length ? { components: new ComponentCatalog(options.components) } : {}),
             ...(options.onGenUiEvent ? { onGenUiEvent: options.onGenUiEvent } : {}),
