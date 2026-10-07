@@ -41,7 +41,8 @@ public sealed record ApproveSpec
 /// <c>withMekikTools</c>.
 ///
 /// <para>A chat client invokes its own functions, which leaves two gaps
-/// <see cref="Shuttle.Tool{T}"/> normally closes for you:</para>
+/// <see cref="Shuttle.Tool{T}(IContext, string, IReadOnlyDictionary{string, object}, Func{ValueTask{T}})"/>
+/// normally closes for you:</para>
 /// <list type="number">
 ///   <item><b>Visibility</b> — nothing emits a `tool_call` frame, so the UI never
 ///   learns a function ran.</item>

@@ -25,7 +25,7 @@ public sealed class McpArgumentException(string message) : Exception(message);
 /// <c>&lt;name&gt;</c> runs a turn, <c>&lt;name&gt;__resume</c> answers a paused one —
 /// over any JSON-RPC transport. Transport-agnostic: it drives the engine through an
 /// in-process <see cref="IConnection"/>, exactly as the conformance suite does.
-/// <see cref="MekikAspNetCore.MapMekikMcp"/> puts it behind Streamable HTTP. Mirror of
+/// <c>Mekik.AspNetCore</c>'s <c>MapMekikMcp</c> puts it behind Streamable HTTP. Mirror of
 /// TypeScript's <c>MekikMcpServer</c>.
 /// </summary>
 public sealed class MekikMcpServer

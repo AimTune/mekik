@@ -1,6 +1,6 @@
 namespace Mekik;
 
-/// <summary>A wire frame — mekik models frames as dictionaries for byte-exact parity (PROTOCOL.md §9).</summary>
+// A wire frame — mekik models frames as dictionaries for byte-exact parity (PROTOCOL.md §9).
 using Frame = System.Collections.Generic.IReadOnlyDictionary<string, object?>;
 
 /// <summary>

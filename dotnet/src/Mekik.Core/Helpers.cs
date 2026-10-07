@@ -33,7 +33,7 @@ public static class Shuttle
     }
 
     /// <summary>
-    /// Emit one `tool_call` frame. The low-level primitive behind <see cref="Tool{T}"/>,
+    /// Emit one `tool_call` frame. The low-level primitive behind <see cref="Tool{T}(IContext, string, IReadOnlyDictionary{string, object}, Func{ValueTask{T}})"/>,
     /// public so an integration that does its own execution (e.g. Mekik.Agents,
     /// where the model invokes the function) can still produce the same trace
     /// without re-deriving the reserved <c>$mekik</c> payload shape. Traces upsert

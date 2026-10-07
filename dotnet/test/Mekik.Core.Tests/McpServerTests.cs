@@ -64,7 +64,7 @@ public class McpServerTests
 
     // ── conformance/mcp/rpc.json ──────────────────────────────────────────────
 
-    public static IEnumerable<object[]> RpcCases()
+    public static IEnumerable<object?[]> RpcCases()
     {
         var fixture = (IReadOnlyDictionary<string, object?>)Json.Parse(File.ReadAllText(RpcFixture))!;
         foreach (var c in ((IEnumerable<object?>)fixture["cases"]!).Cast<IReadOnlyDictionary<string, object?>>())

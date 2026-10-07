@@ -110,7 +110,7 @@ public sealed record EngineConfig
 /// <summary>
 /// The ConversationEngine (PROTOCOL.md §1, §5), mirror of the TypeScript engine.
 /// Transport-agnostic: it talks to <see cref="IConnection"/> handles.
-/// <see cref="MekikAspNetCore"/> supplies WebSocket connections; the conformance
+/// <c>Mekik.AspNetCore</c>'s <c>MapMekik</c> supplies WebSocket connections; the conformance
 /// suite supplies in-memory ones.
 /// </summary>
 public sealed class ConversationEngine
