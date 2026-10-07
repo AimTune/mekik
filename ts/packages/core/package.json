@@ -41,7 +41,8 @@
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "node --test test/*.test.ts",
-    "gen:fixtures": "node scripts/gen-fixtures.ts"
+    "gen:fixtures": "node scripts/gen-fixtures.ts",
+    "gen:hashes": "node scripts/gen-hashes.ts"
   },
   "dependencies": {
     "@ilmek/core": "^0.1.1"
