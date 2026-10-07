@@ -132,6 +132,29 @@ describe("serveWs edges — malformed input from a real client", () => {
     });
 });
 
+describe("serveWs edges — hello.meta end to end (§6)", () => {
+    test("an object hello.meta reaches the node's meta.client through the allowlist", async (t) => {
+        const probe = graph("meta")
+            .channel("input", channel.lastWrite<string>(""))
+            .channel("reply", channel.lastWrite<string>(""))
+            .node("n", (_s, ctx) => ({ reply: JSON.stringify((ctx.meta as { client?: unknown }).client ?? null) }))
+            .edge(START, "n")
+            .edge("n", END)
+            .compile();
+        const app = mekik({ graph: probe, reply: (s) => s.reply as string, acceptClientMeta: (m) => ({ locale: m.locale }) });
+        const handle = serveWs(app, { port: 0 });
+        t.after(() => handle.close());
+        await once(handle.server, "listening");
+        const c = await new Client(`ws://127.0.0.1:${(handle.server.address() as AddressInfo).port}/`).open();
+        t.after(() => c.ws.close());
+
+        c.send({ type: "hello", meta: { locale: "tr-TR", secret: "x" } });
+        c.send({ type: "text", data: { text: "hi" } });
+        await c.waitFor((x) => x.of("run").length === 2, "the turn");
+        assert.deepEqual(botTexts(c), ['{"locale":"tr-TR"}']);
+    });
+});
+
 describe("serveWs edges — lifecycle against the engine", () => {
     test("a socket that closes mid-handshake is disconnected once the handshake lands — it leaves no ghost tools", async (t) => {
         let releaseAuth!: () => void;
