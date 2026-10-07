@@ -1,6 +1,6 @@
 {
   "name": "@mekik/mcp",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "MCP transport for mekik — expose a MekikApp's graph as Model Context Protocol tools over Streamable HTTP.",
   "type": "module",
   "license": "MIT",

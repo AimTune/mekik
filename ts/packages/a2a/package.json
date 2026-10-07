@@ -1,6 +1,6 @@
 {
   "name": "@mekik/a2a",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "A2A transport for mekik — serve a MekikApp as an Agent2Agent agent: Agent Card plus JSON-RPC over HTTP.",
   "type": "module",
   "license": "MIT",
