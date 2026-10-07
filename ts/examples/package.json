@@ -20,7 +20,12 @@
     "concierge:serve": "node concierge.ts --serve",
     "routed": "node routed-desk.ts",
     "routed:probe": "node routed-desk.ts --probe",
-    "routed:serve": "node routed-desk.ts --serve"
+    "routed:serve": "node routed-desk.ts --serve",
+    "banking": "node banking/banking.ts",
+    "insurance": "node insurance/insurance.ts",
+    "triage": "node healthcare-triage/triage.ts",
+    "travel": "node travel-booking/travel.ts",
+    "support": "node support-desk/support.ts"
   },
   "dependencies": {
     "@mekik/core": "workspace:*",

@@ -57,6 +57,7 @@ const sidebars: SidebarsConfig = {
       items: ["parity/languages", "parity/conformance"],
     },
     "examples",
+    "domain-examples",
   ],
 };
 
