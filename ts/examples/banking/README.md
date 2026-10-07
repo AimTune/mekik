@@ -7,25 +7,47 @@ integration test: no network, no API key, exit code 0 or 1.
 ```text
 START → route ─┬→ accounts ───────────────────────────────────────────→ END
                ├→ history ────────────────────────────────────────────→ END
-               └→ transfer_prepare ─┬→ transfer_approve ─┬→ transfer_execute → END
-                                    │   (1 or 2 pauses)  └→ END (declined)
-                                    └→ END (held for fraud review)
+               └→ payments ─┬→ transfer_approve ─┬→ transfer_execute → END
+                (runAgent)  │   (1 or 2 pauses)  └→ END (declined)
+                            └→ END (dispute opened, or held for review)
 ```
+
+The bank has a §12 skill catalog, and the `payments` node is a `runAgent` loop
+whose money tools are **held under skills** (`skillTools`):
+
+```ts
+skillTools: {
+    "wire-transfer-rules": [checkTransferLimit, transferFunds],
+    "dispute-handling": [openDispute],
+},
+```
+
+Until a skill is loaded, the model is offered only `lookup_payee`, the hidden
+`fraud_screen`, `flag_for_review` and `load_skill`. Balance and history tools
+stay always-on in their own nodes. `transfer_funds` only stages the transfer;
+the money moves in `transfer_execute` after the approvals.
 
 ## What it shows
 
 | # | Scenario | What the probe asserts |
 |---|---|---|
-| 1 | Balance query | `get_accounts` and `get_balance` are traced as `tool_call` frames, the result carries the ledger value, the run finishes without a pause, and the `accounts` node bound only the read tools. |
-| 2 | Transfer under the limit | One `interrupt` with a `genui-card` and Send / Cancel chips; nothing is debited before the answer; after the resume only `execute_transfer` runs, exactly once. |
-| 3 | Transfer over the $5,000 limit | The customer approves, then the run parks **again** on a second interrupt for a second approver (`role: "second-approver"`, the limit in the payload). A new message while parked is refused with `error{interrupted}`. On the co-sign the customer is not asked again (their answer replays from the journal), the quote does not re-run, and the transfer executes once. |
-| 4 | Transaction history | `list_transactions` mounts one `genui-table` (Date / Description / Amount) whose rows include both transfers; the rows travel in the table, not the tool trace. |
-| 5 | Fraud flag | `fraud_screen` is wrapped with `show: false` and throws. No frame for it reaches the wire, there is no error trace or error frame, the model reads `Error: fraud screening service timed out` as an observation and calls `flag_for_review` instead; no approval is asked for and no money moves. |
+| 0 | Connect | A `skills` frame announces `dispute-handling` and `wire-transfer-rules`. |
+| 1 | Balance query | `get_accounts` and `get_balance` are traced, the run finishes without a pause, and the `accounts` node bound only the read tools. |
+| 2 | Transfer under the limit | `transfer_funds` is not offered before `wire-transfer-rules` loads. A premature call is refused with an observation and stages nothing. From the next round `check_transfer_limit` and `transfer_funds` are offered, but `open_dispute` is not. The `skill` frame's `seq` comes before the transfer trace. One `interrupt` with a `genui-card` and Send / Cancel chips; after the resume only `execute_transfer` runs, once. |
+| 3 | Transfer over the $5,000 limit | The skill-held `check_transfer_limit` flags a second approver. The customer approves, then the run parks **again** for the second approver. A new message while parked is refused with `error{interrupted}`. On the co-sign the customer is not asked again, the agent loop does not re-run, and the transfer executes once. |
+| 4 | Transaction history | `list_transactions` mounts one `genui-table` whose rows include both transfers. |
+| 5 | Fraud flag | `fraud_screen` (policy `show: false`) fails. No frame for it reaches the wire, there is no error trace or error frame, the model reads `Error: fraud screening service timed out` and, following the skill, calls `flag_for_review` instead of `transfer_funds`. Nothing is staged and no money moves. |
+| 6 | Dispute | `open_dispute` is offered only after `dispute-handling` loads, and the transfer tools stay locked. The dispute is opened once. |
 
-The mekik pieces in play: `withMekikTools` (traces, `show: false`, exactly-once
-via `ctx.step`), `mekik.approve` with `key` for two pauses in one node,
-`mekik.genui.card.ref` / `mekik.genui.table`, `mekik.tool` for the money-moving
-step, and a router node with `command({ goto })`.
+The mekik pieces in play:
+
+- `runAgent` with `skills`, `skillTools` and a `show: false` policy
+- the `skills` app option
+- `withMekikTools` in the read-only nodes
+- `mekik.approve` with `key` for two pauses in one node
+- `mekik.genui.card.ref` and `mekik.genui.table`
+- `mekik.tool` for the step that moves money
+- a router node with `command({ goto })`
 
 ## Run it
 

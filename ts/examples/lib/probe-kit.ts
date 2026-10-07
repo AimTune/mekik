@@ -78,6 +78,7 @@ export class ScriptedModel {
     async decide(node: string, tools: StructuredToolInterface[], messages: BaseMessage[]): Promise<Decision> {
         this.asked++;
         this.toolboxes[node] = tools.map((t) => t.name);
+        (this.rounds[node] ??= []).push(this.toolboxes[node]!);
         const sys = messages[0];
         if (sys instanceof SystemMessage) this.systems[node] = String(sys.content);
         const seen = (this.observations[node] ??= []);
@@ -90,7 +91,7 @@ export class ScriptedModel {
         return this.scripts[node]?.[i] ?? say("(script exhausted)");
     }
 
-    /** Every round's offered tool names, per node, in order (via {@link asChatModel}). */
+    /** Every round's offered tool names, per node, in order — what the model was shown each time it was asked. */
     readonly rounds: Record<string, string[][]> = {};
 
     /**
@@ -103,7 +104,6 @@ export class ScriptedModel {
     asChatModel(node: string): BaseChatModel {
         const bindTools = (tools: StructuredToolInterface[]) => ({
             invoke: async (messages: BaseMessage[]) => {
-                (this.rounds[node] ??= []).push(tools.map((t) => t.name));
                 const d = await this.decide(node, tools, messages);
                 return new AIMessage({
                     content: d.text,
@@ -131,6 +131,20 @@ export interface LoopResult {
     calls: Array<{ name: string; ok: boolean }>;
 }
 
+export interface RunToolsOptions {
+    /** Max model rounds. Default 8. */
+    maxTurns?: number;
+    /**
+     * Already-wrapped tools held under a skill, keyed by skill name — the
+     * hand-wired form of runAgent's `skillTools` (PROTOCOL.md §12), for a loop
+     * whose tools come pre-wrapped (e.g. from `withMcpTools`). Pair it with
+     * `withSkills(ctx, filter, { toolNames })` in `tools`. A held tool is offered
+     * only from the round after its skill's `load_skill`; a call before that is
+     * refused with an observation and does not run.
+     */
+    skillTools?: Readonly<Record<string, readonly StructuredToolInterface[]>>;
+}
+
 /**
  * The model↔tool loop each domain node runs over its own tools. Each decision
  * runs inside `ctx.step` (namespaced per node), so a resume replays the
@@ -145,15 +159,32 @@ export async function runTools(
     tools: StructuredToolInterface[],
     system: string,
     input: string,
-    maxTurns = 8,
+    opts: RunToolsOptions = {},
 ): Promise<LoopResult> {
+    const maxTurns = opts.maxTurns ?? 8;
+    const held = opts.skillTools ?? {};
     const byName = new Map(tools.map((t) => [t.name, t]));
+    // Which skills own each held tool; every held tool is dispatchable, only the offer changes.
+    const owners = new Map<string, string[]>();
+    for (const [skill, list] of Object.entries(held)) {
+        for (const t of list) {
+            owners.set(t.name, [...(owners.get(t.name) ?? []), skill]);
+            if (!byName.has(t.name)) byName.set(t.name, t);
+        }
+    }
+    const active = new Set<string>();
+    const offered = (): StructuredToolInterface[] => {
+        const out = new Map(tools.map((t) => [t.name, t]));
+        for (const skill of active) for (const t of held[skill] ?? []) if (!out.has(t.name)) out.set(t.name, t);
+        return [...out.values()];
+    };
     const messages: BaseMessage[] = [new SystemMessage(system), new HumanMessage(input)];
     const results: Record<string, unknown> = {};
     const calls: LoopResult["calls"] = [];
 
     for (let turn = 0; turn < maxTurns; turn++) {
-        const decision = await ctx.step(`${node}:llm:${turn}`, () => model.decide(node, tools, messages));
+        const offer = offered();
+        const decision = await ctx.step(`${node}:llm:${turn}`, () => model.decide(node, offer, messages));
         messages.push(
             new AIMessage({
                 content: decision.text,
@@ -165,6 +196,19 @@ export async function runTools(
         for (const c of decision.toolCalls) {
             const t = byName.get(c.name);
             let observation: string;
+            const skillsOf = owners.get(c.name);
+            const locked = skillsOf && !skillsOf.some((s) => active.has(s)) ? skillsOf[0] : undefined;
+            // The load is derived from the journaled call, so a replay rebuilds the same offer.
+            const loading = c.name === "load_skill" && typeof c.args.name === "string" && c.args.name in held ? c.args.name : undefined;
+            if (locked !== undefined) {
+                // The same rule runAgent's `skillTools` applies: never run a skill's
+                // tool before the model has read the skill.
+                calls.push({ name: c.name, ok: false });
+                messages.push(
+                    new ToolMessage({ tool_call_id: c.id, content: `Tool ${c.name} belongs to skill "${locked}". Call load_skill with name "${locked}" first.` }),
+                );
+                continue;
+            }
             try {
                 if (!t) throw new Error(`Unknown tool ${c.name}.`);
                 const result: unknown = await t.invoke(c.args as never);
@@ -176,6 +220,7 @@ export async function runTools(
                 calls.push({ name: c.name, ok: false });
                 observation = `Error: ${err instanceof Error ? err.message : String(err)}`;
             }
+            if (loading !== undefined) active.add(loading);
             messages.push(new ToolMessage({ tool_call_id: c.id, content: observation }));
         }
     }

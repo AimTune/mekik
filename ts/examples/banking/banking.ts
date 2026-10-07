@@ -1,20 +1,30 @@
 // Banking desk — a domain probe. A routed ilmek graph served over mekik, driven
 // offline by a scripted model, asserting its own frame stream:
 //
-//     START → route ─┬→ accounts ──────────────────────────────────────────→ END
-//                    ├→ history ───────────────────────────────────────────→ END
-//                    └→ transfer_prepare ─┬→ transfer_approve ─┬→ transfer_execute → END
-//                                         │   (1 or 2 pauses)  └→ END (declined)
-//                                         └→ END (held for fraud review)
+//     START → route ─┬→ accounts ───────────────────────────────────────────→ END
+//                    ├→ history ────────────────────────────────────────────→ END
+//                    └→ payments ─┬→ transfer_approve ─┬→ transfer_execute → END
+//                     (runAgent)  │   (1 or 2 pauses)  └→ END (declined)
+//                                 └→ END (dispute opened, or held for review)
+//
+// The payments node is a runAgent loop with a §12 skill catalog. Its money
+// tools are HELD UNDER SKILLS (`skillTools`): `wire-transfer-rules` holds
+// check_transfer_limit + transfer_funds, `dispute-handling` holds open_dispute.
+// The model sees only lookup_payee, the hidden fraud screen, flag_for_review
+// and load_skill until it loads the skill that governs a money tool.
 //
 //   1. balance    — get_accounts + get_balance traced, a reply, no pause
-//   2. transfer   — under the limit: ONE approval pause, executed exactly once
+//   2. transfer   — under the limit: transfer_funds is not offered before
+//                   wire-transfer-rules loads, a premature call is refused
+//                   without staging anything, the `skill` frame lands before
+//                   the transfer trace; ONE approval, executed exactly once
 //   3. transfer   — over the limit: the customer approves, then the run parks
 //                   AGAIN for a second approver; executed exactly once
 //   4. history    — the ledger as a genui-table, including both transfers
 //   5. fraud flag — the hidden `fraud_screen` tool (show: false) fails; nothing
-//                   reaches the wire, the model reads the error, routes the
+//                   reaches the wire, the model reads the failure, routes the
 //                   transfer to manual review, and no money moves
+//   6. dispute    — dispute-handling unlocks open_dispute (and only that)
 //
 //   node examples/banking/banking.ts     # offline self-test, exit 0/1
 
@@ -25,7 +35,8 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
 import { mekik } from "@mekik/core";
-import { withMekikTools } from "@mekik/langchain";
+import type { SkillEntry } from "@mekik/core";
+import { runAgent, withMekikTools } from "@mekik/langchain";
 
 import {
     botText,
@@ -41,6 +52,9 @@ import {
     say,
     ScriptedModel,
     section,
+    seqOf,
+    skillsCatalog,
+    skillUses,
     toolNames,
     traces,
     uiChunks,
@@ -82,11 +96,13 @@ const LEDGER: Txn[] = [
 ];
 
 /** Every side effect, counted — the probe asserts each ran exactly as often as it should. */
-const effects = { quote_transfer: 0, execute_transfer: 0, fraud_screen: 0, flag_for_review: 0 };
+const effects = { transfer_funds: 0, check_transfer_limit: 0, execute_transfer: 0, fraud_screen: 0, flag_for_review: 0, open_dispute: 0 };
 const reviewQueue: string[] = [];
+const DISPUTES: Array<{ caseId: string; date: string; description: string; amount: number }> = [];
 
 const dollars = (cents: number): string => `$${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: 2 })}`;
 
+/** A transfer staged by transfer_funds, waiting for its approvals. No money has moved. */
 interface Quote {
     quoteId: string;
     from: string;
@@ -94,6 +110,26 @@ interface Quote {
     payee: string;
     amountCents: number;
 }
+
+/** The bank's staging area: transfers submitted for approval, by conversation. */
+const STAGED = new Map<string, Quote>();
+
+/** The bank's skill catalog (§12): level 1 is announced, the rules are read on load. */
+const SKILLS: SkillEntry[] = [
+    {
+        name: "wire-transfer-rules",
+        description: "Rules for sending money: fraud screening, limits, second approvers. Load before any transfer.",
+        instructions:
+            "1. Screen every transfer with fraud_screen. If screening is unavailable, do NOT transfer: flag_for_review.\n" +
+            `2. Call check_transfer_limit. Above $${SECOND_APPROVER_LIMIT.toLocaleString("en-US")} a second approver must co-sign.\n` +
+            "3. transfer_funds only submits the transfer for approval; tell the customer money moves after approval.",
+    },
+    {
+        name: "dispute-handling",
+        description: "How to open a card or account dispute for a transaction the customer does not recognise.",
+        instructions: "Confirm the date, description and amount from the history, then open_dispute. Give the case id.",
+    },
+];
 
 // ── tools, per node ───────────────────────────────────────────────────────────
 
@@ -135,7 +171,8 @@ function historyTools(ctx: Context<any>): StructuredToolInterface[] {
     return withMekikTools(ctx, [txns]);
 }
 
-function transferTools(ctx: Context<any>, fraudServiceUp: () => boolean): StructuredToolInterface[] {
+/** The payments node's tools, unwrapped — runAgent wraps them (traces, journal, policy). */
+function paymentTools(ctx: Context<any>) {
     const payee = tool(
         ({ name }) => {
             const p = PAYEES[name.toLowerCase()];
@@ -143,17 +180,18 @@ function transferTools(ctx: Context<any>, fraudServiceUp: () => boolean): Struct
         },
         { name: "lookup_payee", description: "Resolve a payee by name.", schema: z.object({ name: z.string() }) },
     );
-    // Hidden from the client on purpose: a fraud score is not something to show
-    // a customer, and neither is its failure.
+    // Hidden from the client on purpose (policy show: false): a fraud score is not
+    // something to show a customer, and neither is its failure. An outage comes
+    // back as an observation the model can act on.
     const fraud = tool(
         ({ payeeId, amount }) => {
             effects.fraud_screen++;
-            if (!fraudServiceUp()) throw new Error("fraud screening service timed out");
+            if (!fraudServiceUp) return "Error: fraud screening service timed out";
             return { payeeId, amount, risk: "low" };
         },
         {
             name: "fraud_screen",
-            description: "Score a transfer for fraud risk before quoting it.",
+            description: "Score a transfer for fraud risk before submitting it.",
             schema: z.object({ payeeId: z.string(), amount: z.number() }),
         },
     );
@@ -170,18 +208,42 @@ function transferTools(ctx: Context<any>, fraudServiceUp: () => boolean): Struct
             schema: z.object({ payeeId: z.string(), amount: z.number(), reason: z.string() }),
         },
     );
-    const quote = tool(
+    // ── held under wire-transfer-rules ──
+    const limit = tool(
+        ({ amount }) => {
+            effects.check_transfer_limit++;
+            return { amount, limit: SECOND_APPROVER_LIMIT, needsSecondApprover: amount > SECOND_APPROVER_LIMIT };
+        },
+        { name: "check_transfer_limit", description: "Does this amount need a second approver?", schema: z.object({ amount: z.number() }) },
+    );
+    const transfer = tool(
         ({ from, payeeId, payee: name, amount }): Quote => {
-            effects.quote_transfer++;
-            return { quoteId: `Q-${effects.quote_transfer}`, from, payeeId, payee: name, amountCents: Math.round(amount * 100) };
+            effects.transfer_funds++;
+            const quote = { quoteId: `Q-${effects.transfer_funds}`, from, payeeId, payee: name, amountCents: Math.round(amount * 100) };
+            STAGED.set(ctx.threadId, quote);
+            return quote;
         },
         {
-            name: "quote_transfer",
-            description: "Prepare a transfer quote. Does not move money.",
+            name: "transfer_funds",
+            description: "Submit a transfer for the customer's approval. Money moves only after the required approvals.",
             schema: z.object({ from: z.string(), payeeId: z.string(), payee: z.string(), amount: z.number() }),
         },
     );
-    return withMekikTools(ctx, [payee, fraud, review, quote], { fraud_screen: { show: false } });
+    // ── held under dispute-handling ──
+    const dispute = tool(
+        ({ date, description, amount }) => {
+            effects.open_dispute++;
+            const caseId = `DSP-${500 + DISPUTES.length}`;
+            DISPUTES.push({ caseId, date, description, amount });
+            return { caseId, status: "open", provisionalCredit: amount };
+        },
+        {
+            name: "open_dispute",
+            description: "Open a dispute for a transaction the customer does not recognise.",
+            schema: z.object({ date: z.string(), description: z.string(), amount: z.number() }),
+        },
+    );
+    return { alwaysOn: [payee, fraud, review], limit, transfer, dispute };
 }
 
 // ── the graph ─────────────────────────────────────────────────────────────────
@@ -189,14 +251,17 @@ function transferTools(ctx: Context<any>, fraudServiceUp: () => boolean): Struct
 const model = new ScriptedModel();
 let fraudServiceUp = true;
 
+const PAYMENTS =
+    "You handle transfers and disputes. Resolve the payee, then follow the skill that governs the request.";
+
 const bank = graph("banking")
     .channel("input", channel.lastWrite<string>(""))
     .channel("quote", channel.lastWrite<Quote | null>(null))
     .channel("reply", channel.lastWrite<string>(""))
 
-    .node("route", async (s, ctx) => {
+    .node("route", async (_s, ctx) => {
         const route = await ctx.step("route:classify", () => model.classify("route"));
-        const goto = route === "transfer" ? "transfer_prepare" : route === "history" ? "history" : "accounts";
+        const goto = route === "transfer" || route === "dispute" ? "payments" : route === "history" ? "history" : "accounts";
         return command({ goto });
     })
 
@@ -210,25 +275,33 @@ const bank = graph("banking")
         return { reply: out.text };
     })
 
-    .node("transfer_prepare", async (s, ctx) => {
-        const out = await runTools(
-            ctx,
-            model,
-            "transfer_prepare",
-            transferTools(ctx, () => fraudServiceUp),
-            "Resolve the payee, screen the transfer for fraud, then quote it. " +
-                "If screening is unavailable, never quote — flag the transfer for review instead.",
-            s.input,
-        );
-        const held = out.results.flag_for_review as { ticket: string } | undefined;
-        if (held) return command({ update: { quote: null, reply: out.text }, goto: END });
-        const quote = out.results.quote_transfer as Quote | undefined;
-        if (!quote) return command({ update: { quote: null, reply: out.text || "I could not prepare that transfer." }, goto: END });
+    .node("payments", async (s, ctx) => {
+        const t = paymentTools(ctx);
+        const reply = await runAgent(ctx, model.asChatModel("payments"), {
+            system: PAYMENTS,
+            input: s.input,
+            tools: t.alwaysOn,
+            stream: false,
+            skills: true,
+            // The money tools are held under the skills that govern them.
+            skillTools: {
+                "wire-transfer-rules": [t.limit, t.transfer],
+                "dispute-handling": [t.dispute],
+            },
+            policy: { fraud_screen: { show: false } },
+        });
+        // What transfer_funds staged, read once through the journal.
+        const quote = await ctx.step("payments:staged", () => {
+            const q = STAGED.get(ctx.threadId) ?? null;
+            STAGED.delete(ctx.threadId);
+            return q;
+        });
+        if (!quote) return command({ update: { quote: null, reply }, goto: END });
         return command({ update: { quote }, goto: "transfer_approve" });
     })
 
     // The pauses, in a node of their own: resuming replays only this node, so
-    // the quote above is neither re-run nor re-emitted.
+    // the agent loop above is neither re-run nor re-emitted.
     .node("transfer_approve", async (s, ctx) => {
         const q = s.quote!;
         const customer = await mekik.approve<{ approved: boolean }>(
@@ -288,17 +361,26 @@ function makeApp() {
         graph: bank,
         input: (frame) => ({ input: frame.data.text }),
         reply: (state) => state.reply as string,
-        greeting: () => "Hi! Ask for your balance, your recent transactions, or a transfer.",
+        skills: SKILLS,
+        greeting: () => "Hi! Ask for your balance, your recent transactions, a transfer, or a dispute.",
     });
 }
 
 // ── the probe ─────────────────────────────────────────────────────────────────
 
+const ALWAYS = "lookup_payee|fraud_screen|flag_for_review|load_skill";
+const WIRE = `${ALWAYS}|check_transfer_limit|transfer_funds`;
+const roundsFrom = (n: number) => (model.rounds.payments ?? []).slice(n).map((r) => r.join("|"));
+const roundCount = () => (model.rounds.payments ?? []).length;
+
 async function probe(): Promise<void> {
     const app = makeApp();
     const c = new Collector("conn-banking");
     await app.connect(c);
-    c.drain();
+    const hello = c.drain();
+
+    section("0. connect — the bank's skill catalog");
+    check(skillsCatalog(hello)?.skills?.map((s) => s.name).join("|") === "dispute-handling|wire-transfer-rules", "a `skills` frame lists dispute-handling and wire-transfer-rules");
 
     // ── 1. balance via tools ──────────────────────────────────────────────────
     section("1. balance — read-only tools, no pause");
@@ -314,23 +396,39 @@ async function probe(): Promise<void> {
     const bal = traces(t, "get_balance").find((f) => f.data.status === "completed");
     check((bal?.data.result as { balance: number }).balance === 12_480.55, "the balance trace carries the ledger value");
     check(interrupts(t).length === 0 && runStatus(t) === "finished", "no pause; the run finishes");
-    check(model.toolboxes.accounts?.join("|") === "get_accounts|get_balance", "the accounts node bound only the read tools");
+    check(model.toolboxes.accounts?.join("|") === "get_accounts|get_balance", "the accounts node bound only the read tools (always-on, no skill needed)");
 
-    // ── 2. small transfer: one pause ──────────────────────────────────────────
-    section("2. transfer under the limit — one approval, executed once");
+    // ── 2. small transfer: skill-held, one pause ──────────────────────────────
+    section("2. transfer under the limit — held under wire-transfer-rules, one approval");
     model.load({
         route: [say("transfer")],
-        transfer_prepare: [
+        payments: [
             call("lookup_payee", { name: "Grace" }),
+            // Premature: the transfer tool is held under a skill not yet loaded.
+            call("transfer_funds", { from: "CHK-001", payeeId: "PAY-17", payee: "Grace Hopper", amount: 250 }),
+            call("load_skill", { name: "wire-transfer-rules" }),
             call("fraud_screen", { payeeId: "PAY-17", amount: 250 }),
-            call("quote_transfer", { from: "CHK-001", payeeId: "PAY-17", payee: "Grace Hopper", amount: 250 }),
-            say("Quoted."),
+            call("check_transfer_limit", { amount: 250 }),
+            call("transfer_funds", { from: "CHK-001", payeeId: "PAY-17", payee: "Grace Hopper", amount: 250 }),
+            say("Submitted — approve it and the money goes."),
         ],
     });
+    let start = roundCount();
     user("Send $250 to Grace");
     await app.receive(c, { type: "text", data: { text: "Send $250 to Grace" } });
     t = c.drain();
     describe(t);
+    let rounds = roundsFrom(start);
+    check(rounds.slice(0, 3).every((r) => r === ALWAYS), "transfer_funds is not offered before wire-transfer-rules loads");
+    check(
+        model.observations.payments?.some((o) => o.includes('Tool transfer_funds belongs to skill "wire-transfer-rules"')) === true,
+        "the premature transfer_funds is refused as an observation",
+    );
+    check(effects.transfer_funds === 1 && new Set(traces(t, "transfer_funds").map((f) => f.data.id)).size === 1, "…and staged nothing: transfer_funds ran once (one trace), after the load");
+    check(rounds[3] === WIRE, "from the round after the load: check_transfer_limit + transfer_funds, not open_dispute");
+    const skill = skillUses(t)[0];
+    check(skill?.data.name === "wire-transfer-rules" && skill.data.status === "loaded", "one `skill` frame: wire-transfer-rules");
+    check(seqOf(skill!)! < seqOf(traces(t, "transfer_funds")[0]!)!, "the skill frame lands before the transfer trace");
     let pauses = interrupts(t);
     check(pauses.length === 1, "the run parks on one approval");
     check(pauses[0]!.data.ui?.component === "genui-card", "the approval mounts a confirmation card");
@@ -344,23 +442,27 @@ async function probe(): Promise<void> {
     check(interrupts(t).length === 0, "under the limit there is no second approver");
     check(toolNames(t).join("|") === "execute_transfer", "only the execute node ran after the pause");
     check(botText(t)?.startsWith("Sent $250.00 to Grace Hopper") === true, "the reply confirms the transfer");
-    check(effects.execute_transfer === 1 && effects.quote_transfer === 1, "quoted once, executed once");
+    check(effects.execute_transfer === 1 && effects.transfer_funds === 1, "staged once, executed once");
 
     // ── 3. large transfer: two approvers ──────────────────────────────────────
     section(`3. transfer over the ${dollars(SECOND_APPROVER_LIMIT * 100)} limit — customer, then a second approver`);
     model.load({
         route: [say("transfer")],
-        transfer_prepare: [
+        payments: [
             call("lookup_payee", { name: "Acme Rentals" }),
+            call("load_skill", { name: "wire-transfer-rules" }),
             call("fraud_screen", { payeeId: "PAY-31", amount: 7500 }),
-            call("quote_transfer", { from: "CHK-001", payeeId: "PAY-31", payee: "Acme Rentals Ltd", amount: 7500 }),
-            say("Quoted."),
+            call("check_transfer_limit", { amount: 7500 }),
+            call("transfer_funds", { from: "CHK-001", payeeId: "PAY-31", payee: "Acme Rentals Ltd", amount: 7500 }),
+            say("Submitted. This one needs a second approver."),
         ],
     });
     user("Pay Acme Rentals $7,500 for the deposit");
     await app.receive(c, { type: "text", data: { text: "Pay Acme Rentals $7,500 for the deposit" } });
     t = c.drain();
     describe(t);
+    const limitTrace = traces(t, "check_transfer_limit").find((f) => f.data.status === "completed");
+    check((limitTrace?.data.result as { needsSecondApprover: boolean }).needsSecondApprover === true, "check_transfer_limit (skill-held) flags the second approver");
     pauses = interrupts(t);
     check(pauses.length === 1 && (pauses[0]!.data.payload as { title: string }).title.startsWith("Send $7,500.00"), "first the customer confirms");
     const customerId = pauses[0]!.id;
@@ -375,7 +477,7 @@ async function probe(): Promise<void> {
     check(secondPayload.role === "second-approver" && secondPayload.limit === SECOND_APPROVER_LIMIT, "the second pause names the role and the limit");
     check(runStatus(t) === "interrupted", "the run ends interrupted, not finished");
     check(effects.execute_transfer === 1, "still nothing executed for this transfer");
-    check(effects.quote_transfer === 2, "the quote did not re-run on the customer's resume");
+    check(effects.transfer_funds === 2, "the agent loop did not re-run on the customer's resume");
 
     await app.receive(c, { type: "text", data: { text: "hello?" } });
     check(errorCode(c.drain()) === "interrupted", "a new message while parked is refused (§5.4)");
@@ -412,8 +514,9 @@ async function probe(): Promise<void> {
     fraudServiceUp = false;
     model.load({
         route: [say("transfer")],
-        transfer_prepare: [
+        payments: [
             call("lookup_payee", { name: "QuickCash Intl" }),
+            call("load_skill", { name: "wire-transfer-rules" }),
             call("fraud_screen", { payeeId: "PAY-NEW-14", amount: 900 }),
             call("flag_for_review", { payeeId: "PAY-NEW-14", amount: 900, reason: "new payee; fraud screen unavailable" }),
             say("I couldn't complete the security check, so I've held this transfer for review (ticket REV-100). Nothing has been sent."),
@@ -424,21 +527,44 @@ async function probe(): Promise<void> {
     await app.receive(c, { type: "text", data: { text: "Send $900 to QuickCash Intl" } });
     t = c.drain();
     describe(t);
-    check(effects.fraud_screen === 3, "fraud_screen really ran (and threw)");
+    check(effects.fraud_screen === 3, "fraud_screen really ran (and failed)");
     check(!c.wire.slice(before).some((f) => f.type === "tool_call" && f.data.name === "fraud_screen"), "…yet no fraud_screen frame reached the wire");
     check(!traces(t).some((f) => f.data.status === "error"), "no error trace at all");
     check(errorCode(t) === undefined && runStatus(t) === "finished", "no error frame; the run finishes normally");
     check(
-        model.observations.transfer_prepare?.some((o) => o === "Error: fraud screening service timed out") === true,
+        model.observations.payments?.some((o) => o === "Error: fraud screening service timed out") === true,
         "the model read the failure as an observation",
     );
-    check(toolNames(t).join("|") === "lookup_payee|flag_for_review", "and recovered by flagging the transfer for review");
-    check(interrupts(t).length === 0 && effects.execute_transfer === 2, "no approval was asked for, no money moved");
+    check(toolNames(t).join("|") === "lookup_payee|flag_for_review", "and followed the skill: flag for review, no transfer_funds");
+    check(interrupts(t).length === 0 && effects.execute_transfer === 2 && effects.transfer_funds === 2, "no approval was asked for, nothing staged, no money moved");
     check(reviewQueue.length === 1 && reviewQueue[0]!.startsWith("REV-100 PAY-NEW-14 900"), "the review queue holds the transfer");
     check(botText(t)?.includes("held this transfer for review") === true, "the customer is told what happened");
+    fraudServiceUp = true;
+
+    // ── 6. dispute: the other skill, the other tool ───────────────────────────
+    section("6. dispute — dispute-handling unlocks open_dispute");
+    model.load({
+        route: [say("dispute")],
+        payments: [
+            call("load_skill", { name: "dispute-handling" }),
+            call("open_dispute", { date: "2026-10-05", description: "Electricity", amount: 112.75 }),
+            say("I've opened dispute DSP-500 for the $112.75 Electricity charge; you'll see a provisional credit."),
+        ],
+    });
+    start = roundCount();
+    user("I don't recognise the $112.75 electricity charge");
+    await app.receive(c, { type: "text", data: { text: "I don't recognise the $112.75 electricity charge" } });
+    t = c.drain();
+    describe(t);
+    rounds = roundsFrom(start);
+    check(rounds[0] === ALWAYS, "open_dispute is not offered before dispute-handling loads");
+    check(rounds[1] === `${ALWAYS}|open_dispute`, "then only open_dispute joins — the transfer tools stay locked");
+    check(skillUses(t).map((f) => f.data.name).join("|") === "dispute-handling", "one `skill` frame: dispute-handling");
+    check(effects.open_dispute === 1 && DISPUTES[0]?.caseId === "DSP-500", "the dispute is opened once");
+    check(interrupts(t).length === 0 && runStatus(t) === "finished", "no approval needed; the run finishes");
 
     console.log(`\nside effects: ${JSON.stringify(effects)}`);
-    console.log("\n✅ banking probe passed — tool traces, one- and two-approver transfers, exactly-once execution, a genui-table history, and a silent fraud-tool failure all verified");
+    console.log("\n✅ banking probe passed — skill-held money tools, one- and two-approver transfers, exactly-once execution, a genui-table history, a silent fraud-tool failure, and a dispute all verified");
 }
 
 main(probe);
