@@ -47,6 +47,7 @@ import {
     skillResourcesAvailable,
     skills,
     skillsPrompt,
+    skillTools as catalogSkillTools,
     text as emitText,
     toolTrace,
 } from "@mekik/core";
@@ -282,24 +283,46 @@ export const READ_SKILL_RESOURCE_TOOL = "read_skill_resource";
 /** Options for {@link withSkills}. */
 export interface WithSkillsOptions {
     /**
-     * Skill name → the names of the tools held under it ({@link RunAgentOptions.skillTools}).
-     * Loading such a skill tells the model which tools it just unlocked.
+     * Skill name → the names of extra tools held under it ({@link RunAgentOptions.skillTools}).
+     * Loading such a skill tells the model which tools it just unlocked. The tools a
+     * catalog entry owns (`SkillEntry.tools`) are named without this — they are read
+     * from the entry; these names are added to them.
      */
     toolNames?: Readonly<Record<string, readonly string[]>>;
+    /**
+     * Called after `load_skill` loaded a skill successfully (never for an unknown or
+     * hidden name, or a load that threw) — the hook a hand-wired loop uses to unlock
+     * that skill's tools for its next model call.
+     */
+    onLoaded?: (name: string) => void;
+}
+
+/** True for a value shaped like a LangChain tool — what `SkillEntry.tools` must hold here. */
+function isLangChainTool(value: unknown): value is StructuredToolInterface {
+    return (
+        typeof value === "object" &&
+        value !== null &&
+        typeof (value as { name?: unknown }).name === "string" &&
+        typeof (value as { invoke?: unknown }).invoke === "function"
+    );
 }
 
 /**
- * The skills `load_skill` actually loaded, per node context. runAgent unlocks a skill's
- * held tools only for a load that succeeded — never for one the catalog refused — so the
- * model never gets a skill's tools without its instructions. Rebuilt on a replay pass,
- * because the load re-runs there (it is a catalog read, not a journaled step).
+ * The tools the visible server skills own (`SkillEntry.tools`), checked to be LangChain
+ * tools. Throws for an entry holding anything else — a mistyped catalog should fail
+ * the run, not silently drop a tool.
  */
-const loadedSkills = new WeakMap<object, Set<string>>();
-
-function markLoaded(ctx: Context<any>, name: string): void {
-    const set = loadedSkills.get(ctx) ?? new Set<string>();
-    set.add(name);
-    loadedSkills.set(ctx, set);
+function entrySkillTools(ctx: Context<any>, filter: SkillFilter): Map<string, StructuredToolInterface[]> {
+    const out = new Map<string, StructuredToolInterface[]>();
+    for (const [skill, list] of Object.entries(catalogSkillTools(ctx, filter))) {
+        const typed: StructuredToolInterface[] = [];
+        for (const t of list) {
+            if (!isLangChainTool(t)) throw new Error(`Skill "${skill}" declares a tool that is not a LangChain tool (needs a name and invoke()).`);
+            typed.push(t);
+        }
+        out.set(skill, typed);
+    }
+    return out;
 }
 
 /** The `load_skill` observation: the instructions, plus the tools the load unlocked. */
@@ -336,6 +359,15 @@ export function withSkills(ctx: Context<any>, filter: SkillFilter = {}, options:
     if (visible.length === 0) return [];
     const names = new Set(visible.map((s) => s.name));
 
+    // What a load names: the tools the entry owns, then any extra the caller holds under it.
+    const toolNames = new Map<string, string[]>();
+    for (const [skill, list] of entrySkillTools(ctx, filter)) toolNames.set(skill, list.map((t) => t.name));
+    for (const [skill, extra] of Object.entries(options.toolNames ?? {})) {
+        const merged = toolNames.get(skill) ?? [];
+        for (const n of extra) if (!merged.includes(n)) merged.push(n);
+        toolNames.set(skill, merged);
+    }
+
     const load = new DynamicStructuredTool({
         name: LOAD_SKILL_TOOL,
         description:
@@ -350,8 +382,8 @@ export function withSkills(ctx: Context<any>, filter: SkillFilter = {}, options:
             if (!names.has(name)) return `Unknown skill ${JSON.stringify(name)}. Available: ${[...names].join(", ")}.`;
             try {
                 const skill = loadSkill(ctx, name);
-                markLoaded(ctx, name);
-                return loadSkillObservation(name, skill.instructions, options.toolNames?.[name]);
+                options.onLoaded?.(name);
+                return loadSkillObservation(name, skill.instructions, toolNames.get(name));
             } catch (err) {
                 return `Error loading skill ${name}: ${err instanceof Error ? err.message : String(err)}`;
             }
@@ -426,17 +458,23 @@ export interface RunAgentOptions {
      */
     skills?: boolean | SkillFilter;
     /**
-     * Tools held *under* a skill, keyed by skill name — progressive disclosure for the
-     * toolbox, not only the instructions. A skill's tools are NOT offered to the model
-     * until it calls `load_skill` for that skill; from the next model round on they join
-     * `tools` for the rest of the run, and the `load_skill` observation names them.
+     * Extra tools held *under* a skill, keyed by skill name. The primary form is the
+     * catalog entry itself: a `SkillEntry<StructuredToolInterface>` with `tools` owns
+     * them, and `runAgent` holds them back automatically. Use this map for tools that
+     * must be built per node or per request (closing over the turn's state); they merge
+     * with the entry's own.
+     *
+     * Either way a skill's tools are NOT offered to the model until it loads that skill
+     * successfully with `load_skill`; from the next model round on they join `tools`
+     * for the rest of the run, and the `load_skill` observation names them.
      *
      * Needs {@link skills}; an entry whose skill is not visible to this node is ignored.
      * Tools are wrapped with {@link withMekikTools} like `tools` (same `policy`). The
-     * active set is derived from the journaled calls, so a resume rebuilds the same
-     * toolbox per round. A call to a tool whose skill is not loaded yet is answered with
-     * an observation asking the model to load the skill first. Mirror of the .NET
-     * `AgentRunOptions.SkillTools`.
+     * load tool re-runs on a resume's replay pass, so the toolbox each round had is
+     * rebuilt exactly. A call to a tool whose skill is not loaded yet is answered with
+     * an observation asking the model to load the skill first. A name both always-on and
+     * skill-held, or two different tools sharing a name, fails the run. Mirror of the
+     * .NET `AgentRunOptions.SkillTools`.
      */
     skillTools?: Readonly<Record<string, readonly StructuredToolInterface[]>>;
 }
@@ -454,13 +492,21 @@ function buildSkillToolbox(
     alwaysOn: readonly StructuredToolInterface[],
 ): SkillToolbox {
     const box: SkillToolbox = { bySkill: new Map(), skillsOf: new Map() };
-    const held = options.skillTools;
-    if (!held) return box;
+
+    // The entry's own tools first, then the explicit ones for the same skill.
+    const held = entrySkillTools(ctx, filter);
     const visible = new Set(skills(ctx, filter).map((s) => s.name));
+    for (const [skill, list] of Object.entries(options.skillTools ?? {})) {
+        if (!visible.has(skill) || !list || list.length === 0) continue;
+        const merged = held.get(skill) ?? [];
+        for (const t of list) if (!merged.includes(t)) merged.push(t);
+        held.set(skill, merged);
+    }
+
     const baseNames = new Set(alwaysOn.map((t) => t.name));
     const originals = new Map<string, StructuredToolInterface>();
-    for (const [skill, list] of Object.entries(held)) {
-        if (!visible.has(skill) || !list || list.length === 0) continue;
+    for (const [skill, list] of held) {
+        if (list.length === 0) continue;
         for (const t of list) {
             if (baseNames.has(t.name)) throw new Error(`Tool "${t.name}" is both always-on and held under skill "${skill}".`);
             const seen = originals.get(t.name);
@@ -541,13 +587,24 @@ export async function runAgent(
     // emits its own `skill` trace, not a side effect to journal.
     let systemText = system;
     let box: SkillToolbox = { bySkill: new Map(), skillsOf: new Map() };
+    const activeSkills = new Set<string>();
+    let activated = false;
     if (options.skills) {
         const filter: SkillFilter = options.skills === true ? {} : options.skills;
         const block = skillsPrompt(ctx, filter);
         if (block) systemText = systemText ? `${systemText}\n\n${block}` : block;
         box = buildSkillToolbox(ctx, options, filter, wrapped);
         const toolNames = Object.fromEntries([...box.bySkill].map(([k, v]) => [k, v.map((t) => t.name)]));
-        wrapped.push(...withSkills(ctx, filter, { toolNames }));
+        // Only a successful load unlocks. load_skill is a catalog read that re-runs on a
+        // resume's replay pass (same journaled decisions, same order), so the toolbox
+        // each round had the first time is rebuilt exactly.
+        const onLoaded = (name: string) => {
+            if (box.bySkill.has(name) && !activeSkills.has(name)) {
+                activeSkills.add(name);
+                activated = true;
+            }
+        };
+        wrapped.push(...withSkills(ctx, filter, { toolNames, onLoaded }));
     }
 
     // Every tool — the always-on ones and every skill's — is dispatchable from the start;
@@ -555,7 +612,6 @@ export async function runAgent(
     const byName = new Map(wrapped.map((t) => [t.name, t]));
     for (const list of box.bySkill.values()) for (const t of list) if (!byName.has(t.name)) byName.set(t.name, t);
 
-    const activeSkills = new Set<string>();
     let bound = model.bindTools(wrapped);
 
     const messages: BaseMessage[] = [new SystemMessage(systemText), new HumanMessage(input)];
@@ -604,7 +660,7 @@ export async function runAgent(
         toolCallsUsed += decision.toolCalls.length;
         if (toolCallsUsed > maxToolCalls) return budgetReply;
 
-        let activated = false;
+        activated = false;
         for (const call of decision.toolCalls) {
             const owners = box.skillsOf.get(call.name);
             const locked = owners && !owners.some((s) => activeSkills.has(s)) ? owners[0] : undefined;
@@ -627,20 +683,6 @@ export async function runAgent(
                     if (err instanceof ToolInputParsingException) traceRejectedCall(ctx, call, err, options);
                     result = `Error from ${call.name}: ${err instanceof Error ? err.message : String(err)}`;
                 }
-            }
-
-            // Derived from the journaled call (not live state), so a resume pass rebuilds
-            // exactly the toolbox each round had the first time.
-            const skill = call.args.name;
-            if (
-                call.name === LOAD_SKILL_TOOL &&
-                typeof skill === "string" &&
-                box.bySkill.has(skill) &&
-                loadedSkills.get(ctx)?.has(skill) === true &&
-                !activeSkills.has(skill)
-            ) {
-                activeSkills.add(skill);
-                activated = true;
             }
 
             messages.push(

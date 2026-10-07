@@ -540,6 +540,32 @@ export function skillsPrompt(ctx: Context<any>, filter: SkillFilter = {}, opts: 
 }
 
 /**
+ * The tools the visible **server** skills own (`SkillEntry.tools`, §12.6),
+ * keyed by skill name — what an agent loop holds back until the model loads
+ * each skill. Same filter as {@link skills}; a skill without tools is absent,
+ * and a client-declared skill never contributes (declarations carry no tools).
+ * Reads the catalog without emitting a `skill` frame.
+ *
+ * `TTool` is not checked here — `@mekik/core` does not know the agent
+ * framework; the integration that consumes the map validates its entries.
+ *
+ * @param ctx - The ilmek node context.
+ * @param filter - Which skills to consider; see {@link SkillFilter}.
+ */
+export function skillTools<TTool = unknown>(ctx: Context<any>, filter: SkillFilter = {}): Record<string, readonly TTool[]> {
+    const source = skillSourceOf(ctx);
+    const out: Record<string, readonly TTool[]> = {};
+    if (!source) return out;
+    for (const summary of skills(ctx, filter)) {
+        if (summary.source === "client") continue;
+        const entry = source.get(summary.name);
+        if (!entry || entry.source === "client" || !Array.isArray(entry.tools) || entry.tools.length === 0) continue;
+        out[summary.name] = [...(entry.tools as readonly TTool[])];
+    }
+    return out;
+}
+
+/**
  * Emit a single `skill` frame — the low-level primitive behind {@link loadSkill},
  * exported for integrations that resolve skills themselves. Upserts by `use.id`.
  */

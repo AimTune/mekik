@@ -176,10 +176,24 @@ export interface SkillSummary {
     source?: SkillOrigin;
 }
 
-/** Level 2 — a skill with its instructions, as a source hands it back. */
-export interface SkillEntry extends SkillSummary {
+/**
+ * Level 2 — a skill with its instructions, as a source hands it back.
+ *
+ * `TTool` is the agent framework's tool type: `@mekik/core` stays
+ * framework-agnostic, so a plain `SkillEntry` carries `unknown` tools and an
+ * integration closes it — `SkillEntry<StructuredToolInterface>` for
+ * `@mekik/langchain`.
+ */
+export interface SkillEntry<TTool = unknown> extends SkillSummary {
     /** The markdown a model reads once it has chosen the skill. */
     instructions: string;
+    /**
+     * The tools this skill owns (§12.6): an agent loop offers them to the model
+     * only after it loads the skill. **Server-side only** — never serialized:
+     * not on the `skills` catalog frame, not in the catalog hash, not on a
+     * `skill` frame. A client-declared skill (§12.4) can never carry tools.
+     */
+    tools?: readonly TTool[];
 }
 
 /**
