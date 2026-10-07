@@ -59,13 +59,17 @@ export function serveWs(app: MekikApp, options: ServeWsOptions = {}): ServeWsHan
         // Serialize per-socket: the handshake (app.connect) must finish before any
         // frame is delivered, and frames must stay in order.
         let chain: Promise<void> = Promise.resolve();
-        let connected = false;
+        // Set synchronously by the first frame, so a close that races the
+        // handshake still knows a connect is (or will be) in flight.
+        let handshaking = false;
+        let disconnected = false;
 
         ws.on("message", (raw: Buffer | ArrayBuffer | Buffer[]) => {
             const text = raw.toString();
+            const first = !handshaking;
+            handshaking = true;
             chain = chain.then(async () => {
-                if (!connected) {
-                    connected = true;
+                if (first) {
                     await app.connect(conn, mergeConnectParams(req, text));
                     // A non-hello first frame (identity came via query string) still
                     // needs processing after the handshake.
@@ -76,15 +80,18 @@ export function serveWs(app: MekikApp, options: ServeWsOptions = {}): ServeWsHan
             }).catch((err) => reportError(ws, err));
         });
 
-        ws.on("close", () => {
-            // If the socket closed before its first frame, there is nothing to
-            // disconnect — connect was never called.
-            if (connected) app.disconnect(conn);
-        });
-
-        ws.on("error", () => {
-            if (connected) app.disconnect(conn);
-        });
+        // Queue the disconnect behind the handshake: a socket that closes while
+        // `connect` is still awaiting (a slow authenticator, a slow store) must
+        // not be disconnected before the engine has registered it — or the engine
+        // registers it afterwards and keeps it forever (with its client tools).
+        // If the socket closed before its first frame, connect never ran.
+        const disconnect = (): void => {
+            if (!handshaking || disconnected) return;
+            disconnected = true;
+            chain = chain.then(() => app.disconnect(conn)).catch((err) => reportError(ws, err));
+        };
+        ws.on("close", disconnect);
+        ws.on("error", disconnect);
     });
 
     if (options.server === undefined && options.port !== undefined) server.listen(options.port);
@@ -115,17 +122,23 @@ function mergeConnectParams(req: IncomingMessage, firstFrame: string): ConnectPa
     const token = q.get("token");
     if (userId) hello.userId = userId;
     if (conversationId) hello.conversationId = conversationId;
-    if (watermark !== null && watermark !== "") hello.watermark = Number(watermark);
+    // A watermark that is not a finite number would compare false against every
+    // seq and silently suppress the replay — ignore it, as if absent.
+    if (watermark !== null && watermark !== "" && Number.isFinite(Number(watermark))) hello.watermark = Number(watermark);
     if (token) hello.token = token;
 
     if (isHelloFrame(firstFrame)) {
-        const parsed = safeParse(firstFrame) as Partial<NonNullable<ConnectParams["hello"]>> | null;
+        // The hello is client input: take each field only in its declared type,
+        // so a numeric userId or an object conversationId never reaches the engine.
+        const parsed = safeParse(firstFrame) as Record<string, unknown> | null;
         if (parsed) {
-            if (parsed.userId) hello.userId = parsed.userId;
-            if (parsed.conversationId) hello.conversationId = parsed.conversationId;
-            if (typeof parsed.watermark === "number") hello.watermark = parsed.watermark;
-            if (parsed.token) hello.token = parsed.token;
-            if (parsed.meta) hello.meta = parsed.meta;
+            if (isNonEmptyString(parsed.userId)) hello.userId = parsed.userId;
+            if (isNonEmptyString(parsed.conversationId)) hello.conversationId = parsed.conversationId;
+            if (typeof parsed.watermark === "number" && Number.isFinite(parsed.watermark)) hello.watermark = parsed.watermark;
+            if (isNonEmptyString(parsed.token)) hello.token = parsed.token;
+            if (typeof parsed.meta === "object" && parsed.meta !== null && !Array.isArray(parsed.meta)) {
+                hello.meta = parsed.meta as Record<string, unknown>;
+            }
             if (typeof parsed.componentsHash === "string") hello.componentsHash = parsed.componentsHash;
             if (Array.isArray(parsed.tools)) hello.tools = parsed.tools;
             if (typeof parsed.skillsHash === "string") hello.skillsHash = parsed.skillsHash;
@@ -171,4 +184,8 @@ function reportError(ws: WebSocket, err: unknown): void {
     if (ws.readyState === ws.OPEN) {
         ws.send(JSON.stringify({ type: "error", data: { code: "internal", message: err instanceof Error ? err.message : String(err) } }));
     }
+}
+
+function isNonEmptyString(v: unknown): v is string {
+    return typeof v === "string" && v.length > 0;
 }

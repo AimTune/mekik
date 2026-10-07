@@ -92,6 +92,10 @@ importers:
       ioredis:
         specifier: '>=5'
         version: 5.11.1
+    devDependencies:
+      '@ilmek/core':
+        specifier: ^0.1.1
+        version: 0.1.1
 
   packages/ws:
     dependencies:
@@ -102,6 +106,9 @@ importers:
         specifier: ^8.18.0
         version: 8.21.1
     devDependencies:
+      '@ilmek/core':
+        specifier: ^0.1.1
+        version: 0.1.1
       '@types/ws':
         specifier: ^8.5.0
         version: 8.18.1

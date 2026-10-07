@@ -48,5 +48,8 @@
     "ioredis": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "@ilmek/core": "^0.1.1"
   }
 }
