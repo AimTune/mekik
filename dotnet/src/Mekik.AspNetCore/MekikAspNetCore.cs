@@ -155,7 +155,18 @@ internal sealed class WebSocketConnection : IConnection, IAsyncDisposable
 
     public void Send(IReadOnlyDictionary<string, object?> frame) => _outbound.Writer.TryWrite(Json.Serialize(frame));
 
-    public void Close(int? code = null, string? reason = null) => _outbound.Writer.TryComplete();
+    private (int Code, string? Reason)? _close;
+
+    /// <summary>
+    /// Close the socket with <paramref name="code"/> (e.g. 4401 on an auth rejection,
+    /// PROTOCOL.md §7) once every frame already queued — the <c>error</c> that explains
+    /// the close — has been written.
+    /// </summary>
+    public void Close(int? code = null, string? reason = null)
+    {
+        _close = (code ?? (int)WebSocketCloseStatus.NormalClosure, reason);
+        _outbound.Writer.TryComplete();
+    }
 
     private async Task WritePumpAsync()
     {
@@ -165,6 +176,13 @@ internal sealed class WebSocketConnection : IConnection, IAsyncDisposable
             var bytes = Encoding.UTF8.GetBytes(text);
             try { await _ws.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, CancellationToken.None); }
             catch (WebSocketException) { break; }
+        }
+        if (_close is { } close && _ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
+        {
+            // CloseOutput, not Close: the read loop owns ReceiveAsync and sees the
+            // client's answering close frame, which ends the session.
+            try { await _ws.CloseOutputAsync((WebSocketCloseStatus)close.Code, close.Reason, CancellationToken.None); }
+            catch (WebSocketException) { }
         }
     }
 
