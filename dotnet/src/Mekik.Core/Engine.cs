@@ -467,9 +467,13 @@ public sealed class ConversationEngine
     {
         var live = _live[convId];
         var cts = new CancellationTokenSource();
+        ConnState? state;
         lock (live.Gate)
         {
-            if (live.Turn is not null) { conn.Send(ErrorFrame("busy", "a run is already in flight")); return; }
+            // Read the sender's state now: a tab may send and close at once, and the
+            // turn it asked for still belongs to the conversation.
+            if (!live.Connections.TryGetValue(conn.Id, out state)) { cts.Dispose(); return; }
+            if (live.Turn is not null) { conn.Send(ErrorFrame("busy", "a run is already in flight")); cts.Dispose(); return; }
             live.Turn = cts;
         }
         ITurnLease? lease = null;
@@ -480,8 +484,6 @@ public sealed class ConversationEngine
             lease = await _cfg.TurnLock.AcquireAsync(convId).ConfigureAwait(false);
             if (lease is null) { conn.Send(ErrorFrame("busy", "a run is already in flight")); return; }
 
-            ConnState state;
-            lock (live.Gate) state = live.Connections[conn.Id];
             await body(live, state, cts.Token).ConfigureAwait(false);
         }
         finally
