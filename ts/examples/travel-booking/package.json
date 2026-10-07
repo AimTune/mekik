@@ -1,0 +1,11 @@
+{
+  "name": "@mekik/example-travel-booking",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "mekik domain probe — travel booking: search, a genui-table comparison, approval, watermark replay across a reconnect, and an exactly-once cancellation.",
+  "scripts": {
+    "selftest": "node travel.ts"
+  },
+  "license": "MIT"
+}
