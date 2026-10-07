@@ -41,8 +41,8 @@ await mekik.approve(ctx, { title: "Right?" }, { ui: weather.ref({ city: "İzmir"
 
 ```csharp
 Shuttle.Ui(ctx, "weather", new Dictionary<string, object?> { ["city"] = "İzmir", ["temp"] = 24 });
-var live = Shuttle.Mount(ctx, "weather", new Dictionary<string, object?> { ["temp"] = 24 });
-live.Update(new Dictionary<string, object?> { ["temp"] = 25 });
+var live = Shuttle.Mount(ctx, "weather", new Dictionary<string, object?> { ["city"] = "İzmir", ["temp"] = 24 });
+live.Update(new Dictionary<string, object?> { ["city"] = "İzmir", ["temp"] = 25 });
 await Shuttle.Approve<bool>(ctx, payload, ui: GenUI.Ref("weather", props));
 ```
 

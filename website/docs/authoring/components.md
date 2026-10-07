@@ -54,8 +54,8 @@ await mekik.approve(ctx, { title: "Correct?" }, { ui: weather.ref({ city: "İzmi
 
 ```csharp
 // Shuttle.Mount → a handle whose Update() re-renders this same instance
-var live = Shuttle.Mount(ctx, "weather", new Dictionary<string, object?> { ["temp"] = 24 });
-live.Update(new Dictionary<string, object?> { ["temp"] = 25 });
+var live = Shuttle.Mount(ctx, "weather", new Dictionary<string, object?> { ["city"] = "İzmir", ["temp"] = 24 });
+live.Update(new Dictionary<string, object?> { ["city"] = "İzmir", ["temp"] = 25 });
 
 // GenUI.Ref → the UiRef an interrupt mounts as its form
 await Shuttle.Approve<bool>(ctx, payload, ui: GenUI.Ref("weather", props));
