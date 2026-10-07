@@ -109,6 +109,23 @@
       ],
       "canonical": "[{\"name\":\"numbers\",\"props\":{\"big\":9007199254740991,\"exp\":1e+21,\"frac\":0.1,\"half\":2.5,\"int\":42,\"neg\":-7,\"tiny\":1e-7},\"template\":\"<x/>\"}]",
       "hash": "b63bdc035d68202ad31d33931c9294125251b9184973b72601004a5440c357bb"
+    },
+    {
+      "name": "integer-like prop keys come first, in numeric order, as JavaScript orders them",
+      "definitions": [
+        {
+          "name": "keys",
+          "template": "<x/>",
+          "props": {
+            "9": 3,
+            "10": 2,
+            "b": 1,
+            "01": 4
+          }
+        }
+      ],
+      "canonical": "[{\"name\":\"keys\",\"props\":{\"9\":3,\"10\":2,\"01\":4,\"b\":1},\"template\":\"<x/>\"}]",
+      "hash": "98a1e9688f0f0108813a12e9b7b6e2eb023172e4d2df6ddde473d774eab28f3e"
     }
   ],
   "skills": [

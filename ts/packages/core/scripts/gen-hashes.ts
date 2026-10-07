@@ -42,6 +42,10 @@ const components: Array<{ name: string; definitions: GenUiComponentDefinition[] 
         name: "numbers in shortest round-trip form",
         definitions: [{ name: "numbers", template: "<x/>", props: { int: 42, neg: -7, frac: 0.1, half: 2.5, big: 9007199254740991, exp: 1e21, tiny: 1e-7 } }],
     },
+    {
+        name: "integer-like prop keys come first, in numeric order, as JavaScript orders them",
+        definitions: [{ name: "keys", template: "<x/>", props: { b: 1, "10": 2, "9": 3, "01": 4 } }],
+    },
 ];
 
 const skills: Array<{ name: string; summaries: SkillSummary[] }> = [
