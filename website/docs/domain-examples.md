@@ -35,8 +35,8 @@ assertion, and a final `✅`. A failed assertion exits `1` with the message.
 
 | Scenario | Graph | What it pins on the wire |
 |---|---|---|
-| [`banking`](https://github.com/AimTune/mekik/tree/main/ts/examples/banking) | router → accounts / history / payments (agent) → approve → execute | money tools held under skills, two pauses in one node for a second approver, exactly-once execution, a `genui-table` history, a hidden tool that fails without a trace |
-| [`insurance`](https://github.com/AimTune/mekik/tree/main/ts/examples/insurance) | intake (form pause) → assess | a `genui-form` interrupt, decision tools held under a skill until `load_skill`, a sign-off pause that keeps them, a typed rejection reason |
+| [`banking`](https://github.com/AimTune/mekik/tree/main/ts/examples/banking) | router → accounts / history / payments (agent) → approve → execute money tools owned by their skills, two pauses in one node for a second approver, exactly-once execution, a `genui-table` history, a hidden tool that fails without a trace |
+| [`insurance`](https://github.com/AimTune/mekik/tree/main/ts/examples/insurance) | intake (form pause) → assess | a `genui-form` interrupt, decision tools owned by a skill and offered only after `load_skill`, a sign-off pause that keeps them, a typed rejection reason |
 | [`healthcare-triage`](https://github.com/AimTune/mekik/tree/main/ts/examples/healthcare-triage) | intake (agent) → escalate (chips) → book (client tool, agent) | redacted identifiers on every frame, skill-held scoring and booking, an allowlisted **client-declared** skill, a chips-only pause, the page's calendar as a client tool |
 | [`travel-booking`](https://github.com/AimTune/mekik/tree/main/ts/examples/travel-booking) | router → search → compare → book (agent); cancel (agent) | a reconnect that replays exactly the missed frames with the unlocked tools intact, `welcome.pending`, a skill-held cancellation that runs once |
 | [`support-desk`](https://github.com/AimTune/mekik/tree/main/ts/examples/support-desk) | router → billing / tech → handoff / chat | tag-scoped skills per route, per-node tool scoping, an MCP knowledge base, an A2A hand-off whose pause is relayed to the desk's human |
@@ -44,11 +44,14 @@ assertion, and a final `✅`. A failed assertion exits `1` with the message.
 ## Skills in every scenario
 
 Every scenario has its own §12 skill catalog (the `skills` app option, announced
-in the `skills` frame on connect). Each catalog
-[holds a tool under the skill](./authoring/skills.md#tools-under-a-skill) that
-governs it, so the model cannot call that tool before it has read the rules:
+in the `skills` frame on connect). In each catalog
+[a skill owns its tools](./authoring/skills.md#tools-under-a-skill): the entry
+lists them next to its instructions (`SkillEntry.tools`), so a skill reads as
+"instructions + tools", and the model cannot call a tool before it has read the
+rules that govern it. The tools never leave the server; every probe asserts
+the `skills` frame names none of them.
 
-| Scenario | Skill (tag) | Holds |
+| Scenario | Skill (tag) | Tools |
 |---|---|---|
 | banking | `wire-transfer-rules` | `check_transfer_limit`, `transfer_funds` |
 | banking | `dispute-handling` | `open_dispute` |
@@ -57,7 +60,7 @@ governs it, so the model cannot call that tool before it has read the rules:
 | healthcare-triage | `triage-protocol` (triage) | `score_triage` |
 | healthcare-triage | `appointment-booking` (booking) | `book_appointment` |
 | travel-booking | `fare-rules` (booking) | `book_flight` |
-| travel-booking | `cancellation-policy` (cancellation) | `cancel_booking` |
+| travel-booking | `cancellation-policy` (cancellation) | `cancel_booking` (built per request, held with `skillTools`) |
 | support-desk | `refund-policy` (billing) | `issue_credit` |
 | support-desk | `incident-runbook` (tech) | `escalate_to_specialist` |
 
@@ -71,16 +74,45 @@ its own check:
 - the unlocked set surviving a pause or a reconnect (insurance, travel);
 - redaction holding on the skill frames (healthcare).
 
-Most agents use `runAgent({ skills, skillTools })`. The support desk's tech
-node shows the hand-wired form, `withSkills(ctx, filter, { toolNames })`,
-because its MCP tools come pre-wrapped by `withMcpTools`.
+Every tool is built once, at module level. One that needs the run (to mount a
+card, or to key state by the conversation) reads the calling run's `ctx` with
+`toolContext(config)` from its LangChain config. Only one tool in all five
+scenarios is built per request: travel's `cancel_booking` refunds from the
+conversation's booking in graph state, so the `cancel` node holds it under
+`cancellation-policy` with `runAgent({ skillTools })`, and says why in a
+comment.
+
+Most agents use `runAgent({ skills })`. The support desk's tech node shows the
+hand-wired form, because its MCP tools come pre-wrapped by `withMcpTools`:
+`withSkills(ctx, filter, { onLoaded })` names each entry's tools in the
+`load_skill` observation and reports each successful load, and the loop offers
+that skill's tools (`mekik.skillTools`) from the next round.
 
 ## Banking
 
-The payments node is a `runAgent` loop whose money tools are held under
-skills: `wire-transfer-rules` holds `check_transfer_limit` and
-`transfer_funds`, and `dispute-handling` holds `open_dispute`. Balance and
-history tools stay always-on in their own nodes. The probe asserts that
+The payments node is a `runAgent` loop over a catalog whose skills own the
+money tools:
+
+```ts
+const SKILLS: SkillEntry<StructuredToolInterface>[] = [
+    {
+        name: "wire-transfer-rules",
+        description: "Rules for sending money: fraud screening, limits, second approvers. Load before any transfer.",
+        instructions: "1. Screen every transfer with fraud_screen. …",
+        tools: [checkTransferLimit, transferFunds],
+    },
+    {
+        name: "dispute-handling",
+        description: "How to open a card or account dispute for a transaction the customer does not recognise.",
+        instructions: "Confirm the date, description and amount from the history, then open_dispute. …",
+        tools: [openDispute],
+    },
+];
+```
+
+The node passes only its always-on tools (`lookup_payee`, `fraud_screen`,
+`flag_for_review`) and `skills: true`. Balance and history tools stay
+always-on in their own nodes. The probe asserts that
 `transfer_funds` is not offered before its skill loads, and that a premature
 call is refused without staging anything. It also checks that the `skill`
 frame's `seq` comes before the transfer trace, and that loading
@@ -109,13 +141,13 @@ holds three skills: the `skills` frame announces them on connect (no
 instructions), and the adjuster node offers only the `home`-tagged ones.
 
 The adjuster is a `runAgent` loop. Only `lookup_policy` is always offered.
-`skillTools` puts `check_coverage` and `approve_claim` under
-`water-damage-assessment`, and `check_coverage` and `reject_claim` under
-`rejection-letter`. The probe asserts four things:
+`water-damage-assessment` owns `check_coverage` and `approve_claim`, and
+`rejection-letter` owns `check_coverage` and `reject_claim`. The probe asserts
+four things:
 
 - **Before `load_skill`**, only `lookup_policy` and `load_skill` are offered.
 - **A premature `check_coverage` call** is refused with an observation naming
-  the skill to load. The tool doesn't run and nothing is traced.
+  both skills that own it. The tool doesn't run and nothing is traced.
 - **From the round after the `skill` frame**, the skill's tools are offered,
   and the other skill's decision tool never is.
 - **Across a pause.** Each decision needs a senior adjuster's sign-off (an
@@ -139,8 +171,8 @@ probe checks that no identifier appears on any frame: skill frames (which
 carry only `id`, `name`, `status` and `source`) and a second tab's full
 transcript replay included.
 
-Both agents use skills, each scoped to its own tag. `triage-protocol` holds
-`score_triage`, the red-flag rules, and `appointment-booking` holds the
+Both agents use skills, each scoped to its own tag. `triage-protocol` owns
+`score_triage`, the red-flag rules, and `appointment-booking` owns the
 server-side `book_appointment`. The calendar itself stays a
 [client tool](./authoring/client-tools.md).
 
@@ -170,8 +202,10 @@ a `genui-alert` and never opens the calendar.
 Search, compare and book are separate nodes. The comparison is a
 `genui-table` with a literal chunk id, so the replay after the pick
 re-renders the same element. The `book` and `cancel` nodes are `runAgent`
-loops: `fare-rules` holds `book_flight` and `cancellation-policy` holds
-`cancel_booking`, each gated by an approval policy.
+loops, each tool gated by an approval policy. `fare-rules` owns `book_flight`.
+`cancel_booking` is the one tool built per request: it refunds from the
+conversation's booking in graph state, so the `cancel` node holds it under
+`cancellation-policy` with `skillTools`.
 
 The reconnect test: the client records a watermark, then its socket dies while
 the `fare-rules` skill frame and the booking approval stream. A new connection
@@ -192,8 +226,8 @@ asking to cancel again finds the cancelled booking in graph state.
 
 A router sends each turn to a node with its own tools, and the probe asserts
 what each node bound. The skills are **tag-scoped per route**:
-`refund-policy` (billing) holds `issue_credit`, and `incident-runbook` (tech)
-holds `escalate_to_specialist`. The probe asserts tag scoping both ways:
+`refund-policy` (billing) owns `issue_credit`, and `incident-runbook` (tech)
+owns `escalate_to_specialist`. The probe asserts tag scoping both ways:
 
 - each node's prompt lists only its own skill;
 - loading the other route's skill is an unknown-skill observation;
@@ -225,8 +259,9 @@ The scenarios share
   prompt, every observation, and the tool list offered in each round.
   `asChatModel(node)` wraps the same script as a chat model for `runAgent`.
 - `runTools` is a hand-wired model↔tool loop, with decisions journaled per
-  node. Its `skillTools` option applies `runAgent`'s skill gating to tools
-  that come pre-wrapped.
+  node. Its `skills` option applies `runAgent`'s skill gating by hand: the
+  skills' own tools are held until `withSkills`' `onLoaded` reports a
+  successful load; `skillTools` adds pre-wrapped extras.
 - `Collector`, `check` and `describe` cover frame capture and the output style.
 
 To write a new scenario, copy a directory, swap the domain, and assert the

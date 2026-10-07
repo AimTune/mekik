@@ -14,26 +14,32 @@ START → route ─┬→ search → compare (genui-table + chips) → book (run
 ## Skills
 
 The agency has a §12 catalog. `book` and `cancel` are `runAgent` loops, and
-each one holds its consequential tool under the policy skill that governs it
-(`skillTools`). Each tool also sits behind an approval policy.
+each consequential tool sits under the policy skill that governs it, behind an
+approval policy. The two skills show both forms:
 
-| Skill | Tag | Holds |
-|---|---|---|
-| `fare-rules` | `booking` | `book_flight` (approval: "Book TK1759 for $824?") |
-| `cancellation-policy` | `cancellation` | `cancel_booking` (approval: "Cancel BK-4001? …") |
+| Skill | Tag | Tool | How |
+|---|---|---|---|
+| `fare-rules` | `booking` | `book_flight` (approval: "Book TK1759 for $824?") | **owned by the entry** (`SkillEntry.tools`), built once at module level |
+| `cancellation-policy` | `cancellation` | `cancel_booking` (approval: "Cancel BK-4001? …") | **built per request** and held with `skillTools` |
+
+`cancel_booking` refunds from this conversation's booking in graph state, which
+a module-level tool cannot see, so the `cancel` node builds it per request and
+holds it under `cancellation-policy` with `runAgent({ skillTools })`. The gating
+is the same either way.
 
 ## What it shows
 
 | # | Scenario | What the probe asserts |
 |---|---|---|
-| 0 | Connect | A `skills` frame announces `fare-rules` and `cancellation-policy`. |
+| 0 | Connect | A `skills` frame announces `fare-rules` and `cancellation-policy`, without `book_flight`. |
 | 1 | Search and compare | `search_flights` is traced. The offers are mounted as a `genui-table` with a literal chunk id (`compare-offers`), with totals for two adults. The pick is an interrupt with one chip per offer, valued by offer id. |
 | 2 | Reconnect | `book_flight` is not offered before `fare-rules` loads and is offered from the next round, where its approval policy parks the run. The socket dies while those frames stream. A new connection with `{ conversationId, watermark }` gets `welcome.pending` re-announcing the same approval id, and a replay that starts at `watermark + 1`, has no gaps, and is **exactly** the frames the dead socket missed, including the `fare-rules` skill frame. There is no second greeting. After the approval is answered from the new socket, **the unlocked set survives**: the next model round is still offered `book_flight`. Search, price check and booking each run exactly once. |
 | 3 | Cancellation | `cancel_booking` is offered only after `cancellation-policy` loads. Two tabs see the same confirmation (fan-out) and confirm at once: one resume runs and the other is refused (`busy` or `not_interrupted`). `cancel_booking` runs before a second pause ("rebook?") in the **same node**, so the next resume replays the node, agent loop included. The model is not asked again, the skill-held cancellation stays at one call, and its re-emitted trace upserts the same id. Asking to cancel again finds the cancelled booking in graph state: no pause, no tool. |
 
 The mekik pieces in play:
 
-- `runAgent` with `skills: { tags }`, `skillTools` and `approve` policies
+- `runAgent` with `skills: { tags }` and `approve` policies, plus `skillTools` for the per-request tool
+- a skill entry that owns its tool, and `toolContext(config)`
 - the `skills` app option
 - a router node
 - `withMekikTools` for the search

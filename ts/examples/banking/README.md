@@ -12,15 +12,33 @@ START → route ─┬→ accounts ───────────────
                             └→ END (dispute opened, or held for review)
 ```
 
-The bank has a §12 skill catalog, and the `payments` node is a `runAgent` loop
-whose money tools are **held under skills** (`skillTools`):
+The bank has a §12 skill catalog in which **each skill owns its tools**. A skill
+is its instructions plus the tools those instructions govern
+(`SkillEntry.tools`):
 
 ```ts
-skillTools: {
-    "wire-transfer-rules": [checkTransferLimit, transferFunds],
-    "dispute-handling": [openDispute],
-},
+const SKILLS: SkillEntry<StructuredToolInterface>[] = [
+    {
+        name: "wire-transfer-rules",
+        description: "Rules for sending money: fraud screening, limits, second approvers. Load before any transfer.",
+        instructions: "1. Screen every transfer with fraud_screen. …",
+        tools: [checkTransferLimit, transferFunds],
+    },
+    {
+        name: "dispute-handling",
+        description: "How to open a card or account dispute for a transaction the customer does not recognise.",
+        instructions: "Confirm the date, description and amount from the history, then open_dispute. …",
+        tools: [openDispute],
+    },
+];
 ```
+
+The `payments` node is a `runAgent` loop that passes only its always-on tools
+and `skills: true`; the skills bring their own. Every tool is built once, at
+module level: `transfer_funds` stages per conversation and `list_transactions`
+mounts its table by reading the calling run's `ctx` with `toolContext(config)`.
+The tools never leave the server: the `skills` frame carries names and
+descriptions only.
 
 Until a skill is loaded, the model is offered only `lookup_payee`, the hidden
 `fraud_screen`, `flag_for_review` and `load_skill`. Balance and history tools
@@ -31,7 +49,7 @@ the money moves in `transfer_execute` after the approvals.
 
 | # | Scenario | What the probe asserts |
 |---|---|---|
-| 0 | Connect | A `skills` frame announces `dispute-handling` and `wire-transfer-rules`. |
+| 0 | Connect | A `skills` frame announces `dispute-handling` and `wire-transfer-rules`, and names none of their tools. |
 | 1 | Balance query | `get_accounts` and `get_balance` are traced, the run finishes without a pause, and the `accounts` node bound only the read tools. |
 | 2 | Transfer under the limit | `transfer_funds` is not offered before `wire-transfer-rules` loads. A premature call is refused with an observation and stages nothing. From the next round `check_transfer_limit` and `transfer_funds` are offered, but `open_dispute` is not. The `skill` frame's `seq` comes before the transfer trace. One `interrupt` with a `genui-card` and Send / Cancel chips; after the resume only `execute_transfer` runs, once. |
 | 3 | Transfer over the $5,000 limit | The skill-held `check_transfer_limit` flags a second approver. The customer approves, then the run parks **again** for the second approver. A new message while parked is refused with `error{interrupted}`. On the co-sign the customer is not asked again, the agent loop does not re-run, and the transfer executes once. |
@@ -41,8 +59,9 @@ the money moves in `transfer_execute` after the approvals.
 
 The mekik pieces in play:
 
-- `runAgent` with `skills`, `skillTools` and a `show: false` policy
-- the `skills` app option
+- `runAgent` with `skills` and a `show: false` policy
+- the `skills` app option, with `SkillEntry<StructuredToolInterface>` entries that own their tools
+- `toolContext(config)` in module-level tools
 - `withMekikTools` in the read-only nodes
 - `mekik.approve` with `key` for two pauses in one node
 - `mekik.genui.card.ref` and `mekik.genui.table`
