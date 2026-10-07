@@ -20,14 +20,15 @@ this file is the short version plus the design notes.
 | `input-required` task | the turn paused; `status.message` carries the pending interrupts in prose + a data part; `metadata.pending` too |
 | `message/send` with `taskId` | the resume: text → the single open interrupt (action label → value); data `{answers}` → several |
 | artifact `reply` | the turn's reply text |
-| `completed` / `failed` / `rejected` / `canceled` | run finished / graph error / engine refused (`busy`, `interrupted`, `not_interrupted`) / `tasks/cancel` |
+| `completed` / `failed` / `rejected` / `canceled` | run finished / graph error / engine refused (`busy`, `interrupted`, `not_interrupted`) / `tasks/cancel` or an aborted run |
 | `metadata.mekik` | `{ conversationId, status, toolCalls, skills }` — the MCP summary, reused |
 
 `tasks/get` (with `historyLength`), `tasks/cancel` (input-required only,
 `-32002` otherwise), notifications (no response). `message/stream`,
 `tasks/resubscribe` and push-notification config are `-32004`. Errors:
 `-32001` task not found, `-32005` a message with no text part, `-32602` shape
-errors, `-32601` unknown method.
+errors and a message on a task that is not `input-required`, `-32601` unknown
+method.
 
 ## Design notes
 

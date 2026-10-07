@@ -5,6 +5,8 @@ serves a `MekikApp` over the `mekik/1` wire protocol. A thin adapter: every
 protocol rule lives in the engine.
 
 ```csharp
+using Mekik;
+
 var builder = WebApplication.CreateBuilder(args);
 var web = builder.Build();
 
@@ -14,7 +16,8 @@ web.Run();
 ```
 
 Identity may arrive in the URL query string or the first `hello` frame; both are
-merged at connect.
+merged at connect. With an authenticator configured, a rejected socket gets
+`error{unauthorized}` and is closed with code 4401.
 
 The same package serves the graph to *agents*: `web.MapMekikMcp("/mcp", new
 MekikMcpServer(app, new McpServerOptions { Name = "support_desk" }))` exposes it
