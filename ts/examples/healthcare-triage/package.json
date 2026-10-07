@@ -1,0 +1,11 @@
+{
+  "name": "@mekik/example-healthcare-triage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "mekik domain probe — healthcare triage: redacted patient identifiers, a chip escalation, and appointment booking through the page's calendar as a client tool.",
+  "scripts": {
+    "selftest": "node triage.ts"
+  },
+  "license": "MIT"
+}
