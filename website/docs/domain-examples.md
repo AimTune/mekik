@@ -219,7 +219,8 @@ booking runs once.
 The skill-held cancellation runs before a second pause ("rebook?") in the
 same node, so the resume that answers it replays the node, agent loop and all.
 The model is not asked again, and the journal keeps `cancel_booking` at one
-call. Two tabs confirming at once get one run and one refusal (`busy`), and
+call. Two tabs confirming at once get one run and one refusal (`busy` or
+`not_interrupted`), and
 asking to cancel again finds the cancelled booking in graph state.
 
 ## Support desk

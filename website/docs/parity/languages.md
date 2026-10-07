@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: TypeScript ↔ .NET
-description: The naming map between @mekik/core and Mekik.Core, and the five deliberate divergences — the Shuttle helper name, dictionary frames, cancellation, Choose's answer type, and the interrupt rethrow rule.
+description: The naming map between @mekik/core and Mekik.Core, and the six deliberate divergences — the Shuttle helper name, dictionary frames, cancellation, Choose's answer type, the interrupt rethrow rule, and the opt-in policies.
 ---
 
 # TypeScript ↔ .NET
@@ -22,16 +22,35 @@ mekik ships two implementations that speak the identical `mekik/1` wire: **TypeS
 | authoring helpers | `mekik.text / ui / event / tool / approve` | `Shuttle.Text / Ui / Event / Tool / Approve` |
 | button chips | `mekik.action` / `mekik.choose` | `Shuttle.Action` / `Shuttle.Choose<T>` |
 | managed ui instance | `mekik.mount` → `UiHandle` | `Shuttle.Mount` → `UiHandle` |
-| skills read (§12) | `mekik.skills(ctx, {tags?, source?})` / `mekik.skillsPrompt` | `Shuttle.Skills(ctx, tags?, source?)` / `Shuttle.SkillsPrompt` |
+| streamed text | `mekik.streamText` | `Shuttle.StreamText` |
+| wait for a component event | `mekik.onEvent` | `Shuttle.OnEvent<T>` |
+| verified auth claims | `mekik.authClaims` / `mekik.claimStrings` | `Shuttle.AuthClaims` / `Shuttle.ClaimStrings` |
+| low-level traces | `toolTrace` / `nextToolCallId` / `skillTrace` | `Shuttle.ToolTrace` / `Shuttle.NextToolCallId` / `Shuttle.SkillTrace` |
+| tool wrap | `withMekikTools(ctx, tools, policy?)` (`@mekik/langchain`) | `MekikTools.Wrap(ctx, functions, policies?)` / `functions.WithMekik(ctx, policies?)` (`Mekik.Agents`) |
+| tool policy | `ToolPolicy` / `ApproveSpec` / `REDACTED` | `ToolPolicy` / `ApproveSpec` / `MekikTools.Redacted` |
+| agent loop | `runAgent(ctx, model, options)` (`@mekik/langchain`) | `Agent.RunAsync(ctx, chat, AgentRunOptions)` (`Mekik.Agents`) |
+| model router | `route(ctx, model, routes, input)` / `RouteChoice` | `Agent.RouteAsync(ctx, chat, routes, input)` / `Route` |
+| client tools read (§11) | `mekik.clientTools(ctx, {tags?, mode?})` | `Shuttle.ClientTools(ctx, tags?, mode?)` |
+| client tool call (§11) | `mekik.callClientTool(ctx, name, params?, {key?})` | `Shuttle.CallClientToolAsync<T>(ctx, name, params?, key?)` |
+| client tools accept | `MekikOptions.clientTools: true \| fn` | `MekikOptions.ClientTools` (`ClientTools.AcceptAll` / `ClientToolsPolicy`) |
+| client tool sanitize | `sanitizeClientTools` | `ClientTools.Sanitize` |
+| client tool model wrap | `withClientTools` (`@mekik/langchain`) | `ClientToolFunctions.Wrap` (`Mekik.Agents`) |
+| skills read (§12) | `mekik.skills(ctx, {tags?, source?})` / `mekik.skillsPrompt(ctx, filter?, {intro?})` | `Shuttle.Skills(ctx, tags?, source?)` / `Shuttle.SkillsPrompt(ctx, tags?, source?, intro?)` |
 | skill load (§12) | `mekik.loadSkill` / `mekik.skillResource` | `Shuttle.LoadSkill` / `Shuttle.SkillResourceAsync` |
-| skill source port | `SkillSource` / `StaticSkillSource` | `ISkillSource` / `SkillSources.Inline` |
+| skill source port | `SkillSource` / `StaticSkillSource` / `TurnSkills` | `ISkillSource` / `SkillSources.Inline` / `TurnSkillSource` |
+| skills catalog hash / prompt | `hashSkills` / `renderSkillsPrompt` | `Skills.Hash` / `Skills.RenderPrompt` |
 | client skills accept | `MekikOptions.clientSkills: true \| fn` | `MekikOptions.ClientSkills` (`ClientSkills.AcceptAll` / `ClientSkillsPolicy`) |
-| skill model wrap | `withSkills` (`@mekik/langchain`) | `SkillFunctions.Wrap` (`Mekik.Agents`) |
+| client skill sanitize | `sanitizeClientSkills` | `ClientSkills.Sanitize` |
+| skill model wrap | `withSkills(ctx, filter?, { toolNames?, onLoaded? })` / `runAgent({ skills })` (`@mekik/langchain`) | `SkillFunctions.Wrap(ctx, tags, source, toolNames, onLoaded)` / `AgentRunOptions.Skills` (`Mekik.Agents`) |
 | a tool's run context | `toolContext(config)` (`@mekik/langchain`) | `MekikTools.ToolContext(arguments)` (`Mekik.Agents`) |
 | skill-owned tools (§12.6) | `SkillEntry<StructuredToolInterface>.tools` / `mekik.skillTools` / `runAgent({ skillTools })` | `SkillEntry<AIFunction>.Tools` / `Shuttle.SkillTools<TTool>` / `AgentRunOptions.SkillTools` |
-| MCP server (§13) | `MekikMcpServer` / `serveMcp` (`@mekik/mcp`) | `MekikMcpServer` / `MapMekikMcp` (`Mekik.AspNetCore`) |
-| MCP tools wrap (§13) | `withMcpTools` (`@mekik/langchain`) | `McpFunctions.Wrap` (`Mekik.Agents`) |
-| A2A agent (§14) | `MekikA2aServer` / `serveA2a` (`@mekik/a2a`) | `MekikA2aServer` / `MapMekikA2a` (`Mekik.AspNetCore`) |
+| MCP server (§13) | `MekikMcpServer` (`@mekik/core`) / `serveMcp`, `mcpRequestHandler` (`@mekik/mcp`) | `MekikMcpServer` (`Mekik.Core`) / `MapMekikMcp` (`Mekik.AspNetCore`) |
+| MCP result reduction | `summarizeMcpTurn` | `MekikMcpServer.Summarize` |
+| MCP tools wrap (§13) | `withMcpTools(ctx, toolbox, policy?)` (`@mekik/langchain`) | `McpFunctions.Wrap(ctx, tools, invoke, policies?)` (`Mekik.Agents`) |
+| A2A agent (§14) | `MekikA2aServer` (`@mekik/core`) / `serveA2a`, `a2aRequestHandler` (`@mekik/a2a`) | `MekikA2aServer` (`Mekik.Core`) / `MapMekikA2a` (`Mekik.AspNetCore`) |
+| A2A task store port | `A2aTaskStore` / `InMemoryA2aTaskStore` | `IA2aTaskStore` / `InMemoryA2aTaskStore` |
+| turn driver (§13.2, §14.2) | `driveTurn` | `MekikMcpServer.DriveTurnAsync` |
+| server-defined components (§10) | `defineComponent` / `GenUiComponent` / `ComponentCatalog` | `GenUiComponent` / `ComponentCatalog` |
 | typed component | `mekik.component<P>(name)` | pass the name to `Shuttle.Ui` / `Shuttle.Mount` |
 | built-in components | `mekik.genui.*` | `GenUI.*` (+ `GenUI.Names.*`) |
 | rich messages | `mekik.message` / `mekik.messageKind` / `mekik.messages.*` | `Shuttle.Message` / `Messages.*` |
@@ -40,15 +59,17 @@ mekik ships two implementations that speak the identical `mekik/1` wire: **TypeS
 | history port | `HistoryStore` / `InMemoryHistoryStore` | `IHistoryStore` / `InMemoryHistoryStore` |
 | conversation port | `ConversationStore` / `InMemoryConversationStore` | `IConversationStore` / `InMemoryConversationStore` |
 | auth port | `Authenticator` / `StaticTokenAuthenticator` | `IAuthenticator` / `StaticTokenAuthenticator` |
+| turn lock / backplane ports | `TurnLock` / `LocalTurnLock`, `Backplane` / `NoopBackplane` | `ITurnLock` / `LocalTurnLock`, `IBackplane` / `NoopBackplane` |
+| Redis fleet | `RedisTurnLock` / `RedisBackplane` (`@mekik/redis`) | `RedisTurnLock` / `RedisBackplane` (`Mekik.Redis`) |
 | id minter | `IdMinter` / `randomMinter()` | `IIdMinter` / `RandomMinter` |
 | protocol version | `PROTOCOL_VERSION` | `Protocol.Version` |
 | auth close code | `AUTH_CLOSE_CODE` (4401) | `Protocol.AuthCloseCode` |
 
 The pattern is mechanical: a TS interface `Foo` becomes .NET `IFoo`; a TS free function `foo()` becomes a `PascalCase` method, `Async`-suffixed where it awaits. If you know one side, you can read the other.
 
-## The five deliberate divergences
+## The six deliberate divergences {#the-five-deliberate-divergences}
 
-Where the two can't be mechanically identical, they diverge on purpose. Five cases:
+Where the two can't be mechanically identical, they diverge on purpose. Six cases:
 
 ### 1. The helper class is `Shuttle`, not `Mekik`
 
@@ -56,11 +77,11 @@ A static class sharing its namespace's name (`Mekik`) binds ambiguously at call 
 
 ```ts
 // TS
-mekik.approve(ctx, { title: "Refund?" });
+await mekik.approve(ctx, { title: "Refund?" });
 ```
 ```csharp
 // .NET
-Shuttle.Approve(ctx, new() { ["title"] = "Refund?" });
+await Shuttle.Approve<Dictionary<string, object?>>(ctx, new Dictionary<string, object?> { ["title"] = "Refund?" });
 ```
 
 ### 2. Frames are dictionaries in .NET
@@ -99,6 +120,24 @@ try {
 } catch (Exception ex) when (!InterruptSignalException.IsInterrupt(ex)) {
     // only real failures land here; the pause propagates untouched
 }
+```
+
+### 6. The opt-in policies
+
+TypeScript spells "accept everything" as the literal `clientTools: true`; C# has no boolean-or-delegate union, so .NET assigns the identity policy `ClientTools.AcceptAll` to the same effect. The function/delegate form is identical in both. `clientSkills` / `ClientSkills.AcceptAll` follows the same pattern.
+
+```ts
+// TS
+mekik({ graph, clientTools: true, clientSkills: (declared) => declared.filter((d) => d.name === "plain-language") });
+```
+```csharp
+// .NET
+new MekikApp(new MekikOptions
+{
+    Graph = graph,
+    ClientTools = ClientTools.AcceptAll,
+    ClientSkills = (declared, _) => declared.Where(d => d.Name == "plain-language").ToList(),
+});
 ```
 
 ## What guarantees they agree

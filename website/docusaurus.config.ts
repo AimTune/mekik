@@ -116,13 +116,14 @@ const config: Config = {
             { label: "Frames", to: "/protocol/frames" },
             { label: "Authoring helpers", to: "/authoring/helpers" },
             { label: "TypeScript ↔ .NET", to: "/parity/languages" },
+            { label: "Examples", to: "/examples" },
           ],
         },
         {
           title: "More",
           items: [
-            { label: "ilmek", href: "https://www.npmjs.com/package/@ilmek/core" },
-            { label: "chativa", href: "https://github.com/AimTune/chativa" },
+            { label: "ilmek", href: "https://ilmek.aimtune.dev" },
+            { label: "chativa", href: "https://chativa.aimtune.dev" },
             { label: "GitHub", href: GITHUB_REPO },
             { label: "Issues", href: `${GITHUB_REPO}/issues` },
           ],

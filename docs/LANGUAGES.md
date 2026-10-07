@@ -17,6 +17,14 @@ mekik ships two implementations that speak the identical `mekik/1` wire
 | authoring helpers | `mekik.text / ui / event / tool / approve` | `Shuttle.Text / Ui / Event / Tool / Approve` |
 | button chips | `mekik.action` / `mekik.choose` | `Shuttle.Action` / `Shuttle.Choose` |
 | managed ui instance | `mekik.mount` → `UiHandle` (`id`, `update`) | `Shuttle.Mount` → `UiHandle` (`Id`, `Update`) |
+| streamed text | `mekik.streamText` | `Shuttle.StreamText` |
+| wait for a component event | `mekik.onEvent` | `Shuttle.OnEvent<T>` |
+| verified auth claims | `mekik.authClaims` / `mekik.claimStrings` | `Shuttle.AuthClaims` / `Shuttle.ClaimStrings` |
+| low-level traces | `toolTrace` / `nextToolCallId` / `skillTrace` | `Shuttle.ToolTrace` / `Shuttle.NextToolCallId` / `Shuttle.SkillTrace` |
+| tool wrap | `withMekikTools(ctx, tools, policy?)` (`@mekik/langchain`) | `MekikTools.Wrap(ctx, functions, policies?)` / `functions.WithMekik(ctx, policies?)` (`Mekik.Agents`) |
+| tool policy | `ToolPolicy` / `ApproveSpec` / `REDACTED` | `ToolPolicy` / `ApproveSpec` / `MekikTools.Redacted` |
+| agent loop | `runAgent(ctx, model, options)` (`@mekik/langchain`) | `Agent.RunAsync(ctx, chat, AgentRunOptions)` (`Mekik.Agents`) |
+| model router | `route(ctx, model, routes, input)` / `RouteChoice` | `Agent.RouteAsync(ctx, chat, routes, input)` / `Route` |
 | client tools read (§11) | `mekik.clientTools(ctx, {tags?, mode?})` | `Shuttle.ClientTools(ctx, tags?, mode?)` |
 | client tool call (§11) | `mekik.callClientTool(ctx, name, params?, {key?})` | `Shuttle.CallClientToolAsync<T>(ctx, name, params?, key?)` |
 | client tools accept | `MekikOptions.clientTools: true \| fn` | `MekikOptions.ClientTools` (`ClientTools.AcceptAll` / `ClientToolsPolicy`) |
@@ -28,7 +36,7 @@ mekik ships two implementations that speak the identical `mekik/1` wire
 | skills catalog hash / prompt | `hashSkills` / `renderSkillsPrompt` | `Skills.Hash` / `Skills.RenderPrompt` |
 | client skills accept | `MekikOptions.clientSkills: true \| fn` | `MekikOptions.ClientSkills` (`ClientSkills.AcceptAll` / `ClientSkillsPolicy`) |
 | client skill sanitize | `sanitizeClientSkills` | `ClientSkills.Sanitize` |
-| skill model wrap | `withSkills` / `runAgent({ skills })` (`@mekik/langchain`) | `SkillFunctions.Wrap` / `AgentRunOptions.Skills` (`Mekik.Agents`) |
+| skill model wrap | `withSkills(ctx, filter?, { toolNames?, onLoaded? })` / `runAgent({ skills })` (`@mekik/langchain`) | `SkillFunctions.Wrap(ctx, tags, source, toolNames, onLoaded)` / `AgentRunOptions.Skills` (`Mekik.Agents`) |
 | a tool's run context | `toolContext(config)` — `config.configurable.mekik_ctx` (`@mekik/langchain`) | `MekikTools.ToolContext(arguments)` — `AIFunctionArguments.Context` (`Mekik.Agents`) |
 | skill-owned tools (§12.6) | `SkillEntry<TTool>.tools` (`TTool = StructuredToolInterface`) / `mekik.skillTools(ctx, filter?)` / `runAgent({ skillTools })` | `SkillEntry<TTool>.Tools` (`TTool = AIFunction`) / `Shuttle.SkillTools<TTool>(ctx, tags?, source?)` / `AgentRunOptions.SkillTools` |
 | MCP server (§13) | `MekikMcpServer` (`@mekik/core`) / `serveMcp`, `mcpRequestHandler` (`@mekik/mcp`) | `MekikMcpServer` (`Mekik.Core`) / `MapMekikMcp` (`Mekik.AspNetCore`) |
@@ -37,6 +45,7 @@ mekik ships two implementations that speak the identical `mekik/1` wire
 | A2A agent (§14) | `MekikA2aServer` (`@mekik/core`) / `serveA2a`, `a2aRequestHandler` (`@mekik/a2a`) | `MekikA2aServer` (`Mekik.Core`) / `MapMekikA2a` (`Mekik.AspNetCore`) |
 | A2A task store port | `A2aTaskStore` / `InMemoryA2aTaskStore` | `IA2aTaskStore` / `InMemoryA2aTaskStore` |
 | turn driver (§13.2, §14.2) | `driveTurn` | `MekikMcpServer.DriveTurnAsync` |
+| server-defined components (§10) | `defineComponent` / `GenUiComponent` / `ComponentCatalog` | `GenUiComponent` / `ComponentCatalog` |
 | typed component | `mekik.component<P>(name)` | pass the name to `Shuttle.Ui` / `Shuttle.Mount` |
 | built-in components | `mekik.genui.*` | `GenUI.*` (+ `GenUI.Names.*`) |
 | rich messages | `mekik.message` / `mekik.messageKind` / `mekik.messages.*` | `Shuttle.Message` / `Messages.*` |
@@ -45,6 +54,8 @@ mekik ships two implementations that speak the identical `mekik/1` wire
 | history port | `HistoryStore` / `InMemoryHistoryStore` | `IHistoryStore` / `InMemoryHistoryStore` |
 | conversation port | `ConversationStore` / `InMemoryConversationStore` | `IConversationStore` / `InMemoryConversationStore` |
 | auth port | `Authenticator` / `StaticTokenAuthenticator` | `IAuthenticator` / `StaticTokenAuthenticator` |
+| turn lock / backplane ports | `TurnLock` / `LocalTurnLock`, `Backplane` / `NoopBackplane` | `ITurnLock` / `LocalTurnLock`, `IBackplane` / `NoopBackplane` |
+| Redis fleet | `RedisTurnLock` / `RedisBackplane` (`@mekik/redis`) | `RedisTurnLock` / `RedisBackplane` (`Mekik.Redis`) |
 | id minter | `IdMinter` / `randomMinter()` | `IIdMinter` / `RandomMinter` |
 | protocol version | `PROTOCOL_VERSION` | `Protocol.Version` |
 | auth close code | `AUTH_CLOSE_CODE` (4401) | `Protocol.AuthCloseCode` |

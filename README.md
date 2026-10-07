@@ -34,6 +34,25 @@ typed event stream — no error-sniffing), interrupts are **first-class frames**
 answered by thread-scoped id (concurrent pauses can't collapse), and parity is
 **two languages checked by golden fixtures**, not four checked by hope.
 
+## Packages
+
+Every package is versioned together (currently 0.9.0).
+
+| npm | NuGet | what it is |
+|---|---|---|
+| `@mekik/core` | `Mekik.Core` | protocol, mapper, engine, authoring helpers, stores, auth, MCP/A2A servers |
+| `@mekik/ws` | `Mekik.AspNetCore` | the WebSocket transport (`serveWs` / `MapMekik`); in .NET also `MapMekikMcp` and `MapMekikA2a` |
+| `@mekik/mcp` | — (`Mekik.AspNetCore`) | the graph as MCP tools over Streamable HTTP (`serveMcp`) |
+| `@mekik/a2a` | — (`Mekik.AspNetCore`) | the graph as an A2A agent: Agent Card + JSON-RPC over HTTP (`serveA2a`) |
+| `@mekik/langchain` | `Mekik.Agents` | wrap an agent's tools: traces, approvals, exactly-once, skills (LangChain / Microsoft.Extensions.AI) |
+| — | `Mekik.SemanticKernel` | one function filter for Semantic Kernel agents and planners |
+| `@mekik/redis` | `Mekik.Redis` | Redis turn lock + Pub/Sub backplane, for a fleet |
+
+```bash
+pnpm add @mekik/core @mekik/ws @ilmek/core@^0.1.1
+dotnet add package Mekik.Core && dotnet add package Mekik.AspNetCore
+```
+
 ## Quickstart (TypeScript)
 
 ```ts
@@ -79,6 +98,7 @@ mekik/
     SKILLS.md            # Agent Skills: the catalog, progressive disclosure, the skill frame (§12)
     MCP.md               # MCP both ways: consuming servers, serving the graph as tools (§13)
     A2A.md               # the graph as an Agent2Agent peer: card, tasks, input-required (§14)
+    SCALING.md           # running a fleet: turn lock, backplane, re-homing
   ts/
     packages/core/       # @mekik/core — protocol, mapper, engine, helpers, stores, auth
     packages/ws/         # @mekik/ws — WebSocket transport
@@ -109,6 +129,8 @@ mekik/
     test/Mekik.Core.Tests/     # loads the SAME fixtures
     examples/Mekik.Examples    # mirror of the refund showcase
     examples/Mekik.LlmAgent    # mirror of the LLM-driven desk
+    examples/Mekik.SqlAgent    # mirror of the SQL agent (with --probe)
+    examples/Mekik.WeatherAgent # mirror of the weather agent (with --probe)
     examples/Mekik.ServerComponents # mirror of the server-defined components demo
     examples/Mekik.ClientTools # mirror of the client-tools demo (§11)
 ```
@@ -123,7 +145,7 @@ this repo stands alone; no sibling checkout is needed.
 
 ```bash
 cd ts && pnpm install
-pnpm check                                   # build + tests + the refund self-test
+pnpm check                                   # build + tests + every example self-test and probe
 node examples/refund.ts --serve              # a real ws://localhost:8800 server (any path)
 ```
 
@@ -174,17 +196,19 @@ re-run nor re-emitted — where the single-node version re-sends its `tool_call`
 frames for a query that never ran again. Both probes assert their own behaviour.
 
 Both sides are green in [CI](../../actions): TypeScript builds, passes the golden
-fixtures and behavioural scenarios, and runs the refund self-test; .NET builds and
-replays the **same** golden fixtures through its own `EventToFrames`, comparing
-canonical JSON byte-for-byte. That cross-language fixture run is what proves the
+fixtures and behavioural scenarios, and runs every example's self-test or probe
+(the domain scenarios included); .NET builds, replays the **same** golden fixtures
+through its own `EventToFrames`, comparing canonical JSON byte-for-byte, and runs
+its offline example probes. That cross-language fixture run is what proves the
 two implementations produce the identical wire.
 
 ## The protocol in one screen
 
 Frames are JSON with a `type` discriminator, over WebSocket. Persistent frames
-(`text`, `tool_call`, `genui`, `interrupt`, `interrupt_resolved`) carry a
-per-conversation monotonic `seq`, are stored, and replay on reconnect after a
-watermark. Transient frames (`welcome`, `run`, `error`) are live-only.
+(`text`, `tool_call`, `skill`, `genui`, `interrupt`, `interrupt_resolved`, and
+rich message frames) carry a per-conversation monotonic `seq`, are stored, and
+replay on reconnect after a watermark. Transient frames (`welcome`, `run`,
+`error`, `skills`, `genui_components`) are live-only.
 
 - **GenUI** streams as `genui` frames carrying `AIChunk`s (`ui` / `text` /
   `event`) — the same shape chativa already renders.
@@ -202,8 +226,10 @@ watermark. Transient frames (`welcome`, `run`, `error`) are live-only.
   `@ilmek/skills` / `Ilmek.Skills`), disclosed to the model progressively:
   `mekik.skillsPrompt` lists them, `mekik.loadSkill` hands back one skill's
   instructions and emits a persistent `skill` frame, and the catalog is
-  announced to the client in a hash-versioned `skills` frame. A frontend may
-  declare its own skills behind an opt-in policy.
+  announced to the client in a hash-versioned `skills` frame. A catalog entry
+  can own tools (`SkillEntry.tools` / `SkillEntry<AIFunction>.Tools`), which the
+  agent loop offers only after the model has loaded that skill successfully.
+  A frontend may declare its own skills behind an opt-in policy.
 - **MCP** (§13) runs both ways: an MCP server's tools join an agent's toolbox
   with the same trace/exactly-once/approval treatment as server tools
   (`withMcpTools`, `McpFunctions.Wrap`, over `@ilmek/mcp` / `Ilmek.Mcp`), and
@@ -232,15 +258,18 @@ See [`docs/LANGUAGES.md`](docs/LANGUAGES.md) for the naming map,
 [`docs/HITL.md`](docs/HITL.md) for the human-in-the-loop authoring rules,
 [`docs/GENUI.md`](docs/GENUI.md) for the two rendering paths (typed GenUI
 components and rich messages), [`docs/CLIENT-TOOLS.md`](docs/CLIENT-TOOLS.md)
-for client-declared tools, [`docs/SKILLS.md`](docs/SKILLS.md) for skills, and
+for client-declared tools, [`docs/SKILLS.md`](docs/SKILLS.md) for skills,
 [`docs/MCP.md`](docs/MCP.md) for MCP in both directions, and
 [`docs/A2A.md`](docs/A2A.md) for the graph as an A2A peer.
 
 ## Non-goals (v1)
 
-Horizontal scale / distributed turn lock; transports other than WebSocket; durable
-(Redis/Postgres) history stores (ports exist, in-memory ships); a `debug` stream
-mode; Go/Python ports.
+Transports other than WebSocket for the chat wire (MCP and A2A serving are
+separate doors, not transports of `mekik/1`); durable (Redis/Postgres) history
+and conversation stores (the ports exist, only the in-memory ones ship); a
+`debug` stream mode; subgraph `ns` surfacing; Go/Python ports. Horizontal scale
+is no longer a non-goal: `@mekik/redis` / `Mekik.Redis` ship a Redis turn lock
+and Pub/Sub backplane (see [`docs/SCALING.md`](docs/SCALING.md)).
 
 The client end is chativa's `@chativa/connector-mekik`, which already speaks
 `mekik/1`: it renders `interrupt` frames as approval chips (or a mounted form),
