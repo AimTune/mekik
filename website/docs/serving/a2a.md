@@ -94,7 +94,7 @@ The agent itself is always the first skill (`chat`); the app's [skills](../autho
   "metadata": { "mekik": { "conversationId": "conv-…", "status": "finished", "toolCalls": [ … ], "skills": [ … ] } } }
 ```
 
-Task state follows the turn: `completed` when the run finished (the reply is a text artifact named `reply`), `failed` on a graph error, `rejected` when the engine refused the turn (a message to a parked conversation, a second turn while one runs), `canceled` after `tasks/cancel` or when the run was aborted — and **`input-required`** when the run paused:
+Task state follows the turn: `completed` when the run finished (the reply is a text artifact named `reply`), `failed` on a graph error, `rejected` when the engine refused the turn (a message to a parked conversation, a second turn while one runs) — both carry the error in `status.message` and add no artifact — `canceled` after `tasks/cancel` or when the run was aborted — and **`input-required`** when the run paused:
 
 ```jsonc
 { "status": { "state": "input-required", "message": {

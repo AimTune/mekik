@@ -227,6 +227,26 @@ public class A2aServerTests
         Assert.StartsWith("interrupted: answer the open interrupt", FirstText(StatusMessage(rejected)!));
     }
 
+    [Fact]
+    public async Task Only_the_states_the_fixtures_replyArtifact_allows_attach_the_reply_artifact()
+    {
+        var f = (IReadOnlyDictionary<string, object?>)Json.Parse(File.ReadAllText(Fixture))!;
+        var allowed = (IReadOnlyDictionary<string, object?>)f["replyArtifact"]!;
+        var a = Agent();
+        var completed = await a.SendMessageAsync(Params(UserMessage("hi")));
+        var failed = await a.SendMessageAsync(Params(UserMessage("boom")));
+        var paused = await a.SendMessageAsync(Params(UserMessage("refund please")));
+        var rejected = await a.SendMessageAsync(Params(UserMessage("hello?", contextId: (string)paused["contextId"]!)));
+
+        foreach (var task in new[] { completed, failed, rejected })
+        {
+            var replies = ((IEnumerable<object?>)task["artifacts"]!).Cast<IReadOnlyDictionary<string, object?>>().Count(x => x["name"] as string == "reply");
+            Assert.Equal((bool)allowed[State(task)]!, replies > 0);
+        }
+        Assert.Empty((IEnumerable<object?>)failed["artifacts"]!);
+        Assert.Empty((IEnumerable<object?>)rejected["artifacts"]!);
+    }
+
     // ── tasks/get and tasks/cancel ────────────────────────────────────────────
 
     [Fact]

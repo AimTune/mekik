@@ -101,8 +101,10 @@ conversation ids are minted at random.
 [`a2a/rpc.json`](a2a/rpc.json) pins `MekikA2aServer`'s Agent Card and JSON-RPC
 surface (PROTOCOL.md §14): the card built from the fixture's `options` (the
 agent as the first skill, then the app's skills), and the error codes for unknown
-tasks, unsupported methods and bad message shapes. `message/send` results carry
-minted ids and timestamps and are asserted behaviourally.
+tasks, unsupported methods and bad message shapes, and `replyArtifact` — which
+task states attach a non-empty reply as the `reply` artifact (§14.2; never
+`failed` or `rejected`). `message/send` results carry minted ids and timestamps
+and are asserted behaviourally.
 
 ### The catalog hash fixture
 
@@ -244,7 +246,8 @@ which decodes to `null` and is dropped instead of fanned out.
     and `metadata.mekik`; a `contextId` continues the conversation with a new
     task id; a graph error is `failed` with the error text as the status
     message; a turn on a parked conversation is `rejected` with the engine's
-    `interrupted` text.
+    `interrupted` text; neither a `failed` nor a `rejected` task gets a `reply`
+    artifact (the fixture's `replyArtifact` table).
 29. **A2A input-required and resume** (§14.3) - a paused turn is
     `input-required` with an agent status message (prose + a `{pending}` data
     part) and `metadata.pending`; a text reply on the task resolves a single

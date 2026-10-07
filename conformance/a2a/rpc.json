@@ -26,6 +26,14 @@
       { "id": "pdf", "name": "pdf", "description": "Fill PDF forms.", "tags": ["docs"] }
     ]
   },
+  "replyArtifact": {
+    "description": "PROTOCOL.md §14.2: whether a turn ending in each task state attaches its non-empty reply as a `reply` artifact. A failed or rejected task never does — its reply is the error, carried by status.message.",
+    "completed": true,
+    "input-required": true,
+    "canceled": true,
+    "failed": false,
+    "rejected": false
+  },
   "cases": [
     {
       "name": "notifications get no response",
