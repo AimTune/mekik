@@ -57,11 +57,9 @@ public static class Json
                 foreach (var key in OrderKeys(dict.Keys))
                 {
                     var v = dict[key];
-                    // Drop nulls that stand in for "absent optional" so an omitted
-                    // `ui` and an explicit-null `ui` canonicalize alike — matching
-                    // JSON.stringify dropping `undefined`. Genuine null data is
-                    // rare on this wire; the mapper never emits a meaningful null.
-                    if (v is null) continue;
+                    // A null value is written, as JSON.stringify writes null: it is
+                    // data (a prop default, a JSON-RPC error's `id`). An absent
+                    // optional field is an absent key — producers omit it.
                     if (!first) sb.Append(',');
                     first = false;
                     WriteString(sb, key);
