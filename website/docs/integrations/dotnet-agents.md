@@ -118,6 +118,8 @@ static IReadOnlyList<AIFunction> Wrap(IContext ctx, IReadOnlyList<string>? tags 
 
 `load_skill` returns the instructions as the observation and emits the persistent `skill` frame. An unknown name — or one the filter hides — comes back as an error observation listing what *is* available, so the loop stays alive and the prompt and the function always agree. `AgentRunOptions.Skills` (with `SkillTags` / `SkillSource`) appends the block to `System` and adds the functions in one switch. The skill functions are not wrapped with the tool policy: a load is a catalog read that emits its own trace, not a side effect to journal.
 
+`AgentRunOptions.SkillTools` holds tools **under** a skill: keyed by skill name, they are not offered to the model until it loads that skill, then join `Tools` for the rest of the run, and the `load_skill` observation names them. A premature call is refused with an observation; the tools themselves go through `MekikTools` with the same `Policies`, and the loaded set is rebuilt from the journal on resume. See [Skills → Tools under a skill](../authoring/skills.md#tools-under-a-skill). `SkillFunctions.Wrap(ctx, tags, source, toolNames)` is the overload that names each skill's tools in the observation when you wire the loop yourself.
+
 ## Why wrapping
 
 A chat client invokes its own functions. That leaves the two gaps `Shuttle.Tool` normally closes:

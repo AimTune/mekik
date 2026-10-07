@@ -228,6 +228,53 @@ var tools = MekikTools.Wrap(ctx, serverFunctions, policies)
 
 `load_skill` returns the instructions as the tool observation and emits the `skill` frame; an unknown or filtered-out name comes back as an error observation, so the loop stays alive. See [LangChain → `withSkills`](../integrations/langchain.md#withskills--progressive-disclosure) and [Microsoft.Extensions.AI → `SkillFunctions.Wrap`](../integrations/dotnet-agents.md#skillfunctionswrap--progressive-disclosure).
 
+## Tools under a skill
+
+A node that owns many tools pays for all of them on every model call — every schema is in every request, and a long tool list makes the model pick worse. Hold the specialised ones **under a skill** instead: the model first sees only the always-on tools plus `load_skill`; loading a skill unlocks its tools from the next round on.
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
+```ts
+return {
+  reply: await runAgent(ctx, model, {
+    system, input: s.input,
+    tools: [today],                       // always offered
+    skills: true,
+    skillTools: {
+      "sprint-performance": [listIterations, getIterationPerformance],
+      "report-pdf": [generateReportPdf],
+    },
+  }),
+};
+```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
+{
+    System = system, Input = input,
+    Tools = [today],                      // always offered
+    Skills = true,
+    SkillTools = new Dictionary<string, IReadOnlyList<AIFunction>>
+    {
+        ["sprint-performance"] = [listIterations, getIterationPerformance],
+        ["report-pdf"] = [generateReportPdf],
+    },
+}));
+```
+
+</TabItem>
+</Tabs>
+
+- The skill must exist in the turn's catalog (the server's [`skills`](#configuring-the-servers-skills) or an accepted client declaration) and be visible to the node's tag/origin filter; an entry for any other skill is ignored. Its description is what the model reads in `<available_skills>` to decide when to load it.
+- Loading names the unlocked tools in the observation (`Tools now available from skill sprint-performance: list_iterations, get_iteration_performance.`).
+- A call to a skill's tool before the skill is loaded is refused with an observation naming the skill to load; the tool does not run.
+- Skill tools are ordinary server tools: the same `policy` / `Policies` apply (approval, visibility, redaction), each call is a `tool_call` trace, and calls are journaled. The set of loaded skills is derived from the journaled calls, so a resume after an approval pause offers each round exactly the tools it had before.
+- A tool may sit under several skills (any one of them unlocks it). A name that is both always-on and skill-held — or two different tools with one name — fails the run.
+
 ## Authoring the folders
 
 ```

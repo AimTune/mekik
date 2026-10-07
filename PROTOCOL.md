@@ -999,6 +999,18 @@ Both refuse a name their filter hides, so the prompt and the tool agree on the
 toolbox, and both return errors as observations. The skill tools are not
 wrapped with the tool-policy machinery: a load emits its own trace.
 
+**Tools held under a skill (agent-side, no wire change).** `runAgent({ skillTools })`
+/ `AgentRunOptions.SkillTools` map a skill name to tools that are *not offered*
+to the model until it loads that skill; from the next model round they join the
+toolbox for the rest of the run, and the `load_skill` observation appends
+`Tools now available from skill <name>: a, b.` A call to such a tool before its
+skill is loaded is answered with an observation naming the skill to load, and
+the tool does not run. Entries for skills the node's filter hides are ignored.
+The tools themselves are ordinary server tools — wrapped with the tool policy,
+traced as `tool_call`, journaled — and the active set is derived from the
+journaled calls, so a resume pass offers each round exactly the tools it had
+the first time. No frame changes: the loads still surface as `skill` frames.
+
 ### 12.7 Security model
 
 - **Off by default for the client side, allowlist on.** §12.4's opt-in is the

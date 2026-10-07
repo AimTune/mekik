@@ -34,14 +34,30 @@ public static class SkillFunctions
     public const string ReadSkillResourceTool = "read_skill_resource";
 
     /// <summary>Wrap the turn's skills (optionally tag/source-filtered) as AIFunctions.</summary>
-    public static IReadOnlyList<AIFunction> Wrap(IContext ctx, IReadOnlyList<string>? tags = null, string? source = null)
+    public static IReadOnlyList<AIFunction> Wrap(IContext ctx, IReadOnlyList<string>? tags = null, string? source = null) =>
+        Wrap(ctx, tags, source, toolNames: null);
+
+    /// <summary>
+    /// Wrap the turn's skills as AIFunctions, naming each skill's tools in the
+    /// <c>load_skill</c> observation (<see cref="AgentRunOptions.SkillTools"/>): loading such a
+    /// skill tells the model which tools it just unlocked.
+    /// </summary>
+    /// <param name="ctx">The ilmek node context.</param>
+    /// <param name="tags">Tag filter, as for <see cref="Shuttle.Skills"/>.</param>
+    /// <param name="source">Origin filter (<see cref="SkillOrigin.Server"/> / <see cref="SkillOrigin.Client"/>).</param>
+    /// <param name="toolNames">Skill name → the names of the tools held under it.</param>
+    public static IReadOnlyList<AIFunction> Wrap(
+        IContext ctx,
+        IReadOnlyList<string>? tags,
+        string? source,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? toolNames)
     {
         ArgumentNullException.ThrowIfNull(ctx);
         var visible = Shuttle.Skills(ctx, tags, source);
         if (visible.Count == 0) return [];
         var names = new HashSet<string>(visible.Select(s => s.Name), StringComparer.Ordinal);
 
-        var functions = new List<AIFunction> { new LoadSkillFunction(ctx, names) };
+        var functions = new List<AIFunction> { new LoadSkillFunction(ctx, names, toolNames) };
         if (Shuttle.SkillResourcesAvailable(ctx)) functions.Add(new ReadSkillResourceFunction(ctx, names));
         return functions;
     }
@@ -55,7 +71,19 @@ public static class SkillFunctions
             var other => other.ToString() ?? "",
         };
 
-    private sealed class LoadSkillFunction(IContext ctx, HashSet<string> names) : AIFunction
+    /// <summary>The <c>load_skill</c> observation: the instructions, plus the tools the load unlocked.</summary>
+    internal static string LoadObservation(string name, string instructions, IReadOnlyList<string>? tools)
+    {
+        var body = instructions.Length > 0 ? instructions : $"(skill {name} has no instructions)";
+        return tools is { Count: > 0 }
+            ? $"{body}\n\nTools now available from skill {name}: {string.Join(", ", tools)}."
+            : body;
+    }
+
+    private sealed class LoadSkillFunction(
+        IContext ctx,
+        HashSet<string> names,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? toolNames) : AIFunction
     {
         private static readonly JsonElement Schema = JsonDocument.Parse("""
             {"type":"object","properties":{"name":{"type":"string","description":"The skill's name, exactly as listed in <available_skills>."}},"required":["name"]}
@@ -74,7 +102,7 @@ public static class SkillFunctions
             try
             {
                 var skill = Shuttle.LoadSkill(ctx, name);
-                return new ValueTask<object?>(skill.Instructions.Length > 0 ? skill.Instructions : $"(skill {name} has no instructions)");
+                return new ValueTask<object?>(LoadObservation(name, skill.Instructions, toolNames?.GetValueOrDefault(name)));
             }
             catch (Exception ex)
             {
