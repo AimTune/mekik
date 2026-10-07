@@ -41,6 +41,8 @@ import {
     ScriptedModel,
     section,
     seqOf,
+    skillsCatalog,
+    skillUses,
     traces,
     uiChunks,
     user,
@@ -255,9 +257,6 @@ function makeApp() {
 
 // ── the probe ─────────────────────────────────────────────────────────────────
 
-function skillFrames(frames: OutgoingFrame[]) {
-    return frames.filter((f): f is Extract<OutgoingFrame, { type: "skill" }> => f.type === "skill");
-}
 
 async function fileClaim(app: ReturnType<typeof makeApp>, c: Collector, form: ClaimForm): Promise<OutgoingFrame[]> {
     user("I'd like to file a claim");
@@ -284,8 +283,8 @@ async function probe(): Promise<void> {
     const hello = c.drain();
 
     section("0. connect — the skill catalog is announced, level 1 only");
-    const catalog = hello.find((f) => f.type === "skills");
-    check(catalog?.type === "skills" && catalog.skills?.length === 3, "a `skills` frame lists the 3 server skills");
+    const catalog = skillsCatalog(hello);
+    check(catalog?.skills?.length === 3, "a `skills` frame lists the 3 server skills");
     check(!JSON.stringify(catalog).includes("Payout = estimate"), "instructions never travel in the catalog");
 
     // ── 1–2. a covered claim: the skill is loaded mid-run ─────────────────────
@@ -308,7 +307,7 @@ async function probe(): Promise<void> {
     });
 
     check(traces(t, "lookup_policy")[0]?.data.params?.policyNumber === "POL-1001", "the form's values reach the policy lookup");
-    const skills = skillFrames(t);
+    const skills = skillUses(t);
     check(skills.length === 1 && skills[0]!.data.name === "water-damage-assessment", "one `skill` frame: water-damage-assessment");
     check(skills[0]!.data.status === "loaded" && skills[0]!.data.source === "server", "loaded from the server catalog");
     const lookupSeq = seqOf(traces(t, "lookup_policy")[0]!)!;
@@ -356,7 +355,7 @@ async function probe(): Promise<void> {
         description: "River overflowed into the basement.",
     });
 
-    const loaded = skillFrames(t).map((f) => f.data.name);
+    const loaded = skillUses(t).map((f) => f.data.name);
     check(loaded.join("|") === "rejection-letter", "this time the rejection-letter skill is loaded");
     check(
         model.observations.assess?.some((o) => o.startsWith("Error:") && o.includes("schema")) === true,

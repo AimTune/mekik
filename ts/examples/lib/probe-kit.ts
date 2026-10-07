@@ -23,7 +23,7 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/
 import type { BaseMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 
-import type { Connection, OutgoingFrame } from "@mekik/core";
+import type { Connection, ErrorFrame, OutgoingFrame, RunFrame, SkillFrame, SkillsFrame, TextOutFrame, WelcomeFrame } from "@mekik/core";
 
 // ── the model seam ────────────────────────────────────────────────────────────
 
@@ -212,19 +212,34 @@ export function interrupts(frames: OutgoingFrame[]): InterruptFrame[] {
     return frames.filter((f): f is InterruptFrame => f.type === "interrupt");
 }
 
+// A rich message frame's `type` is an open string (PROTOCOL.md §4.5), so the
+// discriminant alone does not narrow the union: these finders cast after matching.
+
 export function botText(frames: OutgoingFrame[]): string | undefined {
-    const f = frames.find((x) => x.type === "text" && x.from === "bot");
-    return f?.type === "text" ? f.data.text : undefined;
+    const f = frames.find((x) => x.type === "text" && x.from === "bot") as TextOutFrame | undefined;
+    return f?.data.text;
 }
 
 export function runStatus(frames: OutgoingFrame[]): string | undefined {
-    const f = [...frames].reverse().find((x) => x.type === "run");
-    return f?.type === "run" ? f.data.status : undefined;
+    const f = [...frames].reverse().find((x) => x.type === "run") as RunFrame | undefined;
+    return f?.data.status;
 }
 
 export function errorCode(frames: OutgoingFrame[]): string | undefined {
-    const f = frames.find((x) => x.type === "error");
-    return f?.type === "error" ? f.data.code : undefined;
+    const f = frames.find((x) => x.type === "error") as ErrorFrame | undefined;
+    return f?.data.code;
+}
+
+export function welcomeOf(frames: OutgoingFrame[]): WelcomeFrame | undefined {
+    return frames.find((x) => x.type === "welcome") as WelcomeFrame | undefined;
+}
+
+export function skillsCatalog(frames: OutgoingFrame[]): SkillsFrame | undefined {
+    return frames.find((x) => x.type === "skills") as SkillsFrame | undefined;
+}
+
+export function skillUses(frames: OutgoingFrame[]): SkillFrame[] {
+    return frames.filter((x) => x.type === "skill") as SkillFrame[];
 }
 
 /** The persistent `seq` of a frame, if it has one. */
@@ -257,12 +272,14 @@ export function describe(frames: OutgoingFrame[]): void {
             else if (d.status === "error") console.log(`  ✗ ${d.name} error: ${d.error}`);
             else console.log(`  ← ${d.name} ${truncate(JSON.stringify(d.result ?? null))}`);
         } else if (f.type === "skill") {
-            console.log(`  ✦ skill ${f.data.name} ${f.data.status}`);
+            const d = (f as SkillFrame).data;
+            console.log(`  ✦ skill ${d.name} ${d.status}`);
         } else if (f.type === "genui" && "chunk" in f && f.chunk.type === "ui") {
             console.log(`  ▦ ${f.chunk.component}`);
         } else if (f.type === "interrupt") {
-            const tool = f.data.tool ? ` (client tool ${f.data.tool.name})` : "";
-            console.log(`  ⏸ interrupt${tool} ${truncate(JSON.stringify(f.data.payload))}`);
+            const d = (f as InterruptFrame).data;
+            const tool = d.tool ? ` (client tool ${d.tool.name})` : "";
+            console.log(`  ⏸ interrupt${tool} ${truncate(JSON.stringify(d.payload))}`);
         } else if (f.type === "interrupt_resolved") {
             console.log(`  ▶ resolved`);
         } else if (f.type === "text" && f.from === "bot") {

@@ -49,6 +49,7 @@ import {
     traces,
     uiChunks,
     user,
+    welcomeOf,
 } from "../lib/probe-kit.ts";
 
 // ── the clinic ────────────────────────────────────────────────────────────────
@@ -253,8 +254,7 @@ async function probe(): Promise<void> {
     const app = makeApp();
     const tab = new Collector("conn-portal-1");
     await app.connect(tab, { hello: { token: "portal-session-ada", tools: DECLARED } });
-    const welcome = tab.drain().find((f) => f.type === "welcome");
-    const conversationId = welcome?.type === "welcome" ? welcome.data.conversationId : "";
+    const conversationId = welcomeOf(tab.drain())?.data.conversationId ?? "";
 
     // ── 1. intake, redacted ───────────────────────────────────────────────────
     section("1. intake — the model reads the record, the wire gets «redacted»");

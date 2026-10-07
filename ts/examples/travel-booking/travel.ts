@@ -48,6 +48,7 @@ import {
     traces,
     uiChunks,
     user,
+    welcomeOf,
 } from "../lib/probe-kit.ts";
 
 // ── the travel provider ───────────────────────────────────────────────────────
@@ -216,9 +217,7 @@ async function probe(): Promise<void> {
     const app = makeApp();
     const tab = new Collector("conn-travel-1");
     await app.connect(tab, { hello: { userId: "traveller-1" } });
-    const hello = tab.drain();
-    const welcome = hello.find((f) => f.type === "welcome");
-    const conversationId = welcome?.type === "welcome" ? welcome.data.conversationId : "";
+    const conversationId = welcomeOf(tab.drain())?.data.conversationId ?? "";
 
     // ── 1. search → compare ───────────────────────────────────────────────────
     section("1. search → compare — offers as a genui-table, the pick as chips");
@@ -253,10 +252,10 @@ async function probe(): Promise<void> {
     const tab2 = new Collector("conn-travel-2");
     await app.connect(tab2, { hello: { userId: "traveller-1", conversationId, watermark } });
     const back = tab2.drain();
-    const w2 = back.find((f) => f.type === "welcome");
-    check(w2?.type === "welcome" && w2.data.conversationId === conversationId, "the reconnect resumes the same conversation");
-    check(w2?.type === "welcome" && w2.data.watermark === maxSeq(lost), `welcome reports the server's watermark (${maxSeq(lost)})`);
-    const pending = w2?.type === "welcome" ? w2.data.pending : [];
+    const w2 = welcomeOf(back);
+    check(w2?.data.conversationId === conversationId, "the reconnect resumes the same conversation");
+    check(w2?.data.watermark === maxSeq(lost), `welcome reports the server's watermark (${maxSeq(lost)})`);
+    const pending = w2?.data.pending ?? [];
     check(pending.length === 1 && pending[0]!.id === approval!.id, "welcome.pending re-announces the open approval, same id");
     const replay = persistent(back);
     const seqs = replay.map((f) => seqOf(f)!);
