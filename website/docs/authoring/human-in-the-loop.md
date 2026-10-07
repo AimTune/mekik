@@ -290,7 +290,7 @@ The pause is an ordinary `interrupt` frame — chativa renders chips or a form, 
 
 ## .NET note
 
-In .NET the pause propagates as an `InterruptSignalException`. Any `try/catch` around node work **must rethrow** it (`Shuttle.Tool` does) — a blanket `catch (Exception)` would swallow the pause. See [Parity](../parity/languages.md#the-five-deliberate-divergences).
+In .NET the pause propagates as an `InterruptSignalException`. Any `try/catch` around node work **must rethrow** it (`Shuttle.Tool` does) — a blanket `catch (Exception)` would swallow the pause. See [Parity](../parity/languages.md#the-six-deliberate-divergences).
 
 ### Stopping the debugger from breaking on every pause
 

@@ -67,7 +67,7 @@ mekik ships two implementations that speak the identical `mekik/1` wire: **TypeS
 
 The pattern is mechanical: a TS interface `Foo` becomes .NET `IFoo`; a TS free function `foo()` becomes a `PascalCase` method, `Async`-suffixed where it awaits. If you know one side, you can read the other.
 
-## The six deliberate divergences {#the-five-deliberate-divergences}
+## The six deliberate divergences
 
 Where the two can't be mechanically identical, they diverge on purpose. Six cases:
 

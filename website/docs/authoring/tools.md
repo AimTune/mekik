@@ -133,7 +133,7 @@ The full authoring contract is in [Human-in-the-loop → exactly-once](./human-i
 
 ## Interrupts are not tool failures
 
-If a tool's `fn` triggers a pause (say it calls `ctx.interrupt` internally), `mekik.tool` **rethrows** the interrupt untouched rather than reporting it as a `tool_call{error}`. A pause is a control-flow signal, not a failure. In .NET this is the load-bearing rethrow rule — an interrupt propagates as `InterruptSignalException`, and a blanket `catch (Exception)` in a tool wrapper would swallow the pause. `Shuttle.Tool` rethrows it; so does `mekik.tool` in TS (via `isInterrupt`). See [Parity](../parity/languages.md#the-five-deliberate-divergences).
+If a tool's `fn` triggers a pause (say it calls `ctx.interrupt` internally), `mekik.tool` **rethrows** the interrupt untouched rather than reporting it as a `tool_call{error}`. A pause is a control-flow signal, not a failure. In .NET this is the load-bearing rethrow rule — an interrupt propagates as `InterruptSignalException`, and a blanket `catch (Exception)` in a tool wrapper would swallow the pause. `Shuttle.Tool` rethrows it; so does `mekik.tool` in TS (via `isInterrupt`). See [Parity](../parity/languages.md#the-six-deliberate-divergences).
 
 ## Journaled results must round-trip
 

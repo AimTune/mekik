@@ -126,7 +126,7 @@ Two of these are process-local by design — the live-connection set and the tur
 
 ## The `.NET` shape
 
-The .NET architecture is the same diagram with `Mekik.AspNetCore` in the transport box instead of `@mekik/ws`, and `Shuttle` helpers instead of `mekik.*`. The one implementation-level divergence worth knowing: an interrupt propagates as an `InterruptSignalException`, so any `try/catch` around node work must rethrow it — a blanket `catch (Exception)` would swallow the pause. `Shuttle.Tool` does this for you. See [Parity → TypeScript ↔ .NET](./parity/languages.md#the-five-deliberate-divergences).
+The .NET architecture is the same diagram with `Mekik.AspNetCore` in the transport box instead of `@mekik/ws`, and `Shuttle` helpers instead of `mekik.*`. The one implementation-level divergence worth knowing: an interrupt propagates as an `InterruptSignalException`, so any `try/catch` around node work must rethrow it — a blanket `catch (Exception)` would swallow the pause. `Shuttle.Tool` does this for you. See [Parity → TypeScript ↔ .NET](./parity/languages.md#the-six-deliberate-divergences).
 
 ## Where to go next
 

@@ -63,7 +63,7 @@ using Ilmek;
 
 ## The one name, two ways
 
-In TypeScript the single `mekik` export is both the **app factory** and the **helpers** — `index.ts` folds the helper functions onto the callable factory, so both read naturally. In .NET they split: the app is `MekikApp`, and the helpers live on a static `Shuttle` class (a static class named `Mekik` would clash with the namespace — see [Parity](../parity/languages.md#the-five-deliberate-divergences)).
+In TypeScript the single `mekik` export is both the **app factory** and the **helpers** — `index.ts` folds the helper functions onto the callable factory, so both read naturally. In .NET they split: the app is `MekikApp`, and the helpers live on a static `Shuttle` class (a static class named `Mekik` would clash with the namespace — see [Parity](../parity/languages.md#the-six-deliberate-divergences)).
 
 <Tabs groupId="lang">
 <TabItem value="ts" label="TypeScript">
