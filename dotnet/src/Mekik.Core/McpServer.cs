@@ -25,7 +25,7 @@ public sealed class McpArgumentException(string message) : Exception(message);
 /// <c>&lt;name&gt;</c> runs a turn, <c>&lt;name&gt;__resume</c> answers a paused one —
 /// over any JSON-RPC transport. Transport-agnostic: it drives the engine through an
 /// in-process <see cref="IConnection"/>, exactly as the conformance suite does.
-/// <see cref="MekikAspNetCore.MapMekikMcp"/> puts it behind Streamable HTTP. Mirror of
+/// <c>Mekik.AspNetCore</c>'s <c>MapMekikMcp</c> puts it behind Streamable HTTP. Mirror of
 /// TypeScript's <c>MekikMcpServer</c>.
 /// </summary>
 public sealed class MekikMcpServer
@@ -350,7 +350,9 @@ public sealed class MekikMcpServer
     {
         if (p.GetValueOrDefault("tool") is string tool) return $"a client tool call ({tool}) that only the conversation's own UI can answer";
         var payload = p.GetValueOrDefault("payload");
-        var text = payload is IReadOnlyDictionary<string, object?> or System.Collections.IList ? Json.Canonicalize(payload) : payload?.ToString() ?? "null";
+        // A string reads as itself; anything else as its canonical JSON — culture-free, and
+        // what TypeScript's String()/JSON.stringify print (249.9, true, null), never "249,9" or "True".
+        var text = payload is string str ? str : Json.Canonicalize(payload);
         if (p.GetValueOrDefault("actions") is IEnumerable<object?> actions)
         {
             var options = actions.OfType<IReadOnlyDictionary<string, object?>>()

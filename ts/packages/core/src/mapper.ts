@@ -236,6 +236,17 @@ export class TurnMapper {
         }
     }
 
+    /**
+     * Close a run whose event stream threw instead of yielding its own `run_end`
+     * (a recursion limit, a checkpointer failure). Same frames as
+     * `run_end{error}` — a `⚠️` bot text then `run{error}` — so a started run
+     * always ends on a terminal `run` frame (PROTOCOL.md §4.1).
+     */
+    fail(error: unknown): OutgoingFrame[] {
+        const message = error instanceof Error ? error.message : String(error);
+        return [this.botText(`⚠️ ${message}`), { type: "run", data: { status: "error" } }];
+    }
+
     private interruptFrame(p: Pending): InterruptFrame {
         return { type: "interrupt", seq: this.deps.allocSeq(), id: p.id, data: interruptFrameData(p) };
     }

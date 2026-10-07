@@ -191,6 +191,15 @@ interface ConnState {
     conn: Connection;
     userId: string;
     claims?: Record<string, unknown>;
+    /** This connection's `hello.meta` (§6) — laid under each turn's frame meta before the allowlist sees it. */
+    helloMeta?: Record<string, unknown>;
+    /**
+     * Live frames that arrived while this connection's replay tail was still being
+     * read (§2). Flushed — minus anything the tail already carried — once the tail
+     * is sent, so a tab joining mid-stream never sees a seq twice or out of order.
+     * Null once the handshake is done.
+     */
+    backlog: OutgoingFrame[] | null;
     /**
      * The tools this connection declared (§11.1), already sanitized and passed
      * through the {@link ClientToolsPolicy}. `stamp` orders declarations across
@@ -250,7 +259,13 @@ export class ConversationEngine {
         const { conversationId, watermarkReset } = await this.resolveConversation(hello.conversationId, userId);
 
         const live = await this.ensureLive(conversationId);
-        const state: ConnState = { conn, userId, ...(claims ? { claims } : {}) };
+        const state: ConnState = {
+            conn,
+            userId,
+            backlog: [],
+            ...(claims ? { claims } : {}),
+            ...(isRecord(hello.meta) ? { helloMeta: hello.meta } : {}),
+        };
         live.connections.set(conn.id, state);
         this.connIndex.set(conn.id, conversationId);
 
@@ -304,6 +319,18 @@ export class ConversationEngine {
         const clientWatermark = watermarkReset ? 0 : hello.watermark ?? 0;
         const tail = await this.cfg.history.after(conversationId, clientWatermark);
         for (const frame of tail) conn.send(frame);
+
+        // Frames dispatched while the handshake was in flight were held back (see
+        // fanOutLocal). The tail was read after some of them were recorded, so it
+        // may already carry them: drop any persistent frame at or below the last
+        // replayed seq and send the rest, in order.
+        const replayedTo = tail.length > 0 ? tail[tail.length - 1]!.seq : clientWatermark;
+        const backlog = state.backlog ?? [];
+        state.backlog = null;
+        for (const frame of backlog) {
+            if (isPersistent(frame) && frame.seq <= replayedTo) continue;
+            conn.send(frame);
+        }
 
         // A fresh conversation (nothing in the transcript yet) gets a one-time bot
         // greeting. Persisted like any bot frame, so a later reconnect replays it
@@ -454,6 +481,10 @@ export class ConversationEngine {
         body: (live: Live, state: ConnState, signal: AbortSignal) => Promise<void>,
     ): Promise<void> {
         const live = this.live.get(convId)!;
+        // Read the sender's state now, synchronously: a tab may send and close at
+        // once, and the turn it asked for still belongs to the conversation.
+        const state = live.connections.get(conn.id);
+        if (!state) return;
         if (live.turn) {
             conn.send({ type: "error", data: { code: "busy", message: "a run is already in flight" } });
             return;
@@ -471,10 +502,16 @@ export class ConversationEngine {
                 conn.send({ type: "error", data: { code: "busy", message: "a run is already in flight" } });
                 return;
             }
-            await body(live, live.connections.get(conn.id)!, abort.signal);
+            await body(live, state, abort.signal);
         } finally {
-            if (lease) await lease.release();
-            live.turn = null;
+            // Free the local lock even when the lease release fails (a Redis blip):
+            // the remote lease has a TTL, but a stuck `live.turn` would answer
+            // `busy` on this node forever.
+            try {
+                if (lease) await lease.release();
+            } finally {
+                live.turn = null;
+            }
         }
     }
 
@@ -498,7 +535,7 @@ export class ConversationEngine {
             }, conn.id);
 
             const turn = { text: frame.data.text, ...(frame.meta !== undefined ? { meta: frame.meta } : {}) };
-            const meta = this.buildMeta(convId, state.userId, turn, state.claims);
+            const meta = this.buildMeta(convId, state, turn);
             const input = this.cfg.input(frame);
             await this.drive(convId, live, this.cfg.adapter.run(input, { threadId: convId, meta, signal }));
         });
@@ -528,7 +565,7 @@ export class ConversationEngine {
                 await this.dispatch(convId, { type: "interrupt_resolved", seq: ++live.seq, id: p.id, data: { answer: frame.answers[p.id] } });
             }
 
-            const meta = this.buildMeta(convId, state.userId, { text: "" }, state.claims);
+            const meta = this.buildMeta(convId, state, { text: "" });
             await this.drive(convId, live, this.cfg.adapter.resume(frame.answers, { threadId: convId, meta, signal }));
         });
     }
@@ -598,7 +635,7 @@ export class ConversationEngine {
 
             // No `text` frame is dispatched: a click is not something the user said,
             // and the transcript already carries the widget it came from.
-            const meta = this.buildMeta(convId, turnState.userId, { text: "" }, turnState.claims);
+            const meta = this.buildMeta(convId, turnState, { text: "" });
             await this.drive(convId, live, this.cfg.adapter.run(input, { threadId: convId, meta, signal }));
         });
     }
@@ -611,8 +648,23 @@ export class ConversationEngine {
             now: this.cfg.now,
             ...(this.cfg.reply ? { reply: this.cfg.reply } : {}),
         });
-        for await (const ev of events) {
-            for (const out of mapper.map(ev)) await this.dispatch(convId, out);
+        let started = false;
+        let ended = false;
+        try {
+            for await (const ev of events) {
+                if (ev.type === "run_start") started = true;
+                if (ev.type === "run_end") ended = true;
+                for (const out of mapper.map(ev)) await this.dispatch(convId, out);
+            }
+        } catch (err) {
+            // A stream that throws mid-run (ilmek's recursion limit, a failing
+            // checkpointer) never yields its run_end. Every tab already saw
+            // run{started}, so close the run on the wire as an error rather than
+            // leave them spinning; it is a failure inside the graph, not of the
+            // transport (§4.1, §13.2). A stream that fails before it started has
+            // put nothing on the wire — let the caller see that one.
+            if (!started || ended) throw err;
+            for (const out of mapper.fail(err)) await this.dispatch(convId, out);
         }
     }
 
@@ -633,23 +685,28 @@ export class ConversationEngine {
     private fanOutLocal(convId: string, frame: OutgoingFrame, exceptConnId?: string): void {
         const live = this.live.get(convId);
         if (!live) return;
-        for (const { conn } of live.connections.values()) {
-            if (exceptConnId !== undefined && conn.id === exceptConnId) continue;
-            conn.send(frame);
+        for (const state of live.connections.values()) {
+            if (exceptConnId !== undefined && state.conn.id === exceptConnId) continue;
+            // Still handshaking: hold the frame until welcome and the replay tail are out.
+            if (state.backlog !== null) state.backlog.push(frame);
+            else state.conn.send(frame);
         }
     }
 
     private buildMeta(
         convId: string,
-        userId: string,
+        state: ConnState,
         turn: { text: string; meta?: Record<string, unknown> },
-        claims: Record<string, unknown> | undefined,
     ): Record<string, unknown> {
+        const { userId, claims, helloMeta } = state;
         const meta: Record<string, unknown> = {};
         if (this.cfg.context) meta.mekik = this.cfg.context({ conversationId: convId, userId }, turn);
         if (claims) meta.auth = claims;
-        if (this.cfg.acceptClientMeta && turn.meta) {
-            const client = this.cfg.acceptClientMeta(turn.meta);
+        // Client meta is this connection's `hello.meta` with the frame's own `meta`
+        // laid over it per key (§6); only the allowlisted subset survives.
+        const clientMeta = helloMeta !== undefined || turn.meta !== undefined ? { ...helloMeta, ...turn.meta } : undefined;
+        if (this.cfg.acceptClientMeta && clientMeta) {
+            const client = this.cfg.acceptClientMeta(clientMeta);
             if (client !== undefined) meta.client = client;
         }
         // The turn's client-tool snapshot (§11.2): taken here, at run start, so a
@@ -707,4 +764,8 @@ export function randomMinter(): IdMinter {
     let n = 0;
     const rid = (): string => `${randomBytes(6).toString("base64url")}-${n++}`;
     return { message: () => `msg-${rid()}`, stream: () => `stream-${rid()}` };
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+    return typeof v === "object" && v !== null && !Array.isArray(v);
 }

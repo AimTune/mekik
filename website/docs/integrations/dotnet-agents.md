@@ -30,6 +30,8 @@ using Mekik.Agents;
 
 The loop is budgeted by `MaxTurns` — model↔tool round-trips, default 25. Individual tool invocations do **not** consume turns: a round that fires five tools still costs one turn. `MaxToolCalls` (default 25) separately caps total tool invocations; rather than cutting a batch off halfway, the loop settles with `BudgetReply` before executing a batch that would overrun the cap. Node-level looping stays budgeted by ilmek's `RecursionLimit`, which tool calls never consume.
 
+**A failing call is an observation, not a crash.** A call to a function the agent does not have reads `Unknown tool <name>.`; arguments that fail `AIFunction` binding, or a function that throws, read `Error from <tool>: <message>` — traced `running → error` by the wrapper — and the model gets another round to react. An `InterruptSignalException` (an approval, a client tool call) and an abort's cancellation still propagate.
+
 You return the result as your node's reply (`Update.Of("reply", …)`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `RunAsync` returns an **empty string** — `Update.Of("reply", "")` emits nothing extra, no duplicate. With `Stream = false`, it returns the full text for the consolidated `text` reply. A model's function-call arguments and results (which `AIFunctionFactory` marshals through `System.Text.Json` as `JsonElement`) are canonicalized into the trace automatically — no plain-value converter needed. Reach for [`MekikTools.Wrap`](#mekiktoolswrap) directly when you need to drive the loop yourself.
 
 ## `MekikTools.Wrap`
@@ -172,6 +174,8 @@ var target = await Agent.RouteAsync(ctx, chat,
 
 return Command.Create(Update.Of("route", target), target); // set channel + goto node
 ```
+
+Normalization is case- and punctuation-insensitive. An answer that *is* a route name wins outright; otherwise the **longest** route name the answer mentions wins, so with routes `report` and `reporting` an answer of `reporting` is never captured by `report`. An answer naming no route goes to `fallback`, or the last route.
 
 **No sampling options are sent unless you ask for them.** Reasoning models (gpt-5.x and friends) reject any explicitly-set `temperature` with an HTTP 400, so a router that pinned `temperature: 0` would fail *every* classification instead of merely varying — the turn would then land on whatever fallback node you gave it. `RouteAsync` therefore calls the model with no `ChatOptions` at all; determinism is not load-bearing here, because the prompt pins the answer to one word and an off-list answer falls back. Pass `temperature:` when your model accepts it:
 

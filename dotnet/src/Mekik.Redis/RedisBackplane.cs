@@ -63,7 +63,14 @@ public sealed class RedisBackplane : IBackplane
             Wire? wire;
             try { wire = JsonSerializer.Deserialize<Wire>(value.ToString(), Json); }
             catch (JsonException) { return; } // ignore anything that isn't a well-formed message
-            if (wire is not null) handler(new BackplaneMessage(wire.OriginId, wire.Frame));
+            if (wire?.OriginId is null || wire.Frame is null) return;
+            // STJ hands object-typed values back as JsonElement; fold them into the
+            // plain shape a locally produced frame has (long seq, string type, …), so
+            // the engine reads a relayed frame exactly like one of its own.
+            var frame = wire.Frame.ToDictionary(
+                kv => kv.Key,
+                kv => kv.Value is JsonElement je ? Mekik.Json.FromElement(je) : kv.Value);
+            handler(new BackplaneMessage(wire.OriginId, frame));
         }
 
         await _sub.SubscribeAsync(channel, OnMessage).ConfigureAwait(false);

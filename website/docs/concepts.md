@@ -192,7 +192,7 @@ A node reads context via ilmek's `ctx.meta`. mekik populates three merged source
 | `ctx.meta.*` | Source | Set by |
 |---|---|---|
 | `meta.mekik` | server-computed per turn | `MekikOptions.context(conv, turn)` |
-| `meta.client` | allowlisted subset of the client's `hello.meta` / frame `meta` | `MekikOptions.acceptClientMeta` (default: drop everything) |
+| `meta.client` | allowlisted subset of the connection's `hello.meta` with the turn frame's `meta` laid over it per key | `MekikOptions.acceptClientMeta` (default: drop everything) |
 | `meta.auth` | verified claims from the `Authenticator` | the auth port, on success |
 
 This is the whole story of "how does my node know *which* user this is?" — the answer never involves the graph importing anything from mekik. mekik puts the data on `ctx.meta`; the node reads it. See [Authentication](./authentication.md) for `meta.auth`.

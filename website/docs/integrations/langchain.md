@@ -62,6 +62,8 @@ function runAgent(
 
 The loop is budgeted twice. `maxTurns` counts **model rounds** — how many times the model may run again after calling tools, default 25. Individual tool invocations do **not** consume turns: a round that fires five tools still costs one turn. `maxToolCalls` (default 25) separately caps total tool invocations across the run; rather than cutting a batch off halfway, the loop settles with `budgetReply` before executing a batch that would overrun the cap. Node-level looping stays budgeted by ilmek's `recursionLimit`, which tool calls never consume.
 
+**A failing tool call is an observation, not a crash.** A call to a tool the agent does not have reads `Unknown tool <name>.`; a call whose arguments fail the tool's schema, or a tool that throws, reads `Error from <tool>: <message>` — the tool does not run (or its error is caught), the call is traced `running → error`, and the model gets another round to react. Only an interrupt (an approval, a client tool call) leaves the loop, by parking the run.
+
 You return the result as your node's reply (`{ reply }`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `runAgent` returns an **empty string** — `{ reply: "" }` emits nothing extra, no duplicate. With `stream: false`, it returns the full text for the consolidated `text` reply. Reach for [`withMekikTools`](#withmekiktools) directly when you need to drive the loop yourself (a custom agent framework, a non-standard message shape).
 
 ## `withMekikTools`
@@ -259,6 +261,8 @@ import { route } from "@mekik/langchain";
   return command(update({ route: target }), target); // set channel + goto node
 })
 ```
+
+Normalization is case- and punctuation-insensitive. An answer that *is* a route name wins outright; otherwise the **longest** route name the answer mentions wins, so with routes `report` and `reporting` an answer of `reporting` is never captured by `report`. An answer naming no route goes to `fallback`, or the last route.
 
 ## Where to go next
 

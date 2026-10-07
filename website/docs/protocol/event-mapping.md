@@ -48,6 +48,8 @@ Most of these produce **nothing** in v1. The mapper cares about four: `run_start
 
 Order within a run is the order ilmek yields events; the mapper preserves it. The terminal `run{...}` frame is always the last frame of its run.
 
+That holds even when the event stream itself throws mid-run instead of yielding a `run_end` — ilmek's recursion limit (`recursionLimit` / `RecursionLimit`) or a failing checkpointer. Every tab has already seen `run{started}`, so the engine closes the run exactly as `run_end{error}` would: a persistent `⚠️` bot `text` carrying the exception's message, then `run{error}`. Over [MCP](../serving/mcp.md) such a turn is a result with `isError`, not a JSON-RPC error.
+
 ## Why authoring helpers exist
 
 You never write those `custom` payloads by hand. The [authoring helpers](../authoring/helpers.md) produce them:

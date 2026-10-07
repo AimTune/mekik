@@ -125,6 +125,15 @@ public sealed class TurnMapper
         }
     }
 
+    /// <summary>
+    /// Close a run whose event stream threw instead of yielding its own <c>run_end</c>
+    /// (a recursion limit, a checkpointer failure). Same frames as <c>run_end{error}</c> —
+    /// a <c>⚠️</c> bot text then <c>run{error}</c> — so a started run always ends on a
+    /// terminal <c>run</c> frame (PROTOCOL.md §4.1). Mirror of TypeScript <c>fail</c>.
+    /// </summary>
+    public IReadOnlyList<Dictionary<string, object?>> Fail(Exception error) =>
+        [BotText("⚠️ " + error.Message), Run("error")];
+
     private Dictionary<string, object?> InterruptFrame(Pending p) => new()
     {
         ["type"] = "interrupt",

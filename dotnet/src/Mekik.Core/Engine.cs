@@ -110,7 +110,7 @@ public sealed record EngineConfig
 /// <summary>
 /// The ConversationEngine (PROTOCOL.md §1, §5), mirror of the TypeScript engine.
 /// Transport-agnostic: it talks to <see cref="IConnection"/> handles.
-/// <see cref="MekikAspNetCore"/> supplies WebSocket connections; the conformance
+/// <c>Mekik.AspNetCore</c>'s <c>MapMekik</c> supplies WebSocket connections; the conformance
 /// suite supplies in-memory ones.
 /// </summary>
 public sealed class ConversationEngine
@@ -120,6 +120,17 @@ public sealed class ConversationEngine
         public required IConnection Conn { get; init; }
         public required string UserId { get; init; }
         public IReadOnlyDictionary<string, object?>? Claims { get; init; }
+        /// <summary>This connection's <c>hello.meta</c> (§6) — laid under each turn's frame meta before the allowlist sees it.</summary>
+        public IReadOnlyDictionary<string, object?>? HelloMeta { get; init; }
+        /// <summary>
+        /// Live frames that arrived while this connection's replay tail was still being
+        /// read (§2). Flushed — minus anything the tail already carried — once the tail
+        /// is sent, so a tab joining mid-stream never sees a seq twice or out of order.
+        /// Null once the handshake is done. Guarded by <see cref="Live.Gate"/>.
+        /// </summary>
+        public List<IReadOnlyDictionary<string, object?>>? Backlog { get; set; } = new();
+        /// <summary>The highest seq the replay tail carried; a later live copy of one of those is not re-sent.</summary>
+        public long ReplayedThrough { get; set; }
         /// <summary>
         /// The tools this connection declared (§11.1), already sanitized and passed
         /// through the <see cref="ClientToolsPolicy"/>. <c>Stamp</c> orders
@@ -181,7 +192,7 @@ public sealed class ConversationEngine
         var (conversationId, watermarkReset) = await ResolveConversationAsync(hello.ConversationId, userId).ConfigureAwait(false);
 
         var live = await EnsureLiveAsync(conversationId).ConfigureAwait(false);
-        var state = new ConnState { Conn = conn, UserId = userId, Claims = claims };
+        var state = new ConnState { Conn = conn, UserId = userId, Claims = claims, HelloMeta = hello.Meta };
         lock (live.Gate)
         {
             live.Connections[conn.Id] = state;
@@ -239,8 +250,26 @@ public sealed class ConversationEngine
         }
 
         var clientWatermark = watermarkReset ? 0 : hello.Watermark ?? 0;
-        foreach (var frame in await _cfg.History.AfterAsync(conversationId, clientWatermark).ConfigureAwait(false))
-            conn.Send(frame);
+        var tail = await _cfg.History.AfterAsync(conversationId, clientWatermark).ConfigureAwait(false);
+        foreach (var frame in tail) conn.Send(frame);
+
+        // Frames dispatched while the handshake was in flight were held back (see
+        // FanOutLocal). The tail was read after some of them were recorded, so it may
+        // already carry them: drop any persistent frame at or below the last replayed
+        // seq and send the rest, in order. Under the gate, so a concurrent fan-out
+        // cannot overtake the backlog.
+        var lastReplayed = tail.Count > 0 ? SeqOf(tail[^1]) ?? 0 : 0;
+        var replayedTo = tail.Count > 0 ? lastReplayed : clientWatermark;
+        lock (live.Gate)
+        {
+            foreach (var frame in state.Backlog ?? [])
+            {
+                if (Protocol.IsPersistent(frame) && SeqOf(frame) is { } s && s <= replayedTo) continue;
+                conn.Send(frame);
+            }
+            state.Backlog = null;
+            state.ReplayedThrough = lastReplayed;
+        }
 
         // A fresh conversation gets a one-time bot greeting, persisted like any
         // bot frame so a later reconnect replays it instead of greeting twice.
@@ -465,9 +494,13 @@ public sealed class ConversationEngine
     {
         var live = _live[convId];
         var cts = new CancellationTokenSource();
+        ConnState? state;
         lock (live.Gate)
         {
-            if (live.Turn is not null) { conn.Send(ErrorFrame("busy", "a run is already in flight")); return; }
+            // Read the sender's state now: a tab may send and close at once, and the
+            // turn it asked for still belongs to the conversation.
+            if (!live.Connections.TryGetValue(conn.Id, out state)) { cts.Dispose(); return; }
+            if (live.Turn is not null) { conn.Send(ErrorFrame("busy", "a run is already in flight")); cts.Dispose(); return; }
             live.Turn = cts;
         }
         ITurnLease? lease = null;
@@ -478,15 +511,21 @@ public sealed class ConversationEngine
             lease = await _cfg.TurnLock.AcquireAsync(convId).ConfigureAwait(false);
             if (lease is null) { conn.Send(ErrorFrame("busy", "a run is already in flight")); return; }
 
-            ConnState state;
-            lock (live.Gate) state = live.Connections[conn.Id];
             await body(live, state, cts.Token).ConfigureAwait(false);
         }
         finally
         {
-            if (lease is not null) await lease.DisposeAsync().ConfigureAwait(false);
-            lock (live.Gate) live.Turn = null;
-            cts.Dispose();
+            // Free the local lock even when the lease release fails (a Redis blip): the
+            // remote lease has a TTL, but a stuck live.Turn would answer busy forever.
+            try
+            {
+                if (lease is not null) await lease.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (live.Gate) live.Turn = null;
+                cts.Dispose();
+            }
         }
     }
 
@@ -513,7 +552,7 @@ public sealed class ConversationEngine
                 ["timestamp"] = _cfg.Now(),
             }, conn.Id).ConfigureAwait(false);
 
-            var meta = BuildMeta(convId, state.UserId, text, frame.GetValueOrDefault("meta") as IReadOnlyDictionary<string, object?>, state.Claims);
+            var meta = BuildMeta(convId, state, text, frame.GetValueOrDefault("meta") as IReadOnlyDictionary<string, object?>);
             var input = _cfg.Input(frame);
             await DriveAsync(convId, live, _cfg.Adapter.Run(input, new RunContext { ThreadId = convId, Meta = meta, CancellationToken = ct })).ConfigureAwait(false);
         });
@@ -547,7 +586,7 @@ public sealed class ConversationEngine
                 }).ConfigureAwait(false);
             }
 
-            var meta = BuildMeta(convId, state.UserId, "", null, state.Claims);
+            var meta = BuildMeta(convId, state, "", null);
             await DriveAsync(convId, live, _cfg.Adapter.Resume(answers, new RunContext { ThreadId = convId, Meta = meta, CancellationToken = ct })).ConfigureAwait(false);
         });
 
@@ -645,7 +684,7 @@ public sealed class ConversationEngine
 
             // No `text` frame is dispatched: a click is not something the user said,
             // and the transcript already carries the widget it came from.
-            var meta = BuildMeta(convId, state.UserId, "", null, state.Claims);
+            var meta = BuildMeta(convId, state, "", null);
             await DriveAsync(convId, live, _cfg.Adapter.Run(input, new RunContext { ThreadId = convId, Meta = meta, CancellationToken = ct })).ConfigureAwait(false);
         }).ConfigureAwait(false);
     }
@@ -660,9 +699,28 @@ public sealed class ConversationEngine
             Now = _cfg.Now,
             Reply = _cfg.Reply,
         });
-        await foreach (var ev in events.ConfigureAwait(false))
-            foreach (var outFrame in mapper.Map(ev))
+        var started = false;
+        var ended = false;
+        try
+        {
+            await foreach (var ev in events.ConfigureAwait(false))
+            {
+                if (ev is RunStartEvent) started = true;
+                if (ev is RunEndEvent) ended = true;
+                foreach (var outFrame in mapper.Map(ev))
+                    await DispatchAsync(convId, outFrame).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (started && !ended && ex is not OperationCanceledException)
+        {
+            // A stream that throws mid-run (ilmek's recursion limit, a failing
+            // checkpointer) never yields its run_end. Every tab already saw
+            // run{started}, so close the run on the wire as an error rather than
+            // leave them spinning (§4.1, §13.2). A stream that fails before it
+            // started has put nothing on the wire — the caller sees that one.
+            foreach (var outFrame in mapper.Fail(ex))
                 await DispatchAsync(convId, outFrame).ConfigureAwait(false);
+        }
     }
 
     // ── plumbing ──────────────────────────────────────────────────────────────
@@ -683,20 +741,45 @@ public sealed class ConversationEngine
     private void FanOutLocal(string convId, IReadOnlyDictionary<string, object?> frame, string? exceptConnId = null)
     {
         if (!_live.TryGetValue(convId, out var live)) return;
-        List<ConnState> targets;
-        lock (live.Gate) targets = live.Connections.Values.ToList();
-        foreach (var state in targets)
+        var targets = new List<ConnState>();
+        var seq = Protocol.IsPersistent(frame) ? SeqOf(frame) : null;
+        lock (live.Gate)
         {
-            if (exceptConnId is not null && state.Conn.Id == exceptConnId) continue;
-            state.Conn.Send(frame);
+            foreach (var state in live.Connections.Values)
+            {
+                if (exceptConnId is not null && state.Conn.Id == exceptConnId) continue;
+                // Still handshaking: hold the frame until welcome and the replay tail are out.
+                if (state.Backlog is not null) { state.Backlog.Add(frame); continue; }
+                // Recorded before the replay read but fanned out after it: already delivered.
+                if (seq is { } s && s <= state.ReplayedThrough) continue;
+                targets.Add(state);
+            }
         }
+        foreach (var state in targets) state.Conn.Send(frame);
     }
 
-    private IReadOnlyDictionary<string, object?> BuildMeta(string convId, string userId, string text, IReadOnlyDictionary<string, object?>? clientMeta, IReadOnlyDictionary<string, object?>? claims)
+    private static long? SeqOf(IReadOnlyDictionary<string, object?> frame) => frame.GetValueOrDefault("seq") switch
+    {
+        long l => l,
+        int i => i,
+        _ => null,
+    };
+
+    private IReadOnlyDictionary<string, object?> BuildMeta(string convId, ConnState state, string text, IReadOnlyDictionary<string, object?>? frameMeta)
     {
         var meta = new Frame();
-        if (_cfg.Context is not null) meta["mekik"] = _cfg.Context((convId, userId), (text, clientMeta));
-        if (claims is not null) meta["auth"] = claims;
+        if (_cfg.Context is not null) meta["mekik"] = _cfg.Context((convId, state.UserId), (text, frameMeta));
+        if (state.Claims is not null) meta["auth"] = state.Claims;
+        // Client meta is this connection's hello.meta with the frame's own meta laid
+        // over it per key (§6); only the allowlisted subset survives.
+        IReadOnlyDictionary<string, object?>? clientMeta = null;
+        if (state.HelloMeta is not null || frameMeta is not null)
+        {
+            var merged = new Frame();
+            foreach (var kv in state.HelloMeta ?? new Frame()) merged[kv.Key] = kv.Value;
+            foreach (var kv in frameMeta ?? new Frame()) merged[kv.Key] = kv.Value;
+            clientMeta = merged;
+        }
         if (_cfg.AcceptClientMeta is not null && clientMeta is not null)
         {
             var client = _cfg.AcceptClientMeta(clientMeta);

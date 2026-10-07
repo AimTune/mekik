@@ -113,7 +113,7 @@ public class SkillsTests
         var conn = new FakeConn("c-1");
         await app.ConnectAsync(conn);
 
-        Assert.Equal(["welcome", "skills"], conn.Sent.Select(Type).ToArray());
+        Assert.Equal(new string?[] { "welcome", "skills" }, conn.Sent.Select(Type).ToArray());
         var frame = First(conn, "skills")!;
         Assert.Equal(Skills.Hash([Pdf, Voice]), frame["hash"]);
         var skills = ((IEnumerable<object?>)frame["skills"]!).Cast<IReadOnlyDictionary<string, object?>>().ToList();
@@ -140,7 +140,7 @@ public class SkillsTests
         var app = App(Introspector);
         var conn = new FakeConn("c-1");
         await app.ConnectAsync(conn);
-        Assert.Equal(["welcome"], conn.Sent.Select(Type).ToArray());
+        Assert.Equal(new string?[] { "welcome" }, conn.Sent.Select(Type).ToArray());
         await app.ReceiveAsync(conn, TextFrame(""));
         Assert.Equal("skills:", LastBot(conn));
     }

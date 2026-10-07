@@ -96,6 +96,66 @@
       "name": "a missing jsonrpc field is -32600",
       "request": { "id": 9, "method": "ping" },
       "response": { "jsonrpc": "2.0", "id": 9, "error": { "code": -32600, "message": "request must carry jsonrpc \"2.0\" and a method" } }
+    },
+    {
+      "name": "a wrong jsonrpc version is -32600",
+      "request": { "jsonrpc": "1.0", "id": 10, "method": "ping" },
+      "response": { "jsonrpc": "2.0", "id": 10, "error": { "code": -32600, "message": "request must carry jsonrpc \"2.0\" and a method" } }
+    },
+    {
+      "name": "a non-string method is -32600",
+      "request": { "jsonrpc": "2.0", "id": 11, "method": 5 },
+      "response": { "jsonrpc": "2.0", "id": 11, "error": { "code": -32600, "message": "request must carry jsonrpc \"2.0\" and a method" } }
+    },
+    {
+      "name": "null is -32600",
+      "request": null,
+      "response": { "jsonrpc": "2.0", "id": null, "error": { "code": -32600, "message": "request must be a JSON-RPC object" } }
+    },
+    {
+      "name": "a notification of a known method gets no response",
+      "request": { "jsonrpc": "2.0", "method": "ping" },
+      "response": null
+    },
+    {
+      "name": "a null id is a request, answered with a null id",
+      "request": { "jsonrpc": "2.0", "id": null, "method": "ping" },
+      "response": { "jsonrpc": "2.0", "id": null, "result": {} }
+    },
+    {
+      "name": "initialize without params answers the latest",
+      "request": { "jsonrpc": "2.0", "id": 12, "method": "initialize" },
+      "response": { "jsonrpc": "2.0", "id": 12, "result": { "protocolVersion": "2025-06-18", "capabilities": { "tools": {} }, "serverInfo": { "name": "mekik", "version": "0.7.1" } } }
+    },
+    {
+      "name": "initialize accepts the oldest known version",
+      "request": { "jsonrpc": "2.0", "id": 13, "method": "initialize", "params": { "protocolVersion": "2024-11-05" } },
+      "response": { "jsonrpc": "2.0", "id": 13, "result": { "protocolVersion": "2024-11-05", "capabilities": { "tools": {} }, "serverInfo": { "name": "mekik", "version": "0.7.1" } } }
+    },
+    {
+      "name": "tools/call with a non-string name is -32602",
+      "request": { "jsonrpc": "2.0", "id": 14, "method": "tools/call", "params": { "name": 7 } },
+      "response": { "jsonrpc": "2.0", "id": 14, "error": { "code": -32602, "message": "`name` is required" } }
+    },
+    {
+      "name": "tools/call with a non-string message is -32602",
+      "request": { "jsonrpc": "2.0", "id": 15, "method": "tools/call", "params": { "name": "support_desk", "arguments": { "message": 5 } } },
+      "response": { "jsonrpc": "2.0", "id": 15, "error": { "code": -32602, "message": "`message` (string) is required" } }
+    },
+    {
+      "name": "tools/call with a non-string conversationId is -32602",
+      "request": { "jsonrpc": "2.0", "id": 16, "method": "tools/call", "params": { "name": "support_desk", "arguments": { "message": "hi", "conversationId": 5 } } },
+      "response": { "jsonrpc": "2.0", "id": 16, "error": { "code": -32602, "message": "`conversationId` must be a string" } }
+    },
+    {
+      "name": "resume with answers as an array is -32602",
+      "request": { "jsonrpc": "2.0", "id": 17, "method": "tools/call", "params": { "name": "support_desk__resume", "arguments": { "conversationId": "c-1", "answers": [] } } },
+      "response": { "jsonrpc": "2.0", "id": 17, "error": { "code": -32602, "message": "`answers` (object keyed by interrupt id) is required" } }
+    },
+    {
+      "name": "resume without a conversationId is -32602",
+      "request": { "jsonrpc": "2.0", "id": 18, "method": "tools/call", "params": { "name": "support_desk__resume", "arguments": { "answers": {} } } },
+      "response": { "jsonrpc": "2.0", "id": 18, "error": { "code": -32602, "message": "`conversationId` (string) is required" } }
     }
   ]
 }

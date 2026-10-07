@@ -33,7 +33,7 @@ public static class Shuttle
     }
 
     /// <summary>
-    /// Emit one `tool_call` frame. The low-level primitive behind <see cref="Tool{T}"/>,
+    /// Emit one `tool_call` frame. The low-level primitive behind <see cref="Tool{T}(IContext, string, IReadOnlyDictionary{string, object}, Func{ValueTask{T}})"/>,
     /// public so an integration that does its own execution (e.g. Mekik.Agents,
     /// where the model invokes the function) can still produce the same trace
     /// without re-deriving the reserved <c>$mekik</c> payload shape. Traces upsert
@@ -255,12 +255,22 @@ public static class Shuttle
             IEnumerable<string> strings => strings.ToList(),
             string one => string.IsNullOrEmpty(one) ? [] : [one],
             System.Collections.IEnumerable seq => seq.Cast<object?>()
-                .Select(x => x?.ToString())
+                .Select(InvariantText)
                 .Where(x => !string.IsNullOrEmpty(x))
                 .Select(x => x!)
                 .ToList(),
             _ => [],
         };
+
+    /// <summary>A claim value as text, the way it reads in TypeScript: culture-free numbers, lowercase booleans.</summary>
+    private static string? InvariantText(object? x) => x switch
+    {
+        null => null,
+        string s => s,
+        bool b => b ? "true" : "false",
+        IFormattable f => f.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+        _ => x.ToString(),
+    };
 
     /// <summary>Mount or update a generative-UI component by its client-registry name.</summary>
     /// <remarks>Emitting the same component again with new props updates it in place. mekik

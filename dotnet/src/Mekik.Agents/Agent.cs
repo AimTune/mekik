@@ -231,11 +231,20 @@ public static class Agent
                 }
                 else
                 {
-                    // A wrapped function may throw the interrupt that parks the graph; letting
-                    // it propagate is how the pause reaches the client.
-                    result = byName.TryGetValue(name, out var fn)
-                        ? await fn.InvokeAsync(new AIFunctionArguments(args), ctx.CancellationToken).ConfigureAwait(false)
-                        : $"Unknown tool {name}.";
+                    try
+                    {
+                        result = byName.TryGetValue(name, out var fn)
+                            ? await fn.InvokeAsync(new AIFunctionArguments(args), ctx.CancellationToken).ConfigureAwait(false)
+                            : $"Unknown tool {name}.";
+                    }
+                    catch (Exception ex) when (!InterruptSignalException.IsInterrupt(ex) && ex is not OperationCanceledException)
+                    {
+                        // A wrapped function may throw the interrupt that parks the graph (and an
+                        // abort cancels); those propagate. Anything else — a function that threw,
+                        // or arguments that failed binding — is the model's to react to, not the
+                        // run's: the wrapper already traced it running → error.
+                        result = $"Error from {name}: {ex.Message}";
+                    }
                 }
 
                 // Derived from the journaled call (not live state), so a resume pass rebuilds
@@ -243,6 +252,7 @@ public static class Agent
                 if (name == SkillFunctions.LoadSkillTool
                     && args.GetValueOrDefault("name") is string skill
                     && skillToolbox.Has(skill)
+                    && SkillFunctions.HasLoaded(ctx, skill)
                     && activeSkills.Add(skill))
                 {
                     activated = true;
@@ -326,11 +336,24 @@ public static class Agent
 
     private static string NormalizeRoute(string modelOutput, IReadOnlyList<Route> routes, string? fallback)
     {
+        // Strip what a model wraps a one-word answer in (whitespace, "**", a full stop).
         var text = modelOutput.Trim().ToLowerInvariant();
+        var start = 0;
+        var end = text.Length;
+        while (start < end && !char.IsLetterOrDigit(text[start])) start++;
+        while (end > start && !char.IsLetterOrDigit(text[end - 1])) end--;
+        text = text[start..end];
+
+        // An exact match wins; otherwise the LONGEST contained name, so routes
+        // "report" and "reporting" with the answer "reporting" pick "reporting".
         foreach (var r in routes)
-            if (text.Contains(r.Name.ToLowerInvariant(), StringComparison.Ordinal))
+            if (string.Equals(text, r.Name, StringComparison.OrdinalIgnoreCase))
                 return r.Name;
-        return fallback ?? routes[^1].Name;
+        Route? best = null;
+        foreach (var r in routes)
+            if (text.Contains(r.Name.ToLowerInvariant(), StringComparison.Ordinal) && (best is null || r.Name.Length > best.Name.Length))
+                best = r;
+        return best?.Name ?? fallback ?? routes[^1].Name;
     }
 
     // A model's function-call arguments arrive as JsonElement (System.Text.Json); fold

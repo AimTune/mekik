@@ -27,12 +27,12 @@ public class McpServerTests
             Shuttle.Text(ctx, " it up…");
             if (input.StartsWith("refund"))
             {
-                var ok = await Shuttle.Choose<object?>(ctx, new Dictionary<string, object?> { ["title"] = $"Refund {order["total"]}?" },
+                var ok = await Shuttle.Choose<object?>(ctx, new Dictionary<string, object?> { ["title"] = FormattableString.Invariant($"Refund {order["total"]}?") },
                     [Shuttle.Action("Approve", new Dictionary<string, object?> { ["approved"] = true }), Shuttle.Action("Cancel")]);
                 var approved = ok is IReadOnlyDictionary<string, object?> d && d.GetValueOrDefault("approved") is true;
                 return Update.Of("reply", approved ? "Refunded." : "Cancelled.");
             }
-            return Update.Of("reply", $"Order {order["id"]} totals {order["total"]}.");
+            return Update.Of("reply", FormattableString.Invariant($"Order {order["id"]} totals {order["total"]}."));
         })
         .Edge(Graph.Start, "agent")
         .Edge("agent", Graph.End)
@@ -64,7 +64,7 @@ public class McpServerTests
 
     // ── conformance/mcp/rpc.json ──────────────────────────────────────────────
 
-    public static IEnumerable<object[]> RpcCases()
+    public static IEnumerable<object?[]> RpcCases()
     {
         var fixture = (IReadOnlyDictionary<string, object?>)Json.Parse(File.ReadAllText(RpcFixture))!;
         foreach (var c in ((IEnumerable<object?>)fixture["cases"]!).Cast<IReadOnlyDictionary<string, object?>>())
