@@ -133,7 +133,7 @@ schemas are a prompt-injection surface a model will read.
 // accept everything well-formed
 const app = mekik({ graph, clientTools: true });
 
-// or the allowlist form: pin names, strip tags, cap the count
+// or the allowlist form: pin names (the policy may also strip tags or cap the count)
 const app = mekik({
     graph,
     clientTools: (tools) => tools.filter((t) => ["pick_date", "show_confetti"].includes(t.name)),
@@ -212,8 +212,8 @@ pause guarantees:
   `ok:false` makes the `await` **throw** (a plain `Error` in TS, an
   `InvalidOperationException` in .NET) carrying the client's `error` message; a
   bare non-envelope answer (say a human typed one from another tab) is taken as
-  the result. Catch it in the node to recover, or let it end the run in
-  `run{error}` — an agent loop built with `withClientTools` /
+  the result. Catch it in the node to recover, or let it end the run (a
+  `⚠️ <message>` bot text, then `run{error}`) — an agent loop built with `withClientTools` /
   `ClientToolFunctions` turns it into an observation instead (see §5);
 - the node **re-runs from the top on resume** — wrap pre-call side effects in
   `mekik.tool` exactly as around any other pause (see

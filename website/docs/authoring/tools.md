@@ -185,6 +185,8 @@ catch (Exception ex) when (ex is not InterruptSignalException)   // a pause is n
 
 You rarely write this by hand — the [agent integrations](../integrations/overview.md) do it for you, wrapping each of an agent's tools so they emit traces, journal through `ctx.step`, and optionally pause for approval. Reach for the primitives only when wrapping a runner mekik doesn't already integrate.
 
+Inside an agent loop (`runAgent` / `Agent.RunAsync`) a failing tool does not end the run: a tool that throws — or whose arguments fail its schema — is traced `running → error`, and the model gets `Error from <tool>: <message>` as the observation and carries on. A tool built once, outside the node, still reaches the run that called it through `toolContext(config)` / `MekikTools.ToolContext(arguments)`. Tools that only matter for one kind of task can belong to a [skill](./skills.md#tools-under-a-skill), so the model is offered them only after it loads that skill.
+
 ## Redaction (via integrations)
 
 `mekik.tool` itself surfaces `params` and `result` as-is. The agent integrations add a per-tool `redact` policy that masks named fields in the *surfaced* trace while the tool still receives the real values:
@@ -202,7 +204,7 @@ withMekikTools(ctx, [charge], { charge: { show: true, redact: ["cardNumber"] } }
 
 ```csharp
 // Mekik.Agents
-MekikTools.Wrap(ctx, [charge], new() { ["charge"] = new ToolPolicy { Redact = ["cardNumber"] } });
+MekikTools.Wrap(ctx, [charge], new Dictionary<string, ToolPolicy> { ["charge"] = new() { Redact = ["cardNumber"] } });
 ```
 
 </TabItem>

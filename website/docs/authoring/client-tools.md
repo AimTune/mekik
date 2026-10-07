@@ -158,7 +158,7 @@ No pause: the invocation streams as a genui event chunk under the reserved name 
 
 ### When the handler fails
 
-An `{ok:false, error}` answer makes the `await` **throw** — a plain `Error` in TypeScript, an `InvalidOperationException` in .NET — carrying the client's message, and the `tool_call` trace ends in `error`. Catch it in the node to recover, or let it end the run in `run{error}`; the agent wrappers below turn it into an observation instead, so a model-driven loop keeps going.
+An `{ok:false, error}` answer makes the `await` **throw** — a plain `Error` in TypeScript, an `InvalidOperationException` in .NET — carrying the client's message, and the `tool_call` trace ends in `error`. Catch it in the node to recover, or let it end the run — a `⚠️ <message>` bot text, then `run{error}`; the agent wrappers below turn it into an observation instead, so a model-driven loop keeps going.
 
 ## Handing the toolbox to a model
 
