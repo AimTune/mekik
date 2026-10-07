@@ -348,6 +348,24 @@ describe("runAgent with tools owned by the skill entry", () => {
         assert.ok(conn.sent.some((f) => f.type === "run" && dataOf(f).status === "finished"));
     });
 
+    test("an unlocked skill tool that throws comes back as an observation, traced running → error", async () => {
+        const boom = mkTool("get_sprint", "Sprint metrics.", async () => {
+            throw new Error("sprint service down");
+        });
+        const m = scriptedModel([
+            { toolCalls: [{ id: "1", name: "load_skill", args: { name: "reporting" } }] },
+            { toolCalls: [{ id: "2", name: "get_sprint", args: {} }] },
+            { text: "The sprint service is down." },
+        ]);
+
+        const conn = await run(makeCatalogApp(m.model, [{ ...REPORTING, tools: [boom] }]));
+
+        assert.ok(m.observations().some((o) => o === "Error from get_sprint: sprint service down"));
+        const statuses = conn.sent.filter((f) => f.type === "tool_call" && dataOf(f).name === "get_sprint").map((f) => dataOf(f).status);
+        assert.deepEqual(statuses, ["running", "error"]);
+        assert.ok(conn.sent.some((f) => f.type === "run" && dataOf(f).status === "finished"), "the run goes on");
+    });
+
     test("an entry holding something that is not a LangChain tool fails the run", async () => {
         const m = scriptedModel([{ text: "unused" }]);
         const conn = await run(makeCatalogApp(m.model, [{ ...REPORTING, tools: [{ nope: true } as never] }]));

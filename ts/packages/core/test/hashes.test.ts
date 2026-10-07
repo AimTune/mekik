@@ -60,6 +60,19 @@ describe("skill catalog hashes (conformance/hashes/catalogs.json)", () => {
         });
     }
 
+    test("tools a skill owns (SkillEntry.tools, §12.6) never enter the hash: every golden holds with tools attached", async () => {
+        for (const s of golden.skills) {
+            const entries = s.summaries.map((x, i) => ({ ...x, instructions: "…", tools: [{ name: `tool_${i}` }, () => "fn"] }));
+            const listed = mekik({ graph: graph("t").channel("input", channel.lastWrite<string>("")).node("n", () => ({})).edge(START, "n").edge("n", END).compile(), skills: entries });
+            assert.equal(hashSkills(entries), s.hash, s.name);
+            const conn = { id: `tools-${s.name}`, sent: [] as OutgoingFrame[], send(f: OutgoingFrame) { this.sent.push(f); }, close() {} };
+            await listed.connect(conn);
+            const frame = conn.sent.find((f) => f.type === "skills") as Extract<OutgoingFrame, { type: "skills" }> | undefined;
+            if (s.summaries.length > 0) assert.equal(frame?.hash, s.hash, `${s.name} on the wire`);
+            assert.ok(!JSON.stringify(conn.sent).includes("tool_0"), "no frame carries a tool");
+        }
+    });
+
     test("an empty catalog has the empty hash", () => {
         assert.equal(hashSkills([]), "");
     });

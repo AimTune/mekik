@@ -430,6 +430,24 @@ public class SkillToolsTests
     }
 
     [Fact]
+    public async Task An_unlocked_skill_tool_that_throws_comes_back_as_an_observation_traced_running_then_error()
+    {
+        var boom = AIFunctionFactory.Create(string () => throw new InvalidOperationException("sprint service down"), "get_sprint", "Sprint metrics.");
+        var chat = new ScriptedChat(
+            [Call("1", "load_skill", new() { ["name"] = "reporting" })],
+            [Call("2", "get_sprint")],
+            [Text("The sprint service is down.")]);
+
+        var conn = await Run(CatalogApp(chat, SkillSources.Inline(Owning(Reporting, boom))));
+
+        Assert.Contains(chat.Observations, o => o == "Error from get_sprint: sprint service down");
+        Assert.Equal(["running", "error"], conn.Sent
+            .Where(f => Type(f) == "tool_call" && (string?)Data(f)["name"] == "get_sprint")
+            .Select(f => (string?)Data(f)["status"]).ToArray());
+        Assert.Contains(conn.Sent, f => Type(f) == "run" && Data(f).GetValueOrDefault("status") as string == "finished");
+    }
+
+    [Fact]
     public async Task An_entry_owning_tools_of_another_type_fails_the_run()
     {
         var chat = new ScriptedChat([Text("unused")]);
