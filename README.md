@@ -95,11 +95,11 @@ mekik/
     examples/storefront.ts # rendering showcase: every typed component + message type
     examples/server-components.ts # the backend defines the widget itself (§10)
     examples/client-tools.ts # the frontend's UI as callable tools (§11)
-    examples/banking/      # domain probe: two-approver transfers, a silent fraud-tool failure
+    examples/banking/      # domain probe: skill-held money tools, two-approver transfers, a silent fraud-tool failure
     examples/insurance/    # domain probe: form intake pause, tools held under a skill, typed rejection
-    examples/healthcare-triage/ # domain probe: redacted identifiers, the page calendar as a client tool
-    examples/travel-booking/ # domain probe: watermark replay across a reconnect, exactly-once cancel
-    examples/support-desk/ # domain probe: per-node tools, MCP knowledge base, A2A hand-off
+    examples/healthcare-triage/ # domain probe: redacted identifiers, client-declared skills, the page calendar as a client tool
+    examples/travel-booking/ # domain probe: skill-held booking, watermark replay across a reconnect, exactly-once cancel
+    examples/support-desk/ # domain probe: tag-scoped skills per route, MCP knowledge base, A2A hand-off
   dotnet/
     src/Mekik.Core/            # mirror of @mekik/core
     src/Mekik.AspNetCore/      # MapMekik("/ws"), MapMekikMcp("/mcp"), MapMekikA2a("/a2a")
