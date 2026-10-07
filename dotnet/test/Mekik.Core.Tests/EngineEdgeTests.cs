@@ -365,4 +365,53 @@ public class EngineEdgeTests
 
         Assert.Equal(["welcome"], stranger.Types());
     }
+
+    // ── a stream that throws instead of ending ────────────────────────────────
+
+    /// <summary>Loops on itself forever — ilmek stops it with its recursion limit.</summary>
+    private static readonly CompiledGraph Spinner = Graph.Create("spinner")
+        .Channel("input", Channels.LastWrite(""))
+        .Channel("reply", Channels.LastWrite(""))
+        .Node("spin", (State s, IContext _) => Update.Of("reply", "never"))
+        .Edge(Graph.Start, "spin")
+        .Edge("spin", "spin")
+        .Compile();
+
+    [Fact]
+    public async Task A_run_whose_stream_throws_still_ends_on_run_error_for_every_tab()
+    {
+        var app = new MekikApp(Graphs.Options(Spinner) with { RecursionLimit = 3 });
+        var a = await Connect(app);
+        var b = await Connect(app, Rejoin(a));
+
+        await app.ReceiveAsync(a, In.Text("go"));
+
+        Assert.Equal(["started", "error"], a.RunStatuses());
+        Assert.Equal(["started", "error"], b.RunStatuses());
+        var warning = Assert.Single(a.BotTexts());
+        Assert.StartsWith("⚠️ ", warning);
+        Assert.Contains("ecursion", warning);
+        var transcript = await app.History.AfterAsync((string)a.Welcome()["conversationId"]!, 0);
+        Assert.Equal(["go", warning], transcript.Select(f => f.Text()));
+        Assert.Equal([1L, 2], transcript.Seqs());
+
+        await app.ReceiveAsync(a, In.Text("again")); // the lock was released
+        Assert.DoesNotContain("busy", a.ErrorCodes());
+        Assert.Equal(["started", "error", "started", "error"], a.RunStatuses());
+    }
+
+    [Fact]
+    public async Task Over_MCP_a_throwing_stream_is_an_isError_result_not_an_rpc_error()
+    {
+        var mcp = new MekikMcpServer(new MekikApp(Graphs.Options(Spinner) with { RecursionLimit = 3 }),
+            new McpServerOptions { Name = "spinner", Description = "Spins." });
+
+        var reply = await mcp.HandleAsync(D(("jsonrpc", "2.0"), ("id", 1L), ("method", "tools/call"),
+            ("params", D(("name", "spinner"), ("arguments", D(("message", "go")))))));
+
+        Assert.False(reply!.ContainsKey("error"));
+        var result = (Frame)reply["result"]!;
+        Assert.Equal(true, result["isError"]);
+        Assert.Equal("error", ((Frame)result["structuredContent"]!)["status"]);
+    }
 }

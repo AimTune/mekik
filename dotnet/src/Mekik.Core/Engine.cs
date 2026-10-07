@@ -699,9 +699,28 @@ public sealed class ConversationEngine
             Now = _cfg.Now,
             Reply = _cfg.Reply,
         });
-        await foreach (var ev in events.ConfigureAwait(false))
-            foreach (var outFrame in mapper.Map(ev))
+        var started = false;
+        var ended = false;
+        try
+        {
+            await foreach (var ev in events.ConfigureAwait(false))
+            {
+                if (ev is RunStartEvent) started = true;
+                if (ev is RunEndEvent) ended = true;
+                foreach (var outFrame in mapper.Map(ev))
+                    await DispatchAsync(convId, outFrame).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (started && !ended && ex is not OperationCanceledException)
+        {
+            // A stream that throws mid-run (ilmek's recursion limit, a failing
+            // checkpointer) never yields its run_end. Every tab already saw
+            // run{started}, so close the run on the wire as an error rather than
+            // leave them spinning (§4.1, §13.2). A stream that fails before it
+            // started has put nothing on the wire — the caller sees that one.
+            foreach (var outFrame in mapper.Fail(ex))
                 await DispatchAsync(convId, outFrame).ConfigureAwait(false);
+        }
     }
 
     // ── plumbing ──────────────────────────────────────────────────────────────
