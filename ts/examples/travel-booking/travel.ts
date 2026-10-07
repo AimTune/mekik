@@ -17,23 +17,24 @@
 //                         again afterwards (and so replays); asking to cancel
 //                         again changes nothing
 //
-// Skills (§12): `book` and `cancel` are runAgent loops. book_flight is held
-// under `fare-rules` and cancel_booking under `cancellation-policy`
-// (`skillTools`), each gated by an approval policy. The probe asserts the
-// unlocked set survives the reconnect, and that the skill-held cancellation
-// still runs exactly once.
+// Skills (§12): `book` and `cancel` are runAgent loops. The `fare-rules`
+// skill OWNS book_flight (SkillEntry.tools, built once at module level);
+// cancel_booking is built per request — it refunds from this conversation's
+// booking in graph state — so the cancel node holds it under
+// `cancellation-policy` with `skillTools`. Both are gated by an approval
+// policy. The probe asserts the unlocked set survives the reconnect, and that
+// the skill-held cancellation still runs exactly once.
 //
 //   node examples/travel-booking/travel.ts     # offline self-test, exit 0/1
 
 import { channel, command, END, graph, START } from "@ilmek/core";
-import type { Context } from "@ilmek/core";
 import { tool } from "@langchain/core/tools";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
 import { mekik } from "@mekik/core";
 import type { MessageAction, OutgoingFrame, SkillEntry } from "@mekik/core";
-import { runAgent, withMekikTools } from "@mekik/langchain";
+import { runAgent, toolContext, withMekikTools } from "@mekik/langchain";
 
 import {
     botText,
@@ -93,24 +94,70 @@ const provider = { search: 0, price_check: 0, book_flight: 0, cancel_booking: 0 
 const BOOKED = new Map<string, Booking>();
 const CANCELLED = new Set<string>();
 
+// ── tools ─────────────────────────────────────────────────────────────────────
+//
+// Built once, at module level. A tool that needs the run reads it from its
+// LangChain config with toolContext(config).
+
+const searchFlights = tool(
+    ({ from, to, date, adults }) => {
+        provider.search++;
+        return { from, to, date, adults, offers: INVENTORY };
+    },
+    {
+        name: "search_flights",
+        description: "Search flights for a route and date.",
+        schema: z.object({ from: z.string(), to: z.string(), date: z.string(), adults: z.number() }),
+    },
+);
+
+const priceCheck = tool(
+    ({ offerId, adults }) => {
+        provider.price_check++;
+        const offer = INVENTORY.find((o) => o.id === offerId);
+        if (!offer) throw new Error(`No offer ${offerId}.`);
+        return { offerId, total: offer.pricePerAdult * adults, currency: "USD", refundable: true };
+    },
+    { name: "price_check", description: "Confirm an offer's current total.", schema: z.object({ offerId: z.string(), adults: z.number() }) },
+);
+
+const bookFlight = tool(
+    ({ offerId, total: amount }, config): Booking => {
+        provider.book_flight++;
+        const booking: Booking = { ref: `BK-${4000 + provider.book_flight}`, offerId, total: amount, status: "confirmed" };
+        // Recorded per conversation: the run that called the tool says which one.
+        BOOKED.set(toolContext(config).threadId, booking);
+        return booking;
+    },
+    { name: "book_flight", description: "Book an offer at a confirmed total.", schema: z.object({ offerId: z.string(), total: z.number() }) },
+);
+
+// ── the skill catalog (§12): each skill is its instructions + the tools it governs ──
+
+/**
+ * fare-rules owns book_flight. cancellation-policy owns no tool of its own: its
+ * tool, cancel_booking, has to be built per request (see the cancel node), so
+ * that node holds it under the skill with `skillTools`.
+ */
+const SKILLS: SkillEntry<StructuredToolInterface>[] = [
+    {
+        name: "fare-rules",
+        description: "Fare conditions to check before booking: baggage, change and refund rules. Load before any booking.",
+        instructions: "Read back the total and that the fare is refundable minus a $75 fee, then book_flight at the confirmed total.",
+        tags: ["booking"],
+        tools: [bookFlight],
+    },
+    {
+        name: "cancellation-policy",
+        description: "How to cancel a booking: fee, refund, and what to offer next.",
+        instructions: `Cancellation costs ${CANCEL_FEE}; refund the rest with cancel_booking, once. Then offer to search again.`,
+        tags: ["cancellation"],
+    },
+];
+
 // ── the graph ─────────────────────────────────────────────────────────────────
 
 const model = new ScriptedModel();
-
-function searchTools(ctx: Context<any>): StructuredToolInterface[] {
-    const search = tool(
-        ({ from, to, date, adults }) => {
-            provider.search++;
-            return { from, to, date, adults, offers: INVENTORY };
-        },
-        {
-            name: "search_flights",
-            description: "Search flights for a route and date.",
-            schema: z.object({ from: z.string(), to: z.string(), date: z.string(), adults: z.number() }),
-        },
-    );
-    return withMekikTools(ctx, [search]);
-}
 
 const travel = graph("travel-booking")
     .channel("input", channel.lastWrite<string>(""))
@@ -126,7 +173,7 @@ const travel = graph("travel-booking")
     })
 
     .node("search", async (s, ctx) => {
-        const out = await runTools(ctx, model, "search", searchTools(ctx), "Search flights with search_flights.", s.input);
+        const out = await runTools(ctx, model, "search", withMekikTools(ctx, [searchFlights]), "Search flights with search_flights.", s.input);
         const found = out.results.search_flights as { offers: Offer[]; adults: number } | undefined;
         if (!found?.offers.length) return command({ update: { reply: out.text || "No flights found." }, goto: END });
         return command({ update: { offers: found.offers, adults: found.adults }, goto: "compare" });
@@ -151,35 +198,19 @@ const travel = graph("travel-booking")
         return command({ update: { choice }, goto: "book" });
     })
 
-    // The booking agent: price_check is always on, book_flight is held under
-    // fare-rules and gated by an approval policy — the pause the reconnect
-    // test drops a socket in the middle of.
+    // The booking agent: price_check is always on; book_flight comes with the
+    // fare-rules skill and is gated by an approval policy — the pause the
+    // reconnect test drops a socket in the middle of.
     .node("book", async (s, ctx) => {
         const o = s.choice!;
         const total = o.pricePerAdult * s.adults;
-        const priceCheck = tool(
-            ({ offerId, adults }) => {
-                provider.price_check++;
-                return { offerId, total: o.pricePerAdult * adults, currency: "USD", refundable: true };
-            },
-            { name: "price_check", description: "Confirm an offer's current total.", schema: z.object({ offerId: z.string(), adults: z.number() }) },
-        );
-        const bookFlight = tool(
-            ({ offerId, total: amount }): Booking => {
-                provider.book_flight++;
-                const booking: Booking = { ref: `BK-${4000 + provider.book_flight}`, offerId, total: amount, status: "confirmed" };
-                BOOKED.set(ctx.threadId, booking);
-                return booking;
-            },
-            { name: "book_flight", description: "Book an offer at a confirmed total.", schema: z.object({ offerId: z.string(), total: z.number() }) },
-        );
         const reply = await runAgent(ctx, model.asChatModel("book"), {
             system: "Confirm the price, load the fare rules, then book.",
             input: `Book ${o.flight} (${o.id}) for ${s.adults} adults.`,
             tools: [priceCheck],
             stream: false,
+            // fare-rules brings book_flight, offered once the skill is loaded.
             skills: { tags: ["booking"] },
-            skillTools: { "fare-rules": [bookFlight] },
             policy: {
                 book_flight: {
                     approve: {
@@ -196,7 +227,7 @@ const travel = graph("travel-booking")
     })
 
     // The cancellation agent: cancel_booking is held under cancellation-policy
-    // and gated by a confirmation. It runs BEFORE a second pause in the same
+    // (with skillTools — see below) and gated by a confirmation. It runs BEFORE a second pause in the same
     // node ("rebook?"), so the resume that answers it replays this node — agent
     // loop and all — and the journal is all that stands between the customer
     // and a double cancel.
@@ -205,6 +236,11 @@ const travel = graph("travel-booking")
         if (!b) return { reply: "You don't have a booking to cancel." };
         if (b.status === "cancelled") return { reply: `${b.ref} is already cancelled — nothing more to do.` };
 
+        // Built per request, on purpose: the refund is computed from THIS
+        // conversation's booking in graph state (`b`), which a module-level tool
+        // in the catalog cannot see. So instead of the skill entry owning it, the
+        // node holds it under cancellation-policy with `skillTools` — same gating:
+        // offered only once that skill is loaded.
         const cancelBooking = tool(
             ({ ref }) => {
                 provider.cancel_booking++;
@@ -249,22 +285,6 @@ const travel = graph("travel-booking")
     .edge("chat", END)
     .compile();
 
-/** The agency's skill catalog (§12): each policy holds the tool it governs. */
-const SKILLS: SkillEntry[] = [
-    {
-        name: "fare-rules",
-        description: "Fare conditions to check before booking: baggage, change and refund rules. Load before any booking.",
-        instructions: "Read back the total and that the fare is refundable minus a $75 fee, then book_flight at the confirmed total.",
-        tags: ["booking"],
-    },
-    {
-        name: "cancellation-policy",
-        description: "How to cancel a booking: fee, refund, and what to offer next.",
-        instructions: `Cancellation costs $${CANCEL_FEE}; refund the rest with cancel_booking, once. Then offer to search again.`,
-        tags: ["cancellation"],
-    },
-];
-
 function makeApp() {
     return mekik({
         graph: travel,
@@ -288,6 +308,7 @@ async function probe(): Promise<void> {
     const hello = tab.drain();
     const conversationId = welcomeOf(hello)?.data.conversationId ?? "";
     check(skillsCatalog(hello)?.skills?.map((s) => s.name).join("|") === "cancellation-policy|fare-rules", "a `skills` frame announces fare-rules and cancellation-policy");
+    check(!JSON.stringify(hello).includes("book_flight"), "…summaries only: fare-rules' own tool never leaves the server");
 
     // ── 1. search → compare ───────────────────────────────────────────────────
     section("1. search → compare — offers as a genui-table, the pick as chips");
