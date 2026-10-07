@@ -60,6 +60,21 @@ public sealed record AgentRunOptions
 
     /// <summary>Origin filter for <see cref="Skills"/> (<see cref="SkillOrigin.Server"/> / <see cref="SkillOrigin.Client"/>).</summary>
     public string? SkillSource { get; init; }
+
+    /// <summary>
+    /// Tools held <em>under</em> a skill, keyed by skill name — progressive disclosure for the
+    /// toolbox, not only the instructions. A skill's tools are NOT sent to the model until it
+    /// calls <c>load_skill</c> for that skill; from the next model round on they join
+    /// <see cref="Tools"/> for the rest of the run, and the <c>load_skill</c> observation names
+    /// them. Keeps the per-call tool list small when a node owns many tools.
+    /// <para>Needs <see cref="Skills"/>; an entry whose skill is not visible to this node
+    /// (unknown, or hidden by <see cref="SkillTags"/> / <see cref="SkillSource"/>) is ignored.
+    /// Tools are wrapped with <see cref="MekikTools"/> like <see cref="Tools"/> (same
+    /// <see cref="Policies"/>). The active set is derived from the journaled calls, so a resume
+    /// rebuilds the same toolbox per round. A call to a tool whose skill is not loaded yet is
+    /// answered with an observation asking the model to load the skill first.</para>
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<AIFunction>>? SkillTools { get; init; }
 }
 
 /// <summary>
@@ -106,14 +121,21 @@ public static class Agent
         // skill functions are not wrapped with MekikTools — a load is a catalog read
         // that emits its own `skill` trace, not a side effect to journal.
         var system = options.System;
+        var skillToolbox = new SkillToolbox();
         if (options.Skills)
         {
             var block = Shuttle.SkillsPrompt(ctx, options.SkillTags, options.SkillSource);
             if (block.Length > 0) system = system.Length > 0 ? $"{system}\n\n{block}" : block;
-            tools.AddRange(SkillFunctions.Wrap(ctx, options.SkillTags, options.SkillSource));
+            skillToolbox = SkillToolbox.Build(ctx, options, tools);
+            tools.AddRange(SkillFunctions.Wrap(ctx, options.SkillTags, options.SkillSource, skillToolbox.ToolNames));
         }
 
+        // Every tool — the always-on ones and every skill's — is dispatchable from the start;
+        // only what the model is OFFERED changes as skills load.
         var byName = tools.ToDictionary(t => t.Name);
+        foreach (var fn in skillToolbox.All) byName.TryAdd(fn.Name, fn);
+
+        var activeSkills = new HashSet<string>(StringComparer.Ordinal);
         var chatOptions = new ChatOptions { Tools = [.. tools] };
 
         var messages = new List<ChatMessage>
@@ -194,20 +216,46 @@ public static class Agent
             toolCallsUsed += calls.Count;
             if (toolCallsUsed > options.MaxToolCalls) return options.BudgetReply;
 
+            var activated = false;
             foreach (var call in calls)
             {
                 var callId = (string)call["id"]!;
                 var name = (string)call["name"]!;
-                // A wrapped function may throw the interrupt that parks the graph; letting
-                // it propagate is how the pause reaches the client.
-                object? result = byName.TryGetValue(name, out var fn)
-                    ? await fn.InvokeAsync(new AIFunctionArguments(ToArgs(call.GetValueOrDefault("args"))), ctx.CancellationToken).ConfigureAwait(false)
-                    : $"Unknown tool {name}.";
+                var args = ToArgs(call.GetValueOrDefault("args"));
+                object? result;
+                if (skillToolbox.LockedSkillOf(name, activeSkills) is { } lockedSkill)
+                {
+                    // Offered only once its skill is loaded — never run it before, or the
+                    // model would act without the skill's instructions.
+                    result = $"Tool {name} belongs to skill \"{lockedSkill}\". Call {SkillFunctions.LoadSkillTool} with name \"{lockedSkill}\" first.";
+                }
+                else
+                {
+                    // A wrapped function may throw the interrupt that parks the graph; letting
+                    // it propagate is how the pause reaches the client.
+                    result = byName.TryGetValue(name, out var fn)
+                        ? await fn.InvokeAsync(new AIFunctionArguments(args), ctx.CancellationToken).ConfigureAwait(false)
+                        : $"Unknown tool {name}.";
+                }
+
+                // Derived from the journaled call (not live state), so a resume pass rebuilds
+                // exactly the toolbox each round had the first time.
+                if (name == SkillFunctions.LoadSkillTool
+                    && args.GetValueOrDefault("name") is string skill
+                    && skillToolbox.Has(skill)
+                    && activeSkills.Add(skill))
+                {
+                    activated = true;
+                }
+
                 messages.Add(new ChatMessage(ChatRole.Tool, new List<AIContent>
                 {
                     new FunctionResultContent(callId, result),
                 }));
             }
+
+            if (activated)
+                chatOptions = new ChatOptions { Tools = [.. tools, .. skillToolbox.ToolsOf(activeSkills)] };
         }
 
         return options.BudgetReply;

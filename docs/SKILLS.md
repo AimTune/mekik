@@ -48,6 +48,14 @@ Agent wrappers: `withSkills(ctx, filter)` / `runAgent({ skills })` in
 - **Why `source` is stamped.** A node can list only server skills, or only
   client ones, and a UI can render them differently. The stamp never enters the
   catalog hash.
+- **Why tools can sit under a skill, and why it's agent-side.** A node with many
+  tools sends every schema on every call. `skillTools` (TS) / `SkillTools` (.NET)
+  keep a skill's tools out of the request until the model loads that skill. It
+  needs no wire change — the catalog and the `skill` frame are unchanged — so it
+  lives in the agent loop: the loop rebuilds the offered list after a load, and
+  derives the loaded set from the journaled calls so a resume replays the same
+  toolbox. A premature call is refused as an observation rather than run, so the
+  model never acts without the skill's instructions.
 - **Why the prompt renderer is duplicated in mekik.** `@mekik/core` does not
   depend on `@ilmek/skills` (a `SkillSource` is structural), so mekik ships the
   same renderer and both suites pin the same output — the ilmek fixture's

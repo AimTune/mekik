@@ -279,6 +279,21 @@ export const LOAD_SKILL_TOOL = "load_skill";
 /** The tool name a model calls to read one of a skill's bundled files (level 3). */
 export const READ_SKILL_RESOURCE_TOOL = "read_skill_resource";
 
+/** Options for {@link withSkills}. */
+export interface WithSkillsOptions {
+    /**
+     * Skill name → the names of the tools held under it ({@link RunAgentOptions.skillTools}).
+     * Loading such a skill tells the model which tools it just unlocked.
+     */
+    toolNames?: Readonly<Record<string, readonly string[]>>;
+}
+
+/** The `load_skill` observation: the instructions, plus the tools the load unlocked. */
+export function loadSkillObservation(name: string, instructions: string, tools?: readonly string[]): string {
+    const body = instructions.length > 0 ? instructions : `(skill ${name} has no instructions)`;
+    return tools && tools.length > 0 ? `${body}\n\nTools now available from skill ${name}: ${tools.join(", ")}.` : body;
+}
+
 /**
  * The turn's skills as LangChain tools — progressive disclosure, wired
  * (PROTOCOL.md §12). Pair it with `skillsPrompt(ctx, filter)` in the system
@@ -302,7 +317,7 @@ export const READ_SKILL_RESOURCE_TOOL = "read_skill_resource";
  * const tools = [...withMekikTools(ctx, serverTools), ...withSkills(ctx, { tags: ["docs"] })];
  * ```
  */
-export function withSkills(ctx: Context<any>, filter: SkillFilter = {}): StructuredToolInterface[] {
+export function withSkills(ctx: Context<any>, filter: SkillFilter = {}, options: WithSkillsOptions = {}): StructuredToolInterface[] {
     const visible = skills(ctx, filter);
     if (visible.length === 0) return [];
     const names = new Set(visible.map((s) => s.name));
@@ -321,7 +336,7 @@ export function withSkills(ctx: Context<any>, filter: SkillFilter = {}): Structu
             if (!names.has(name)) return `Unknown skill ${JSON.stringify(name)}. Available: ${[...names].join(", ")}.`;
             try {
                 const skill = loadSkill(ctx, name);
-                return skill.instructions.length > 0 ? skill.instructions : `(skill ${name} has no instructions)`;
+                return loadSkillObservation(name, skill.instructions, options.toolNames?.[name]);
             } catch (err) {
                 return `Error loading skill ${name}: ${err instanceof Error ? err.message : String(err)}`;
             }
@@ -395,6 +410,64 @@ export interface RunAgentOptions {
      * `tools`. Off by default — a node that never mentions skills is unchanged.
      */
     skills?: boolean | SkillFilter;
+    /**
+     * Tools held *under* a skill, keyed by skill name — progressive disclosure for the
+     * toolbox, not only the instructions. A skill's tools are NOT offered to the model
+     * until it calls `load_skill` for that skill; from the next model round on they join
+     * `tools` for the rest of the run, and the `load_skill` observation names them.
+     *
+     * Needs {@link skills}; an entry whose skill is not visible to this node is ignored.
+     * Tools are wrapped with {@link withMekikTools} like `tools` (same `policy`). The
+     * active set is derived from the journaled calls, so a resume rebuilds the same
+     * toolbox per round. A call to a tool whose skill is not loaded yet is answered with
+     * an observation asking the model to load the skill first. Mirror of the .NET
+     * `AgentRunOptions.SkillTools`.
+     */
+    skillTools?: Readonly<Record<string, readonly StructuredToolInterface[]>>;
+}
+
+/** The tools held under skills for one run: owners per tool, wrapped tools per skill. */
+interface SkillToolbox {
+    bySkill: Map<string, StructuredToolInterface[]>;
+    skillsOf: Map<string, string[]>;
+}
+
+function buildSkillToolbox(
+    ctx: Context<any>,
+    options: RunAgentOptions,
+    filter: SkillFilter,
+    alwaysOn: readonly StructuredToolInterface[],
+): SkillToolbox {
+    const box: SkillToolbox = { bySkill: new Map(), skillsOf: new Map() };
+    const held = options.skillTools;
+    if (!held) return box;
+    const visible = new Set(skills(ctx, filter).map((s) => s.name));
+    const baseNames = new Set(alwaysOn.map((t) => t.name));
+    const originals = new Map<string, StructuredToolInterface>();
+    for (const [skill, list] of Object.entries(held)) {
+        if (!visible.has(skill) || !list || list.length === 0) continue;
+        for (const t of list) {
+            if (baseNames.has(t.name)) throw new Error(`Tool "${t.name}" is both always-on and held under skill "${skill}".`);
+            const seen = originals.get(t.name);
+            if (seen && seen !== t) throw new Error(`Two different tools named "${t.name}" are held under skills.`);
+            originals.set(t.name, t);
+            const owners = box.skillsOf.get(t.name) ?? [];
+            if (!owners.includes(skill)) owners.push(skill);
+            box.skillsOf.set(t.name, owners);
+        }
+        box.bySkill.set(
+            skill,
+            withMekikTools(ctx, list, options.policy ?? {}, options.defaultPolicy ? { defaultPolicy: options.defaultPolicy } : {}),
+        );
+    }
+    return box;
+}
+
+/** The tools of the given skills, deduplicated by name. */
+function toolsOf(box: SkillToolbox, active: ReadonlySet<string>): StructuredToolInterface[] {
+    const out = new Map<string, StructuredToolInterface>();
+    for (const skill of active) for (const t of box.bySkill.get(skill) ?? []) if (!out.has(t.name)) out.set(t.name, t);
+    return [...out.values()];
 }
 
 interface AgentToolCall {
@@ -452,15 +525,23 @@ export async function runAgent(
     // tools are not wrapped with withMekikTools — a load is a catalog read that
     // emits its own `skill` trace, not a side effect to journal.
     let systemText = system;
+    let box: SkillToolbox = { bySkill: new Map(), skillsOf: new Map() };
     if (options.skills) {
         const filter: SkillFilter = options.skills === true ? {} : options.skills;
         const block = skillsPrompt(ctx, filter);
         if (block) systemText = systemText ? `${systemText}\n\n${block}` : block;
-        wrapped.push(...withSkills(ctx, filter));
+        box = buildSkillToolbox(ctx, options, filter, wrapped);
+        const toolNames = Object.fromEntries([...box.bySkill].map(([k, v]) => [k, v.map((t) => t.name)]));
+        wrapped.push(...withSkills(ctx, filter, { toolNames }));
     }
 
+    // Every tool — the always-on ones and every skill's — is dispatchable from the start;
+    // only what the model is OFFERED changes as skills load.
     const byName = new Map(wrapped.map((t) => [t.name, t]));
-    const bound = model.bindTools(wrapped);
+    for (const list of box.bySkill.values()) for (const t of list) if (!byName.has(t.name)) byName.set(t.name, t);
+
+    const activeSkills = new Set<string>();
+    let bound = model.bindTools(wrapped);
 
     const messages: BaseMessage[] = [new SystemMessage(systemText), new HumanMessage(input)];
 
@@ -508,11 +589,30 @@ export async function runAgent(
         toolCallsUsed += decision.toolCalls.length;
         if (toolCallsUsed > maxToolCalls) return budgetReply;
 
+        let activated = false;
         for (const call of decision.toolCalls) {
-            const t = byName.get(call.name);
-            // A wrapped tool may throw the interrupt that parks the graph; letting it
-            // propagate is how the pause reaches the client.
-            const result = t ? await t.invoke(call.args as never) : `Unknown tool ${call.name}.`;
+            const owners = box.skillsOf.get(call.name);
+            const locked = owners && !owners.some((s) => activeSkills.has(s)) ? owners[0] : undefined;
+            let result: unknown;
+            if (locked !== undefined) {
+                // Offered only once its skill is loaded — never run it before, or the model
+                // would act without the skill's instructions.
+                result = `Tool ${call.name} belongs to skill "${locked}". Call ${LOAD_SKILL_TOOL} with name "${locked}" first.`;
+            } else {
+                const t = byName.get(call.name);
+                // A wrapped tool may throw the interrupt that parks the graph; letting it
+                // propagate is how the pause reaches the client.
+                result = t ? await t.invoke(call.args as never) : `Unknown tool ${call.name}.`;
+            }
+
+            // Derived from the journaled call (not live state), so a resume pass rebuilds
+            // exactly the toolbox each round had the first time.
+            const skill = call.args.name;
+            if (call.name === LOAD_SKILL_TOOL && typeof skill === "string" && box.bySkill.has(skill) && !activeSkills.has(skill)) {
+                activeSkills.add(skill);
+                activated = true;
+            }
+
             messages.push(
                 new ToolMessage({
                     tool_call_id: call.id,
@@ -520,6 +620,8 @@ export async function runAgent(
                 }),
             );
         }
+
+        if (activated) bound = model.bindTools([...wrapped, ...toolsOf(box, activeSkills)]);
     }
 
     return budgetReply;

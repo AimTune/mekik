@@ -36,6 +36,9 @@ into a `load_skill` tool (plus `read_skill_resource` when the catalog has files)
 and `runAgent({ skills: true })` appends the `<available_skills>` block to the
 system prompt and adds the tools in one switch. Each load emits a persistent
 `skill` frame so the UI shows which skill the agent is following.
+`runAgent({ skillTools: { skill: [tools] } })` holds tools under a skill: they are
+offered to the model only after it loads that skill, which keeps the per-call tool
+list small.
 
 ## MCP servers as tools
 

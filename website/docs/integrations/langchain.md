@@ -55,6 +55,7 @@ function runAgent(
     emptyReply?: string;
     budgetReply?: string;
     skills?: boolean | SkillFilter; // append <available_skills> to system + add the withSkills tools; default off
+    skillTools?: Readonly<Record<string, readonly StructuredToolInterface[]>>; // tools held under a skill — offered only after load_skill
   },
 ): Promise<string>;
 ```
@@ -160,6 +161,8 @@ const READ_SKILL_RESOURCE_TOOL = "read_skill_resource"; // schema { name, path }
 ```
 
 `load_skill` returns the instructions as the observation and emits the persistent `skill` frame, so the conversation shows which skill the agent is following. An unknown name — or one the `filter` hides — comes back as an error observation listing what *is* available, so the loop stays alive and the prompt and the tool always agree. The skill tools are not wrapped with the tool policy: a load is a catalog read that emits its own trace, not a side effect to journal.
+
+`runAgent({ skillTools })` holds tools **under** a skill: keyed by skill name, they are not offered to the model until it loads that skill, then join `tools` for the rest of the run, and the `load_skill` observation names them. A premature call is refused with an observation; the tools themselves go through `withMekikTools` with the same `policy`, and the loaded set is rebuilt from the journal on resume. See [Skills → Tools under a skill](../authoring/skills.md#tools-under-a-skill). `withSkills(ctx, filter, { toolNames })` names each skill's tools in the observation when you wire the loop yourself.
 
 ## Why wrapping, not just callbacks
 
