@@ -49,7 +49,7 @@ web.MapMekik("/ws", app);      // humans
 web.MapMekikA2a("/a2a", agent); // agents — card at /.well-known/agent-card.json
 ```
 
-An optional third argument, `cardPath`, moves the Agent Card.
+An optional third argument, `cardPath`, moves the Agent Card, and `maxBodyBytes` (default `MekikA2aAspNetCore.MaxBodyBytes`, 1 MiB) caps the request body, like the TypeScript option of the same name.
 
 </TabItem>
 </Tabs>

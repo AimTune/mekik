@@ -91,7 +91,7 @@ flowchart LR
   M -->|"hello wins on conflict"| E["engine.connect(conn, params)"]
 ```
 
-Each field is taken only in its declared type — non-empty strings for `userId`, `conversationId` and `token`, a finite number for `watermark`, an object for `meta` — and anything else is ignored as if absent. So `?watermark=abc` replays the whole transcript rather than nothing, and a `hello` carrying `userId: 42` falls back to the query string's `userId`, or a minted one. (`Mekik.AspNetCore` applies the same type checks, except that it does not drop an empty string and takes `watermark` only as an integer.)
+Each field is taken only in its declared type — non-empty strings for `userId`, `conversationId` and `token`, a finite number for `watermark`, an object for `meta` — and anything else is ignored as if absent. So `?watermark=abc` replays the whole transcript rather than nothing, and a `hello` carrying `userId: 42` falls back to the query string's `userId`, or a minted one. (`Mekik.AspNetCore` applies the same type checks, empty strings included, except that it takes `watermark` only as an integer.)
 
 The merged result is a `ConnectParams` — `{ hello, credential }` — handed to `app.connect(conn, params)`. The `credential` carries the token, the raw headers (for a cookie/session authenticator), and the raw query params. See [Authentication](../authentication.md).
 
@@ -110,7 +110,7 @@ These are transport responsibilities precisely because they're about the socket,
 
 ## Errors and close codes
 
-- In `@mekik/ws`, a handler that throws surfaces as an `error{code:"internal"}` frame if the socket is still open — it doesn't take the connection down silently. In `Mekik.AspNetCore` the exception ends that socket's request: the connection is disconnected and the socket released.
+- A handler that throws surfaces as an `error{code:"internal"}` frame (its `message` is the exception's) if the socket is still open — it doesn't take the connection down silently, and the socket keeps serving later frames. Both transports behave this way.
 - An **auth reject** closes with WebSocket code **4401** (`AUTH_CLOSE_CODE` / `Protocol.AuthCloseCode`) after the `error{unauthorized}` frame, in both transports. (WS requires close codes in `1000` / `1002–1014` / `3000–4999`; 4401 sits in the app range.) See [Authentication](../authentication.md).
 
 ## Writing another transport

@@ -1213,7 +1213,8 @@ ran, the agent failed. The exact exchanges are pinned by
 **Transport.** `@mekik/mcp`'s `serveMcp` and `Mekik.AspNetCore`'s
 `MapMekikMcp` implement the stateless half of Streamable HTTP: one JSON-RPC
 message per `POST` → `200` with the response, `202` for a notification, `400`
-for unparseable JSON (`-32700`), `413` over 1 MiB; `GET` → `405` (no
+for unparseable JSON (`-32700`), `413` (`-32600`) over the `maxBodyBytes` cap
+(1 MiB by default, counted in bytes); `GET` → `405` (no
 server-to-client stream); `DELETE` → `200`. Sessions are not tracked — a
 conversation is addressed by `conversationId` in the tool arguments.
 
@@ -1327,7 +1328,8 @@ is `-32601`. A non-object request, or one without `jsonrpc: "2.0"` and a
 
 **Transport.** `GET` on the card path returns the card; `POST` on the endpoint
 carries one JSON-RPC message → `200` with the response, `202` for a
-notification, `400` for unparseable JSON (`-32700`), `413` over 1 MiB;
+notification, `400` for unparseable JSON (`-32700`), `413` (`-32600`) over the
+`maxBodyBytes` cap (1 MiB by default, counted in bytes);
 `GET` on the endpoint and `POST` on the card path are `405`.
 
 ### 14.5 Security model

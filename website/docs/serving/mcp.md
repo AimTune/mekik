@@ -49,6 +49,8 @@ web.MapMekikMcp("/mcp", mcp);  // agents
 web.Run();
 ```
 
+The optional `maxBodyBytes` argument (default `MekikMcpAspNetCore.MaxBodyBytes`, 1 MiB) caps the request body, like the TypeScript option of the same name.
+
 </TabItem>
 </Tabs>
 
@@ -97,7 +99,7 @@ Every MCP conversation belongs to one mekik user, `userId: "mcp"` by default (`M
 
 ## The JSON-RPC subset
 
-The server implements what an MCP client needs to call tools and nothing it does not: `initialize` (negotiating `2025-06-18`, `2025-03-26` or `2024-11-05`; an unknown version gets the latest), `ping`, `tools/list`, `tools/call`, and notifications (answered with nothing). Anything else is `-32601`. Argument shape errors are `-32602`; a failure inside the graph is a *result* with `isError: true`, as the protocol wants. The HTTP transport accepts one message per `POST` (`202` for a notification, `400` for bad JSON, `413` over 1 MiB), answers `GET` with `405` — it opens no server-to-client stream — and `DELETE` with `200`.
+The server implements what an MCP client needs to call tools and nothing it does not: `initialize` (negotiating `2025-06-18`, `2025-03-26` or `2024-11-05`; an unknown version gets the latest), `ping`, `tools/list`, `tools/call`, and notifications (answered with nothing). Anything else is `-32601`. Argument shape errors are `-32602`; a failure inside the graph is a *result* with `isError: true`, as the protocol wants. The HTTP transport accepts one message per `POST` (`202` for a notification, `400` for bad JSON, `413` over `maxBodyBytes`, 1 MiB by default — counted in bytes, and reading stops at the cap), answers `GET` with `405` — it opens no server-to-client stream — and `DELETE` with `200`.
 
 The exact responses are pinned by [`conformance/mcp/rpc.json`](https://github.com/AimTune/mekik/blob/main/conformance/mcp/rpc.json), replayed by both language suites.
 

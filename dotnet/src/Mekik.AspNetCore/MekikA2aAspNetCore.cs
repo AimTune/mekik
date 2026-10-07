@@ -1,4 +1,3 @@
-using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -20,12 +19,23 @@ public static class MekikA2aAspNetCore
     /// <summary>The default Agent Card path (A2A 0.3).</summary>
     public const string AgentCardPath = "/.well-known/agent-card.json";
 
-    /// <summary>Largest request body accepted, in bytes.</summary>
+    /// <summary>The default for <c>maxBodyBytes</c>: the largest request body accepted, 1 MiB.</summary>
     public const int MaxBodyBytes = 1024 * 1024;
 
-    public static void MapMekikA2a(this IEndpointRouteBuilder endpoints, string path, MekikA2aServer agent, string cardPath = AgentCardPath)
+    /// <summary>Map the A2A endpoint at <paramref name="path"/> and the Agent Card at <paramref name="cardPath"/>.</summary>
+    /// <param name="endpoints">The route builder.</param>
+    /// <param name="path">The JSON-RPC endpoint path, e.g. <c>/a2a</c>.</param>
+    /// <param name="agent">The server that answers each JSON-RPC message.</param>
+    /// <param name="cardPath">Where the Agent Card is served. Default <see cref="AgentCardPath"/>.</param>
+    /// <param name="maxBodyBytes">
+    /// Largest request body accepted, in UTF-8 bytes (default <see cref="MaxBodyBytes"/>, 1 MiB) —
+    /// TypeScript's <c>maxBodyBytes</c>. Reading stops as soon as a body passes it, and the
+    /// request is answered <c>413</c> with JSON-RPC error <c>-32600</c>.
+    /// </param>
+    public static void MapMekikA2a(this IEndpointRouteBuilder endpoints, string path, MekikA2aServer agent, string cardPath = AgentCardPath, int maxBodyBytes = MaxBodyBytes)
     {
         ArgumentNullException.ThrowIfNull(agent);
+        RequestBody.ValidateMax(maxBodyBytes);
 
         endpoints.MapGet(cardPath, async (HttpContext context) =>
         {
@@ -37,14 +47,10 @@ public static class MekikA2aAspNetCore
         endpoints.MapPost(path, async (HttpContext context) =>
         {
             var response = context.Response;
-            string body;
-            using (var reader = new StreamReader(context.Request.Body, Encoding.UTF8))
+            var body = await RequestBody.ReadAsync(context.Request, maxBodyBytes, context.RequestAborted);
+            if (body is null)
             {
-                body = await reader.ReadToEndAsync(context.RequestAborted);
-            }
-            if (body.Length > MaxBodyBytes)
-            {
-                await WriteAsync(response, StatusCodes.Status413PayloadTooLarge, RpcError(-32600, "request body too large"), context.RequestAborted);
+                await WriteAsync(response, StatusCodes.Status413PayloadTooLarge, RequestBody.TooLarge(), context.RequestAborted);
                 return;
             }
 
