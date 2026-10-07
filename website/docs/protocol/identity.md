@@ -35,13 +35,15 @@ A client may assert any subset of the ids in `hello`, or none. The server fills 
 
 A client that asserts ids **adopts whatever the server returns**. Usually the server honours the asserted ids. But there's one case where it substitutes:
 
-> If the server hands back a **different** `conversationId` than the one asserted (the old one expired or was deleted), the client **must reset its watermark to 0**. The old watermark counted frames in a transcript that no longer exists.
+> If the server hands back a **different** `conversationId` than the one asserted (the old one expired, was deleted, or belongs to a different user), the client **must reset its watermark to 0**. The old watermark counted frames in a transcript that no longer exists.
 
-This is the subtle rule ports get wrong. A stale watermark against a fresh conversation would skip the beginning of the new transcript. Resetting to 0 replays it in full.
+The server adopts an asserted `conversationId` only when it exists *and* belongs to the connecting `userId`, so one user can never join another's conversation by guessing its id.
+
+The reset is the subtle rule ports get wrong. A stale watermark against a fresh conversation would skip the beginning of the new transcript. Resetting to 0 replays it in full.
 
 ## The watermark and replay
 
-Every persistent frame (`text`, `tool_call`, `genui`, `interrupt`, `interrupt_resolved`, and any [rich message frame](../authoring/messages.md)) carries a per-conversation, strictly monotonic, gap-free `seq`. The **watermark** is the highest `seq` a client has durably received.
+Every persistent frame (`text`, `tool_call`, `skill`, `genui`, `interrupt`, `interrupt_resolved`, and any [rich message frame](../authoring/messages.md)) carries a per-conversation, strictly monotonic, gap-free `seq`. The **watermark** is the highest `seq` a client has durably received.
 
 On (re)connect:
 
@@ -56,6 +58,8 @@ sequenceDiagram
 ```
 
 The client learns the server's current high-water mark from `welcome.data.watermark`, then receives exactly the frames it missed. Transient frames are **never** replayed — a `run{started}` from an hour ago is noise; a `text` bubble is the record.
+
+A tab that connects *while a run is streaming* is covered too: frames produced while its replay tail is being read are held back until the tail is out, and any the tail already carried are dropped, so it sees every `seq` exactly once, in order. A `watermark` that isn't a number (in the `hello` or the query string) is ignored, so it can't silently suppress the replay.
 
 ### Two seq spaces — do not conflate
 
@@ -81,11 +85,11 @@ So opening a second tab shows the same live conversation, a phone and a laptop s
 
 ## Reconnecting mid-pause
 
-Open interrupts live in ilmek's checkpoint, not in memory, so they survive a restart (with a [durable checkpointer](../persistence.md)). On (re)connect, the `welcome` frame re-announces them in `welcome.data.pending` — each a `PendingView` carrying its `payload`, `ui`, and `actions` — so a reopened tab re-renders the approval form and can answer it. Without this, a reconnecting UI would replay the `interrupt` frame from history but a client that only tracks *live* interrupts would miss it; `pending` makes the open set explicit at connect time.
+Open interrupts live in ilmek's checkpoint, not in memory, so they survive a restart (with a [durable checkpointer](../persistence.md)). On (re)connect, the `welcome` frame re-announces them in `welcome.data.pending` — each a `PendingView` carrying its `payload`, `ui` and `actions`, plus `event` / `tool` for a component wait or a client tool call — so a reopened tab re-renders the approval form and can answer it. Without this, a reconnecting UI would replay the `interrupt` frame from history but a client that only tracks *live* interrupts would miss it; `pending` makes the open set explicit at connect time.
 
 ## Client-side resume, in practice
 
-This is the **client** end — the chativa browser widget, which is TypeScript-only (mekik ships no .NET client; a .NET app is the *server*). chativa's connector persists the identity and watermark to `localStorage` (under `chativa:mekik:<url>`) when you pass `resumeConversation: true`, so a page reload rejoins the same conversation:
+This is the **client** end — the chativa browser widget, which is TypeScript-only (mekik ships no .NET client; a .NET app is the *server*). chativa's connector persists the identity and watermark to `localStorage` (under `chativa:mekik:<url>`, suffixed `:<userId>` when the app configures one) when you pass `resumeConversation: true`, so a page reload rejoins the same conversation:
 
 ```ts
 new MekikConnector({ url: "wss://bot.example.com/chat", resumeConversation: true });

@@ -20,7 +20,7 @@ flowchart TD
     NET --> Cmp
   end
   subgraph open["Scenario suites — multi-frame behaviours"]
-    S["14 scenarios<br/>(handshake, replay, fan-out, …)"]
+    S["35 scenarios<br/>(handshake, replay, fan-out, …)"]
     S --> TSt["node --test"]
     S --> NETt["dotnet test"]
   end
@@ -41,34 +41,30 @@ Production swaps in a random minter and the wall clock — *only those differ.* 
 
 ### Canonical JSON
 
-The comparison is byte-for-byte over **canonical** JSON: UTF-8, object keys sorted ascending, no insignificant whitespace, numbers in shortest round-trip form. `canonicalize` (TS) and `Json.Canonicalize` (.NET) produce it. This is why .NET models frames as dictionaries rather than typed objects — see [Parity divergence 2](./languages.md#the-five-deliberate-divergences).
+The comparison is byte-for-byte over **canonical** JSON: UTF-8, object keys sorted ascending, no insignificant whitespace, numbers in shortest round-trip form. "Sorted" means exactly what JavaScript's `JSON.stringify` emits for an object built in sorted order: integer-like keys (`"9"`, `"10"`) first in numeric order, then the rest in ascending code-unit order. `canonicalize` (TS) and `Json.Canonicalize` (.NET) produce it. This is why .NET models frames as dictionaries rather than typed objects — see [Parity divergence 2](./languages.md#the-five-deliberate-divergences).
 
 ## The golden fixtures
 
 | fixture | exercises |
 |---|---|
 | `run-empty` | `run_start` → `run{started}`; `run_end{done}` with no output → `run{finished}` only |
-| `tokens` | `emitToken` customs → streaming `genui` text chunks; auto-close `stream_done` at run end |
-| `genui-ui` | `mekik.ui` custom → `genui` ui chunk; chunk-id assignment |
-| `tool-call` | `mekik.tool` running → completed customs → `tool_call` upsert by id |
-| `tool-error` | tool failure → `tool_call{status:"error"}` |
-| `reply-text` | `run_end{done}` + `replyChannel` → consolidated `bot` `text` after stream close |
+| `tokens` | `emitToken` customs → streaming `genui` text chunks sharing one chunk id; auto-close `stream_done` at run end |
 | `single-approval` | one `interrupt` → `interrupt` frame with `ui` + `actions`; `run{interrupted}` |
-| `plain-interrupt` | `ctx.interrupt` with no `$mekik` → `interrupt` frame, no `ui`/`actions` |
 | `concurrent-approvals` | two pending in one `interrupt` → two `interrupt` frames, distinct ids, both preserved |
-| `run-error` | `run_end{error}` → `⚠️` `text` + `run{error}` |
-| `run-aborted` | `run_end{aborted}` → `run{aborted}` only, no text |
-| `mixed-turn` | ui + tokens + tool + reply in one run (ordering + seq monotonicity) |
+| `mixed-turn` | tool traces (running → completed), a ui chunk, tokens and a consolidated reply in one run: ordering, seq monotonicity, chunk-id sequencing, stream auto-close |
+| `client-tool-call` | `mekik.callClientTool`: a running `tool_call` trace, then an `interrupt` whose `data.tool` is `{name, params}` with an empty payload |
 | `rich-message` | `mekik.message` customs → persistent [rich message frames](../authoring/messages.md); a caller-supplied id wins over the minted one; a reserved frame type is dropped |
 | `skill-loaded` | `mekik.loadSkill` customs → persistent [`skill` frames](../authoring/skills.md) carrying the use record verbatim; an unknown name is a `status:"error"` use |
 
-Each row is a claim about the [event→frame mapping](../protocol/event-mapping.md), frozen as JSON.
+Each row is a claim about the [event→frame mapping](../protocol/event-mapping.md), frozen as JSON. The remaining rows of that table — `run_end{error}`, `run_end{aborted}`, a plain `ctx.interrupt` with no `$mekik`, an explicit chunk id — are pinned by each language's mapper unit tests instead of a shared fixture.
 
-A second fixture file, [`conformance/mcp/rpc.json`](https://github.com/AimTune/mekik/blob/main/conformance/mcp/rpc.json), pins the JSON-RPC surface of the [MCP server](../serving/mcp.md) — `initialize`, `ping`, `tools/list`, the error codes — request by request, replayed by both suites. A third, [`conformance/a2a/rpc.json`](https://github.com/AimTune/mekik/blob/main/conformance/a2a/rpc.json), pins the [A2A agent](../serving/a2a.md)'s Agent Card and JSON-RPC surface the same way.
+[`conformance/hashes/catalogs.json`](https://github.com/AimTune/mekik/blob/main/conformance/hashes/catalogs.json) pins the `genui_components` and `skills` catalog hashes: each case carries the catalog, the exact canonical JSON string that gets hashed, and its sha256, chosen where runtimes tend to drift (key order, non-ASCII and emoji, U+2028/U+2029, number formatting).
+
+Another fixture file, [`conformance/mcp/rpc.json`](https://github.com/AimTune/mekik/blob/main/conformance/mcp/rpc.json), pins the JSON-RPC surface of the [MCP server](../serving/mcp.md) — `initialize`, `ping`, `tools/list`, the error codes — request by request, replayed by both suites. A third, [`conformance/a2a/rpc.json`](https://github.com/AimTune/mekik/blob/main/conformance/a2a/rpc.json), pins the [A2A agent](../serving/a2a.md)'s Agent Card and JSON-RPC surface the same way.
 
 ## The scenario suites
 
-The 14 behavioural scenarios cover what a single-run fixture can't:
+The 35 behavioural scenarios cover what a single-run fixture can't. The first sixteen are the core wire:
 
 1. **handshake** — anonymous connect mints ids; `welcome` returns them; asserted ids adopted; a substituted `conversationId` resets client watermark to 0.
 2. **watermark replay** — reconnect with `watermark = N` receives exactly the persistent frames with `seq > N`, in order, then live delivery; transient frames never replay.
@@ -86,6 +82,18 @@ The 14 behavioural scenarios cover what a single-run fixture can't:
 14. **exactly-once under replay** — a `mekik.tool` side effect before an interrupt runs once across the pause/resume (observed as one `tool_call{running}` id, not two).
 15. **component-event routing** — a node parked on `onEvent` announces its `interrupt{data:{event}}` with no `actions`; a `genui_event{scope:"component"}` of that name resolves it and its `payload` is the node's returned value. One no node is waiting for is dropped without reaching the app handler.
 16. **mekik-event routing** — a `genui_event{scope:"graph"}` never resolves a pause: it reaches the app handler, whose input update starts an ordinary turn (`error{interrupted}` while parked, `error{busy}` mid-run, no user `text` frame). An absent `scope` tries the component route first, then the graph one; an unknown `scope` is `error{bad_request}`.
+
+The rest cover the opt-in features and the edges — the [normative list](https://github.com/AimTune/mekik/blob/main/conformance/README.md#scenario-suites-behavioural) has each one in full:
+
+- **17–20, client tools** — declaration and sanitization (ignored unless the app opts in), tag and mode filtering, the `call` round-trip with its `{ok, result | error}` envelope, and `notify` as a `client_tool` event chunk.
+- **21–24, skills** — the `skills` catalog handshake and its hash, client skill declarations (off by default; never override a server skill), the turn snapshot with tags and origin, and `loadSkill`'s persistent `skill` frame.
+- **25–27, MCP** — a turn as `tools/call`, pause and `<name>__resume`, and MCP tools inside an agent.
+- **28–30, A2A** — a turn as a task, `input-required` and resume, `tasks/get` / `tasks/cancel`.
+- **31, malformed frames** — `bad_request` for bad JSON, a non-object, a missing or unknown `type` or a wrong-typed field, with the connection kept open; `no_session` before the handshake; a re-`hello` ignored.
+- **32, mid-stream join** — a tab connecting while a run streams gets every persistent frame exactly once, in `seq` order.
+- **33, client meta** — `meta.client` is the allowlisted `hello.meta` with the frame's `meta` laid over it, per connection.
+- **34, lock hygiene** — the turn lock is free after every terminal state, a refusing `TurnLock` is `busy` with nothing written, and a failing lease release never wedges the conversation.
+- **35, stream that throws** — a run whose event stream throws after `run_start` still ends with a `⚠️` bot `text` and `run{error}` for every tab.
 
 > **The scenarios ports tend to break** (mirroring ilmek's own list): **6 and 7** (id-vs-key routing), **8** (pending re-announce), **12** (refuse a new turn while parked), **14** (replay idempotence), and **16** (scope precedence — the `submit` id shortcut outranks `scope`, and a `component-event` must not fall through to the app handler). If you're porting mekik to a third language, write these five first.
 

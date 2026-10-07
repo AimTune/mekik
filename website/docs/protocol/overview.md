@@ -17,8 +17,9 @@ Frames are JSON objects with a `type` discriminator, exchanged over WebSocket, o
 **Direction.**
 
 ```
-client → server:  hello · text · resume · genui_event · abort
-server → client:  welcome · text · tool_call · genui · interrupt · interrupt_resolved · run · error
+client → server:  hello · text · resume · genui_event · client_tools · client_skills · abort
+server → client:  welcome · genui_components · skills · text · tool_call · skill · genui
+                  · interrupt · interrupt_resolved · run · error
                   · <rich message> — any client message-renderer name (image, card, carousel, …)
 ```
 
@@ -26,14 +27,14 @@ server → client:  welcome · text · tool_call · genui · interrupt · interr
 
 ```
 PERSISTENT (carry a per-conversation seq, stored, replayed):
-  text · tool_call · genui · interrupt · interrupt_resolved
+  text · tool_call · skill · genui · interrupt · interrupt_resolved
   · <rich message>  — the one open entry: any renderer-named type
 
 TRANSIENT (live-only, never stored, never replayed):
-  welcome · run · error
+  welcome · genui_components · skills · run · error
 ```
 
-A persistent frame is the durable record of the conversation. A transient one is a live signal that's meaningless after the fact. On (re)connect the server sends `welcome`, replays every persistent frame with `seq > watermark`, then resumes live delivery.
+A persistent frame is the durable record of the conversation. A transient one is a live signal that's meaningless after the fact. On (re)connect the server sends `welcome` (then the component and skill catalogs, when the app has them), replays every persistent frame with `seq > watermark`, then resumes live delivery. A tab that joins while a run is streaming still gets every persistent frame exactly once, in `seq` order.
 
 Full shapes: [Frames](./frames.md).
 
@@ -48,7 +49,7 @@ It's announced in `welcome.data.protocol`. The compatibility contract is two sen
 - A **major** bump (`mekik/2`) is breaking.
 - Within a major, a receiver **must ignore** unknown fields and unknown frame `type`s.
 
-That second rule is what lets a newer server add a field or a frame without breaking an older client — additive changes are always safe. Both implementations enforce it: an unknown `type` is dropped, not an error.
+That second rule is what lets a newer server add a field or a frame without breaking an older client — additive changes are always safe. A client drops an unknown server frame silently. The server ignores an unknown client frame too, but answers it with `error{bad_request}` so the sender knows; the connection stays open either way.
 
 ## Identity in four ids
 
@@ -74,7 +75,7 @@ stateDiagram-v2
   Parked --> Parked: text while parked → error{interrupted}
 ```
 
-One run per conversation at a time. A `text` while a run is in flight draws `error{busy}`; a `text` while the thread is parked draws `error{interrupted}` (you must `resume`). The full rulebook is [Engine & turn lifecycle](../engine.md).
+One run per conversation at a time. A `text` while a run is in flight draws `error{busy}`; a `text` while the thread is parked draws `error{interrupted}` (you must `resume`). If the event stream itself throws mid-run, the run still ends on the wire: a `⚠️` bot `text`, then `run{error}`. The full rulebook is [Engine & turn lifecycle](../engine.md).
 
 ## The event→frame contract
 
