@@ -54,8 +54,9 @@ Agent wrappers: `withSkills(ctx, filter)` / `runAgent({ skills })` in
   needs no wire change — the catalog and the `skill` frame are unchanged — so it
   lives in the agent loop: the loop rebuilds the offered list after a load, and
   derives the loaded set from the journaled calls so a resume replays the same
-  toolbox. A premature call is refused as an observation rather than run, so the
-  model never acts without the skill's instructions.
+  toolbox. A premature call is refused as an observation rather than run, and only
+  a load that succeeded unlocks anything, so the model never acts without the
+  skill's instructions.
 - **Why the prompt renderer is duplicated in mekik.** `@mekik/core` does not
   depend on `@ilmek/skills` (a `SkillSource` is structural), so mekik ships the
   same renderer and both suites pin the same output — the ilmek fixture's

@@ -30,6 +30,8 @@ using Mekik.Agents;
 
 The loop is budgeted by `MaxTurns` — model↔tool round-trips, default 25. Individual tool invocations do **not** consume turns: a round that fires five tools still costs one turn. `MaxToolCalls` (default 25) separately caps total tool invocations; rather than cutting a batch off halfway, the loop settles with `BudgetReply` before executing a batch that would overrun the cap. Node-level looping stays budgeted by ilmek's `RecursionLimit`, which tool calls never consume.
 
+**A failing call is an observation, not a crash.** A call to a function the agent does not have reads `Unknown tool <name>.`; arguments that fail `AIFunction` binding, or a function that throws, read `Error from <tool>: <message>` — traced `running → error` by the wrapper — and the model gets another round to react. An `InterruptSignalException` (an approval, a client tool call) and an abort's cancellation still propagate.
+
 You return the result as your node's reply (`Update.Of("reply", …)`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `RunAsync` returns an **empty string** — `Update.Of("reply", "")` emits nothing extra, no duplicate. With `Stream = false`, it returns the full text for the consolidated `text` reply. A model's function-call arguments and results (which `AIFunctionFactory` marshals through `System.Text.Json` as `JsonElement`) are canonicalized into the trace automatically — no plain-value converter needed. Reach for [`MekikTools.Wrap`](#mekiktoolswrap) directly when you need to drive the loop yourself.
 
 ## `MekikTools.Wrap`

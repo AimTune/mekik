@@ -272,6 +272,7 @@ return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
 - The skill must exist in the turn's catalog (the server's [`skills`](#configuring-the-servers-skills) or an accepted client declaration) and be visible to the node's tag/origin filter; an entry for any other skill is ignored. Its description is what the model reads in `<available_skills>` to decide when to load it.
 - Loading names the unlocked tools in the observation (`Tools now available from skill sprint-performance: list_iterations, get_iteration_performance.`).
 - A call to a skill's tool before the skill is loaded is refused with an observation naming the skill to load; the tool does not run.
+- Only a load that **succeeds** unlocks: a `load_skill` the catalog refuses (an unknown or filtered-out name, or a listed skill the source cannot return) leaves the skill's tools locked. Loading a skill again changes nothing, and loading several in one round unlocks them all for the next round.
 - Skill tools are ordinary server tools: the same `policy` / `Policies` apply (approval, visibility, redaction), each call is a `tool_call` trace, and calls are journaled. The set of loaded skills is derived from the journaled calls, so a resume after an approval pause offers each round exactly the tools it had before.
 - A tool may sit under several skills (any one of them unlocks it). A name that is both always-on and skill-held — or two different tools with one name — fails the run.
 
