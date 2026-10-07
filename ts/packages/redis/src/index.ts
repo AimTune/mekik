@@ -25,9 +25,11 @@
 
 import { randomBytes } from "node:crypto";
 
+import { canonicalize } from "@mekik/core";
 import type {
     Backplane,
     BackplaneMessage,
+    OutgoingFrame,
     Subscription,
     TurnLease,
     TurnLock,
@@ -156,6 +158,51 @@ export class RedisTurnLock implements TurnLock {
     }
 }
 
+// ── backplane envelope ────────────────────────────────────────────────────────
+
+/**
+ * Encode a backplane message as the one cross-language wire shape (PROTOCOL.md
+ * §5.1): canonical JSON of `{"frame", "originId"}` — camelCase keys, sorted, the
+ * same bytes `Mekik.Redis` writes. A TypeScript node and a .NET node can therefore
+ * share one Redis channel.
+ *
+ * @example
+ * ```ts
+ * encodeBackplaneMessage({ originId: "node-a", frame });
+ * // '{"frame":{…},"originId":"node-a"}'
+ * ```
+ */
+export function encodeBackplaneMessage(message: BackplaneMessage): string {
+    return canonicalize({ originId: message.originId, frame: message.frame });
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+
+/**
+ * Decode a payload read off a backplane channel, or `null` if it is not a
+ * well-formed envelope — a non-empty string `originId` and a `frame` object with a
+ * string `type`. A malformed payload is dropped, never fanned out.
+ *
+ * Reads `originId`/`frame` and, for one release (rolling upgrades from .NET
+ * `Mekik.Redis` 0.9, which wrote PascalCase), `OriginId`/`Frame`; camelCase wins
+ * when both are present.
+ */
+export function decodeBackplaneMessage(payload: string): BackplaneMessage | null {
+    let raw: unknown;
+    try {
+        raw = JSON.parse(payload);
+    } catch {
+        return null;
+    }
+    if (!isRecord(raw)) return null;
+    const originId = "originId" in raw ? raw.originId : raw.OriginId;
+    const frame = "frame" in raw ? raw.frame : raw.Frame;
+    if (typeof originId !== "string" || originId === "") return null;
+    if (!isRecord(frame) || typeof frame.type !== "string") return null;
+    return { originId, frame: frame as unknown as OutgoingFrame };
+}
+
 // ── backplane ─────────────────────────────────────────────────────────────────
 
 export interface RedisBackplaneOptions {
@@ -203,18 +250,14 @@ export class RedisBackplane implements Backplane {
     private readonly onMessage = (channel: string, payload: string): void => {
         const set = this.handlers.get(channel);
         if (!set || set.size === 0) return;
-        let message: BackplaneMessage;
-        try {
-            message = JSON.parse(payload) as BackplaneMessage;
-        } catch {
-            return; // ignore anything that isn't a well-formed BackplaneMessage
-        }
+        const message = decodeBackplaneMessage(payload);
+        if (message === null) return; // not a well-formed envelope: drop it, never fan out
         for (const handler of set) handler(message);
     };
 
     /** Broadcast an already-recorded frame to every other node on this conversation. */
     async publish(conversationId: string, message: BackplaneMessage): Promise<void> {
-        await this.pub.publish(this.channel(conversationId), JSON.stringify(message));
+        await this.pub.publish(this.channel(conversationId), encodeBackplaneMessage(message));
     }
 
     /**

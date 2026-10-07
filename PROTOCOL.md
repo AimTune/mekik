@@ -366,6 +366,22 @@ the `Backplane` / `IBackplane` port (default `NoopBackplane`). `@mekik/redis` /
 local lock is always freed when the run ends, even when releasing the lease
 fails.
 
+### 5.1 The backplane envelope
+
+A backplane carries `{originId, frame}`: the producing node's id (a node skips
+its own messages) and the already-recorded frame (a receiving node only fans it
+out to its local sockets; it never re-records or re-publishes it). The Redis
+backplanes publish it on `{prefix}:bp:{conversationId}` as **canonical JSON
+(§9) with camelCase keys** — `{"frame":{…},"originId":"…"}` — byte-identical
+from either language, so TypeScript and .NET nodes can share one channel.
+
+A receiver accepts an envelope only when `originId` is a non-empty string and
+`frame` is a JSON object with a string `type`; anything else (not JSON, a
+missing or non-object frame, …) is dropped, never fanned out. For one release a
+receiver also reads the PascalCase `{"OriginId", "Frame"}` that `Mekik.Redis`
+0.9 wrote, so a mixed fleet can be upgraded node by node; camelCase wins when
+both casings are present. Pinned by `conformance/redis/envelope.json`.
+
 ---
 
 ## 6. Graph context as a parameter (§6)

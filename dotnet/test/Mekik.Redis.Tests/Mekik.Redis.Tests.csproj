@@ -19,6 +19,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The backplane envelope fixture is shared with the TypeScript suite; copy it
+         next to the test assembly and resolve from AppContext.BaseDirectory. -->
+    <Content Include="../../../conformance/redis/*.json"
+             Link="redis/%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
 
