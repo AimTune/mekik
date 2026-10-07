@@ -7,11 +7,12 @@
 //                     (runAgent)  │   (1 or 2 pauses)  └→ END (declined)
 //                                 └→ END (dispute opened, or held for review)
 //
-// The payments node is a runAgent loop with a §12 skill catalog. Its money
-// tools are HELD UNDER SKILLS (`skillTools`): `wire-transfer-rules` holds
-// check_transfer_limit + transfer_funds, `dispute-handling` holds open_dispute.
-// The model sees only lookup_payee, the hidden fraud screen, flag_for_review
-// and load_skill until it loads the skill that governs a money tool.
+// The payments node is a runAgent loop over a §12 skill catalog in which EACH
+// SKILL OWNS ITS TOOLS: the `wire-transfer-rules` entry lists
+// check_transfer_limit + transfer_funds, the `dispute-handling` entry lists
+// open_dispute (SkillEntry.tools). The model sees only lookup_payee, the
+// hidden fraud screen, flag_for_review and load_skill until it loads the skill
+// that governs a money tool. Every tool is built once, at module level.
 //
 //   1. balance    — get_accounts + get_balance traced, a reply, no pause
 //   2. transfer   — under the limit: transfer_funds is not offered before
@@ -29,14 +30,13 @@
 //   node examples/banking/banking.ts     # offline self-test, exit 0/1
 
 import { channel, command, END, graph, START } from "@ilmek/core";
-import type { Context } from "@ilmek/core";
 import { tool } from "@langchain/core/tools";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
 import { mekik } from "@mekik/core";
 import type { SkillEntry } from "@mekik/core";
-import { runAgent, withMekikTools } from "@mekik/langchain";
+import { runAgent, toolContext, withMekikTools } from "@mekik/langchain";
 
 import {
     botText,
@@ -114,8 +114,129 @@ interface Quote {
 /** The bank's staging area: transfers submitted for approval, by conversation. */
 const STAGED = new Map<string, Quote>();
 
-/** The bank's skill catalog (§12): level 1 is announced, the rules are read on load. */
-const SKILLS: SkillEntry[] = [
+// ── tools ─────────────────────────────────────────────────────────────────────
+//
+// Built once, at module level. A tool that needs the run (to mount UI, or to
+// key state by the conversation) reads it from its LangChain config with
+// toolContext(config) — the mekik wrapper hands it over on every call — so no
+// tool has to be rebuilt per request.
+
+const getAccounts = tool(() => Object.values(ACCOUNTS).map(({ id, kind }) => ({ id, kind })), {
+    name: "get_accounts",
+    description: "List the customer's accounts.",
+    schema: z.object({}),
+});
+
+const getBalance = tool(
+    ({ accountId }) => {
+        const a = ACCOUNTS[accountId];
+        if (!a) throw new Error(`No account ${accountId}.`);
+        return { accountId, balance: a.balanceCents / 100 };
+    },
+    { name: "get_balance", description: "Current balance of one account.", schema: z.object({ accountId: z.string() }) },
+);
+
+const listTransactions = tool(
+    ({ accountId }, config) => {
+        const rows = LEDGER.filter((t) => t.accountId === accountId);
+        // The rows become a table on screen; the model only gets the count back.
+        mekik.genui.table(toolContext(config), {
+            title: `Recent activity — ${accountId}`,
+            columns: ["Date", "Description", "Amount"],
+            rows: rows.map((t) => [t.date, t.description, dollars(t.amountCents)]),
+        });
+        return { accountId, count: rows.length };
+    },
+    {
+        name: "list_transactions",
+        description: "Show an account's recent transactions to the customer as a table.",
+        schema: z.object({ accountId: z.string() }),
+    },
+);
+
+const lookupPayee = tool(
+    ({ name }) => {
+        const p = PAYEES[name.toLowerCase()];
+        return p ?? { id: `PAY-NEW-${name.length}`, name, known: false };
+    },
+    { name: "lookup_payee", description: "Resolve a payee by name.", schema: z.object({ name: z.string() }) },
+);
+
+// Hidden from the client on purpose (policy show: false): a fraud score is not
+// something to show a customer, and neither is its failure. An outage comes
+// back as an observation the model can act on.
+const fraudScreen = tool(
+    ({ payeeId, amount }) => {
+        effects.fraud_screen++;
+        if (!fraudServiceUp) return "Error: fraud screening service timed out";
+        return { payeeId, amount, risk: "low" };
+    },
+    {
+        name: "fraud_screen",
+        description: "Score a transfer for fraud risk before submitting it.",
+        schema: z.object({ payeeId: z.string(), amount: z.number() }),
+    },
+);
+
+const flagForReview = tool(
+    ({ payeeId, amount, reason }) => {
+        effects.flag_for_review++;
+        const ticket = `REV-${100 + reviewQueue.length}`;
+        reviewQueue.push(`${ticket} ${payeeId} ${amount} ${reason}`);
+        return { ticket, status: "held" };
+    },
+    {
+        name: "flag_for_review",
+        description: "Hold a transfer for manual review by the fraud team.",
+        schema: z.object({ payeeId: z.string(), amount: z.number(), reason: z.string() }),
+    },
+);
+
+const checkTransferLimit = tool(
+    ({ amount }) => {
+        effects.check_transfer_limit++;
+        return { amount, limit: SECOND_APPROVER_LIMIT, needsSecondApprover: amount > SECOND_APPROVER_LIMIT };
+    },
+    { name: "check_transfer_limit", description: "Does this amount need a second approver?", schema: z.object({ amount: z.number() }) },
+);
+
+const transferFunds = tool(
+    ({ from, payeeId, payee: name, amount }, config): Quote => {
+        effects.transfer_funds++;
+        const quote = { quoteId: `Q-${effects.transfer_funds}`, from, payeeId, payee: name, amountCents: Math.round(amount * 100) };
+        // Staged per conversation: the run that called the tool says which one.
+        STAGED.set(toolContext(config).threadId, quote);
+        return quote;
+    },
+    {
+        name: "transfer_funds",
+        description: "Submit a transfer for the customer's approval. Money moves only after the required approvals.",
+        schema: z.object({ from: z.string(), payeeId: z.string(), payee: z.string(), amount: z.number() }),
+    },
+);
+
+const openDispute = tool(
+    ({ date, description, amount }) => {
+        effects.open_dispute++;
+        const caseId = `DSP-${500 + DISPUTES.length}`;
+        DISPUTES.push({ caseId, date, description, amount });
+        return { caseId, status: "open", provisionalCredit: amount };
+    },
+    {
+        name: "open_dispute",
+        description: "Open a dispute for a transaction the customer does not recognise.",
+        schema: z.object({ date: z.string(), description: z.string(), amount: z.number() }),
+    },
+);
+
+// ── the skill catalog (§12): each skill is its instructions + the tools it governs ──
+
+/**
+ * Level 1 (name, description) is announced to the client; the instructions are
+ * read on load; the tools never leave the server, and the payments agent is not
+ * offered them until the skill that owns them is loaded.
+ */
+const SKILLS: SkillEntry<StructuredToolInterface>[] = [
     {
         name: "wire-transfer-rules",
         description: "Rules for sending money: fraud screening, limits, second approvers. Load before any transfer.",
@@ -123,128 +244,15 @@ const SKILLS: SkillEntry[] = [
             "1. Screen every transfer with fraud_screen. If screening is unavailable, do NOT transfer: flag_for_review.\n" +
             `2. Call check_transfer_limit. Above $${SECOND_APPROVER_LIMIT.toLocaleString("en-US")} a second approver must co-sign.\n` +
             "3. transfer_funds only submits the transfer for approval; tell the customer money moves after approval.",
+        tools: [checkTransferLimit, transferFunds],
     },
     {
         name: "dispute-handling",
         description: "How to open a card or account dispute for a transaction the customer does not recognise.",
         instructions: "Confirm the date, description and amount from the history, then open_dispute. Give the case id.",
+        tools: [openDispute],
     },
 ];
-
-// ── tools, per node ───────────────────────────────────────────────────────────
-
-function accountTools(ctx: Context<any>): StructuredToolInterface[] {
-    const list = tool(() => Object.values(ACCOUNTS).map(({ id, kind }) => ({ id, kind })), {
-        name: "get_accounts",
-        description: "List the customer's accounts.",
-        schema: z.object({}),
-    });
-    const balance = tool(
-        ({ accountId }) => {
-            const a = ACCOUNTS[accountId];
-            if (!a) throw new Error(`No account ${accountId}.`);
-            return { accountId, balance: a.balanceCents / 100 };
-        },
-        { name: "get_balance", description: "Current balance of one account.", schema: z.object({ accountId: z.string() }) },
-    );
-    return withMekikTools(ctx, [list, balance]);
-}
-
-function historyTools(ctx: Context<any>): StructuredToolInterface[] {
-    const txns = tool(
-        ({ accountId }) => {
-            const rows = LEDGER.filter((t) => t.accountId === accountId);
-            // The rows become a table on screen; the model only gets the count back.
-            mekik.genui.table(ctx, {
-                title: `Recent activity — ${accountId}`,
-                columns: ["Date", "Description", "Amount"],
-                rows: rows.map((t) => [t.date, t.description, dollars(t.amountCents)]),
-            });
-            return { accountId, count: rows.length };
-        },
-        {
-            name: "list_transactions",
-            description: "Show an account's recent transactions to the customer as a table.",
-            schema: z.object({ accountId: z.string() }),
-        },
-    );
-    return withMekikTools(ctx, [txns]);
-}
-
-/** The payments node's tools, unwrapped — runAgent wraps them (traces, journal, policy). */
-function paymentTools(ctx: Context<any>) {
-    const payee = tool(
-        ({ name }) => {
-            const p = PAYEES[name.toLowerCase()];
-            return p ?? { id: `PAY-NEW-${name.length}`, name, known: false };
-        },
-        { name: "lookup_payee", description: "Resolve a payee by name.", schema: z.object({ name: z.string() }) },
-    );
-    // Hidden from the client on purpose (policy show: false): a fraud score is not
-    // something to show a customer, and neither is its failure. An outage comes
-    // back as an observation the model can act on.
-    const fraud = tool(
-        ({ payeeId, amount }) => {
-            effects.fraud_screen++;
-            if (!fraudServiceUp) return "Error: fraud screening service timed out";
-            return { payeeId, amount, risk: "low" };
-        },
-        {
-            name: "fraud_screen",
-            description: "Score a transfer for fraud risk before submitting it.",
-            schema: z.object({ payeeId: z.string(), amount: z.number() }),
-        },
-    );
-    const review = tool(
-        ({ payeeId, amount, reason }) => {
-            effects.flag_for_review++;
-            const ticket = `REV-${100 + reviewQueue.length}`;
-            reviewQueue.push(`${ticket} ${payeeId} ${amount} ${reason}`);
-            return { ticket, status: "held" };
-        },
-        {
-            name: "flag_for_review",
-            description: "Hold a transfer for manual review by the fraud team.",
-            schema: z.object({ payeeId: z.string(), amount: z.number(), reason: z.string() }),
-        },
-    );
-    // ── held under wire-transfer-rules ──
-    const limit = tool(
-        ({ amount }) => {
-            effects.check_transfer_limit++;
-            return { amount, limit: SECOND_APPROVER_LIMIT, needsSecondApprover: amount > SECOND_APPROVER_LIMIT };
-        },
-        { name: "check_transfer_limit", description: "Does this amount need a second approver?", schema: z.object({ amount: z.number() }) },
-    );
-    const transfer = tool(
-        ({ from, payeeId, payee: name, amount }): Quote => {
-            effects.transfer_funds++;
-            const quote = { quoteId: `Q-${effects.transfer_funds}`, from, payeeId, payee: name, amountCents: Math.round(amount * 100) };
-            STAGED.set(ctx.threadId, quote);
-            return quote;
-        },
-        {
-            name: "transfer_funds",
-            description: "Submit a transfer for the customer's approval. Money moves only after the required approvals.",
-            schema: z.object({ from: z.string(), payeeId: z.string(), payee: z.string(), amount: z.number() }),
-        },
-    );
-    // ── held under dispute-handling ──
-    const dispute = tool(
-        ({ date, description, amount }) => {
-            effects.open_dispute++;
-            const caseId = `DSP-${500 + DISPUTES.length}`;
-            DISPUTES.push({ caseId, date, description, amount });
-            return { caseId, status: "open", provisionalCredit: amount };
-        },
-        {
-            name: "open_dispute",
-            description: "Open a dispute for a transaction the customer does not recognise.",
-            schema: z.object({ date: z.string(), description: z.string(), amount: z.number() }),
-        },
-    );
-    return { alwaysOn: [payee, fraud, review], limit, transfer, dispute };
-}
 
 // ── the graph ─────────────────────────────────────────────────────────────────
 
@@ -266,28 +274,23 @@ const bank = graph("banking")
     })
 
     .node("accounts", async (s, ctx) => {
-        const out = await runTools(ctx, model, "accounts", accountTools(ctx), "Answer balance questions with the account tools.", s.input);
+        const out = await runTools(ctx, model, "accounts", withMekikTools(ctx, [getAccounts, getBalance]), "Answer balance questions with the account tools.", s.input);
         return { reply: out.text };
     })
 
     .node("history", async (s, ctx) => {
-        const out = await runTools(ctx, model, "history", historyTools(ctx), "Show transactions with list_transactions.", s.input);
+        const out = await runTools(ctx, model, "history", withMekikTools(ctx, [listTransactions]), "Show transactions with list_transactions.", s.input);
         return { reply: out.text };
     })
 
     .node("payments", async (s, ctx) => {
-        const t = paymentTools(ctx);
         const reply = await runAgent(ctx, model.asChatModel("payments"), {
             system: PAYMENTS,
             input: s.input,
-            tools: t.alwaysOn,
+            tools: [lookupPayee, fraudScreen, flagForReview], // always offered
             stream: false,
+            // The catalog's skills — and the money tools each one owns, offered only once it is loaded.
             skills: true,
-            // The money tools are held under the skills that govern them.
-            skillTools: {
-                "wire-transfer-rules": [t.limit, t.transfer],
-                "dispute-handling": [t.dispute],
-            },
             policy: { fraud_screen: { show: false } },
         });
         // What transfer_funds staged, read once through the journal.
@@ -381,6 +384,7 @@ async function probe(): Promise<void> {
 
     section("0. connect — the bank's skill catalog");
     check(skillsCatalog(hello)?.skills?.map((s) => s.name).join("|") === "dispute-handling|wire-transfer-rules", "a `skills` frame lists dispute-handling and wire-transfer-rules");
+    check(!JSON.stringify(hello).includes("transfer_funds") && !JSON.stringify(hello).includes("open_dispute"), "…summaries only: the tools each skill owns never leave the server");
 
     // ── 1. balance via tools ──────────────────────────────────────────────────
     section("1. balance — read-only tools, no pause");
