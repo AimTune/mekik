@@ -20,12 +20,14 @@
 //                whose consent question becomes the desk's own pause
 //   3. chat    — no tools at all
 //
-// Skills (§12), tag-scoped per route: `refund-policy` (billing) holds
-// issue_credit via runAgent `skillTools`; `incident-runbook` (tech) holds
-// escalate_to_specialist via the hand-wired form — withSkills(ctx, filter,
-// { toolNames }) plus the probe kit's runTools gating — because the tech
-// loop's MCP tools come pre-wrapped by withMcpTools. Each node's prompt,
-// load_skill and skill frames only ever involve its own tag.
+// Skills (§12), tag-scoped per route, each OWNING its tool: `refund-policy`
+// (billing) lists issue_credit, `incident-runbook` (tech) lists
+// escalate_to_specialist. The billing node is runAgent; the tech loop is
+// hand-wired (its MCP tools come pre-wrapped by withMcpTools), so it uses the
+// probe kit's runTools with `skills`: withSkills(ctx, filter, { onLoaded })
+// supplies load_skill — naming the entry's tools in its observation — and the
+// loop holds each skill's own tools until a successful load. Each node's
+// prompt, load_skill and skill frames only ever involve its own tag.
 //
 // Both peers are reached through a JSON-RPC seam that serializes every message
 // (`rpc`), so the probe exercises the real request/response shapes without a
@@ -34,14 +36,13 @@
 //   node examples/support-desk/support.ts     # offline self-test, exit 0/1
 
 import { channel, command, END, graph, START } from "@ilmek/core";
-import type { Context } from "@ilmek/core";
 import { tool } from "@langchain/core/tools";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
 import { mekik, MekikA2aServer, MekikMcpServer } from "@mekik/core";
 import type { A2aTask, McpCallToolResult, McpPendingView, MessageAction, SkillEntry } from "@mekik/core";
-import { runAgent, withMcpTools, withMekikTools, withSkills } from "@mekik/langchain";
+import { runAgent, withMcpTools, withMekikTools } from "@mekik/langchain";
 import type { McpToolboxLike } from "@mekik/langchain";
 
 import {
@@ -184,17 +185,56 @@ async function a2aSend(message: Record<string, unknown>): Promise<A2aTask> {
     return res.result as A2aTask;
 }
 
+// ── the desk's tools — built once, at module level ─────────────────────────────
+
+const getInvoice = tool(
+    ({ invoiceId }) => {
+        deskEffects.get_invoice++;
+        return { invoiceId, amount: 59.9, lines: [{ item: "Fibre 500", amount: 39.9 }, { item: "Router rental (duplicate)", amount: 20 }] };
+    },
+    { name: "get_invoice", description: "Fetch an invoice.", schema: z.object({ invoiceId: z.string() }) },
+);
+
+const issueCredit = tool(
+    ({ invoiceId, amount, reason }) => {
+        deskEffects.issue_credit++;
+        return { invoiceId, credited: amount, reason, creditNote: "CN-2209" };
+    },
+    {
+        name: "issue_credit",
+        description: "Credit part of an invoice back to the customer.",
+        schema: z.object({ invoiceId: z.string(), amount: z.number(), reason: z.string() }),
+    },
+);
+
+const runDiagnostics = tool(
+    ({ customerId }) => {
+        deskEffects.run_diagnostics++;
+        return { customerId, vpnClient: "6.0.3", wifiPowerSaving: false, lineFlaps24h: 31 };
+    },
+    { name: "run_diagnostics", description: "Remote diagnostics for a customer's line.", schema: z.object({ customerId: z.string() }) },
+);
+
+const escalateToSpecialist = tool(({ summary }) => ({ escalated: true, summary }), {
+    name: "escalate_to_specialist",
+    description: "Hand the case to the network specialist agent.",
+    schema: z.object({ summary: z.string() }),
+});
+
+// ── the desk's skill catalog (§12): each skill is its instructions + the tools it governs ──
+
 /**
- * The desk's skill catalog (§12), tag-scoped per route: each routed node asks
- * only for its own tag, so its prompt, its load_skill tool and its skill frames
- * only ever involve its own skills. Each skill holds the tool it governs.
+ * Tag-scoped per route: each routed node asks only for its own tag, so its
+ * prompt, its load_skill tool and its skill frames only ever involve its own
+ * skills — and it can only ever unlock its own skill's tool.
  */
-const SKILLS: SkillEntry[] = [
+const SKILLS: SkillEntry<StructuredToolInterface>[] = [
     {
         name: "refund-policy",
         description: "When and how much to credit back: duplicates, outages, goodwill limits.",
         instructions: "Credit duplicate charges in full with issue_credit and quote the credit note. Goodwill credits are capped at $30.",
         tags: ["billing"],
+        tools: [issueCredit],
     },
     {
         name: "incident-runbook",
@@ -203,63 +243,9 @@ const SKILLS: SkillEntry[] = [
             "Search the knowledge base, run diagnostics. If the line flaps more than 10 times in 24h, the KB fix is not enough: " +
             "escalate_to_specialist with a one-line summary.",
         tags: ["tech"],
+        tools: [escalateToSpecialist],
     },
 ];
-
-/** The billing node's tools, unwrapped — runAgent wraps them. issue_credit is held under refund-policy. */
-function billingTools() {
-    const invoice = tool(
-        ({ invoiceId }) => {
-            deskEffects.get_invoice++;
-            return { invoiceId, amount: 59.9, lines: [{ item: "Fibre 500", amount: 39.9 }, { item: "Router rental (duplicate)", amount: 20 }] };
-        },
-        { name: "get_invoice", description: "Fetch an invoice.", schema: z.object({ invoiceId: z.string() }) },
-    );
-    const credit = tool(
-        ({ invoiceId, amount, reason }) => {
-            deskEffects.issue_credit++;
-            return { invoiceId, credited: amount, reason, creditNote: "CN-2209" };
-        },
-        {
-            name: "issue_credit",
-            description: "Credit part of an invoice back to the customer.",
-            schema: z.object({ invoiceId: z.string(), amount: z.number(), reason: z.string() }),
-        },
-    );
-    return { invoice, credit };
-}
-
-/**
- * The tech node's tools. This loop is hand-wired rather than runAgent because
- * its MCP tools come pre-wrapped by `withMcpTools`, so skills are wired the
- * documented way for such loops: `withSkills(ctx, filter, { toolNames })`
- * supplies load_skill (naming what a load unlocks), and the loop holds
- * escalate_to_specialist back until incident-runbook is loaded.
- */
-function techTools(ctx: Context<any>): { tools: StructuredToolInterface[]; held: Record<string, StructuredToolInterface[]> } {
-    const diag = tool(
-        ({ customerId }) => {
-            deskEffects.run_diagnostics++;
-            return { customerId, vpnClient: "6.0.3", wifiPowerSaving: false, lineFlaps24h: 31 };
-        },
-        { name: "run_diagnostics", description: "Remote diagnostics for a customer's line.", schema: z.object({ customerId: z.string() }) },
-    );
-    const escalate = tool(({ summary }) => ({ escalated: true, summary }), {
-        name: "escalate_to_specialist",
-        description: "Hand the case to the network specialist agent.",
-        schema: z.object({ summary: z.string() }),
-    });
-    // Per-node scoping: the KB comes in over MCP, the rest are local — and none
-    // of the billing tools (or skills) are in here.
-    return {
-        tools: [
-            ...withMcpTools(ctx, kb),
-            ...withMekikTools(ctx, [diag]),
-            ...withSkills(ctx, { tags: ["tech"] }, { toolNames: { "incident-runbook": ["escalate_to_specialist"] } }),
-        ],
-        held: { "incident-runbook": withMekikTools(ctx, [escalate]) },
-    };
-}
 
 const desk = graph("support-desk")
     .channel("input", channel.lastWrite<string>(""))
@@ -272,20 +258,21 @@ const desk = graph("support-desk")
     })
 
     .node("billing", async (s, ctx) => {
-        const { invoice, credit } = billingTools();
         const reply = await runAgent(ctx, model.asChatModel("billing"), {
             system: "You handle invoices and credits.",
             input: s.input,
-            tools: [invoice],
+            tools: [getInvoice],
             stream: false,
+            // refund-policy brings issue_credit, offered once it is loaded.
             skills: { tags: ["billing"] },
-            skillTools: { "refund-policy": [credit] },
         });
         return { reply };
     })
 
     .node("tech", async (s, ctx) => {
-        const { tools, held } = techTools(ctx);
+        // Per-node scoping: the KB comes in over MCP (pre-wrapped), diagnostics is
+        // local — and none of the billing tools (or skills) are in here.
+        const tools = [...withMcpTools(ctx, kb), ...withMekikTools(ctx, [runDiagnostics])];
         const out = await runTools(
             ctx,
             model,
@@ -293,7 +280,8 @@ const desk = graph("support-desk")
             tools,
             "You are tier-1 tech support. Follow the incident runbook.\n\n" + mekik.skillsPrompt(ctx, { tags: ["tech"] }),
             s.input,
-            { skillTools: held },
+            // Hand-wired skills: load_skill, plus incident-runbook's own tool held until it loads.
+            { skills: { tags: ["tech"] } },
         );
         const esc = out.results.escalate_to_specialist as { summary: string } | undefined;
         if (esc) return command({ update: { summary: esc.summary, reply: out.text }, goto: "handoff" });
@@ -356,6 +344,7 @@ async function probe(): Promise<void> {
     await app.connect(c);
     const hello = c.drain();
     check(skillsCatalog(hello)?.skills?.map((s) => `${s.name}:${s.tags?.join(",")}`).join("|") === "incident-runbook:tech|refund-policy:billing", "the desk's `skills` frame: incident-runbook (tech), refund-policy (billing)");
+    check(!JSON.stringify(hello).includes("issue_credit") && !JSON.stringify(hello).includes("escalate_to_specialist"), "…summaries only: the tools each skill owns never leave the server");
 
     // ── 1. billing ────────────────────────────────────────────────────────────
     section("1. billing — invoice and credit; refund-policy holds the credit tool");
@@ -405,7 +394,7 @@ async function probe(): Promise<void> {
 
     const techRounds = (model.rounds.tech ?? []).map((r) => r.join("|"));
     check(techRounds.slice(0, 4).every((r) => r === "kb__search|run_diagnostics|load_skill"), "the tech node offers the MCP tool and its own — escalation held back, no billing tools");
-    check(techRounds[4] === "kb__search|run_diagnostics|load_skill|escalate_to_specialist", "escalate_to_specialist joins once incident-runbook is loaded (hand-wired withSkills + toolNames)");
+    check(techRounds[4] === "kb__search|run_diagnostics|load_skill|escalate_to_specialist", "escalate_to_specialist joins once incident-runbook is loaded (hand-wired: withSkills + onLoaded)");
     const techSys = model.systems.tech ?? "";
     check(techSys.includes("<name>incident-runbook</name>") && !techSys.includes("refund-policy"), "tag scoping: the tech prompt lists incident-runbook, not the billing skill");
     check(model.observations.tech?.some((o) => o.startsWith('Unknown skill "refund-policy"')) === true, "tag scoping: loading the billing skill from tech is refused");

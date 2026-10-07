@@ -13,7 +13,9 @@
 //   runTools       the model↔tool loop routed-desk.ts uses, over any
 //                  StructuredToolInterface[] — each decision journaled with
 //                  ctx.step, tool errors turned into observations, pauses
-//                  rethrown untouched.
+//                  rethrown untouched. With `skills`, it is the hand-wired
+//                  form of runAgent's skill gating: each skill's own tools
+//                  (SkillEntry.tools) are held until a successful load_skill.
 //   Collector, check, describe, …  frame capture and the ✓-line output style.
 //
 // Nothing in here talks to a network or a real model.
@@ -24,7 +26,9 @@ import type { BaseMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 
-import type { Connection, ErrorFrame, OutgoingFrame, RunFrame, SkillFrame, SkillsFrame, TextOutFrame, WelcomeFrame } from "@mekik/core";
+import { mekik } from "@mekik/core";
+import type { Connection, ErrorFrame, OutgoingFrame, RunFrame, SkillFilter, SkillFrame, SkillsFrame, TextOutFrame, WelcomeFrame } from "@mekik/core";
+import { withMekikTools, withSkills } from "@mekik/langchain";
 
 // ── the model seam ────────────────────────────────────────────────────────────
 
@@ -135,12 +139,18 @@ export interface RunToolsOptions {
     /** Max model rounds. Default 8. */
     maxTurns?: number;
     /**
-     * Already-wrapped tools held under a skill, keyed by skill name — the
-     * hand-wired form of runAgent's `skillTools` (PROTOCOL.md §12), for a loop
-     * whose tools come pre-wrapped (e.g. from `withMcpTools`). Pair it with
-     * `withSkills(ctx, filter, { toolNames })` in `tools`. A held tool is offered
-     * only from the round after its skill's `load_skill`; a call before that is
+     * Give this loop the turn's skills (PROTOCOL.md §12), scoped by the filter —
+     * the hand-wired form of runAgent's `skills`. The loop adds `load_skill`
+     * (`withSkills`, which names each skill's tools in its observation) and holds
+     * each visible skill's OWN tools (`SkillEntry.tools`, read with
+     * `mekik.skillTools` and wrapped with `withMekikTools`) until the model loads
+     * that skill successfully (`withSkills`' `onLoaded`). A call before that is
      * refused with an observation and does not run.
+     */
+    skills?: SkillFilter;
+    /**
+     * Extra, already-wrapped tools held under a skill, keyed by skill name — for
+     * tools that must be built per request. They merge with the skill's own.
      */
     skillTools?: Readonly<Record<string, readonly StructuredToolInterface[]>>;
 }
@@ -162,7 +172,19 @@ export async function runTools(
     opts: RunToolsOptions = {},
 ): Promise<LoopResult> {
     const maxTurns = opts.maxTurns ?? 8;
-    const held = opts.skillTools ?? {};
+    const active = new Set<string>();
+    // Each skill's own tools (wrapped like any server tool), then any extras.
+    const held: Record<string, StructuredToolInterface[]> = {};
+    if (opts.skills) {
+        const owned = mekik.skillTools<StructuredToolInterface>(ctx, opts.skills);
+        for (const [skill, list] of Object.entries(owned)) held[skill] = withMekikTools(ctx, list);
+    }
+    for (const [skill, list] of Object.entries(opts.skillTools ?? {})) held[skill] = [...(held[skill] ?? []), ...list];
+    if (opts.skills) {
+        const extraNames = Object.fromEntries(Object.entries(opts.skillTools ?? {}).map(([k, v]) => [k, v.map((t) => t.name)]));
+        // Only a successful load unlocks; load_skill re-runs on a replay, so the offer is rebuilt.
+        tools = [...tools, ...withSkills(ctx, opts.skills, { toolNames: extraNames, onLoaded: (name) => active.add(name) })];
+    }
     const byName = new Map(tools.map((t) => [t.name, t]));
     // Which skills own each held tool; every held tool is dispatchable, only the offer changes.
     const owners = new Map<string, string[]>();
@@ -172,7 +194,6 @@ export async function runTools(
             if (!byName.has(t.name)) byName.set(t.name, t);
         }
     }
-    const active = new Set<string>();
     const offered = (): StructuredToolInterface[] => {
         const out = new Map(tools.map((t) => [t.name, t]));
         for (const skill of active) for (const t of held[skill] ?? []) if (!out.has(t.name)) out.set(t.name, t);
@@ -198,8 +219,6 @@ export async function runTools(
             let observation: string;
             const skillsOf = owners.get(c.name);
             const locked = skillsOf && !skillsOf.some((s) => active.has(s)) ? skillsOf[0] : undefined;
-            // The load is derived from the journaled call, so a replay rebuilds the same offer.
-            const loading = c.name === "load_skill" && typeof c.args.name === "string" && c.args.name in held ? c.args.name : undefined;
             if (locked !== undefined) {
                 // The same rule runAgent's `skillTools` applies: never run a skill's
                 // tool before the model has read the skill.
@@ -220,7 +239,6 @@ export async function runTools(
                 calls.push({ name: c.name, ok: false });
                 observation = `Error: ${err instanceof Error ? err.message : String(err)}`;
             }
-            if (loading !== undefined) active.add(loading);
             messages.push(new ToolMessage({ tool_call_id: c.id, content: observation }));
         }
     }
