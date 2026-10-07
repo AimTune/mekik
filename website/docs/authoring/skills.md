@@ -308,11 +308,44 @@ return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
 
 A skill's tools are **server-side only**. They are never serialized: the `skills` catalog frame still carries `name` / `description` / `tags`, the catalog hash is computed over those same fields (adding tools to an entry does not change it), and the `skill` frame a load emits is unchanged. A [client-declared skill](#client-declared-skills-off-by-default) can never carry tools — sanitization keeps only `name`, `description`, `instructions` and `tags`, so a `tools` field in a declaration is dropped and the skill is accepted without it.
 
+A tool in the catalog is built **once**, so it has no `ctx` in scope — yet a tool often needs the run: to mount UI, or to key state by the conversation. The wrapper hands it over on every call: read it with `toolContext(config)` from the LangChain `config` (the tool function's second argument) / `MekikTools.ToolContext(arguments)` from the `AIFunctionArguments` (take it as a delegate parameter; `AIFunctionFactory` binds it).
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
+```ts
+import { toolContext } from "@mekik/langchain";
+
+const transferFunds = tool(
+  (args, config) => {
+    const ctx = toolContext(config);            // the run that called this tool
+    STAGED.set(ctx.threadId, stage(args));
+    return { staged: true };
+  },
+  { name: "transfer_funds", description: "Submit a transfer for approval.", schema },
+);
+```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+var transferFunds = AIFunctionFactory.Create((string payee, decimal amount, AIFunctionArguments call) =>
+{
+    var ctx = MekikTools.ToolContext(call);     // the run that called this function
+    Staged[ctx.ThreadId] = Stage(payee, amount);
+    return "staged";
+}, "transfer_funds", "Submit a transfer for approval.");
+```
+
+</TabItem>
+</Tabs>
+
 `mekik.skillTools(ctx, filter)` / `Shuttle.SkillTools<TTool>(ctx, tags, source)` read the visible server skills' tools (keyed by skill name, without emitting a `skill` frame) when you need them yourself.
 
 ### Tools built per request: `skillTools`
 
-Some tools cannot live in a catalog that is built once at startup — they close over the turn's state (the signed-in customer, a per-request client). Hold those under a skill with `skillTools` / `SkillTools`, keyed by skill name. They **merge** with the tools the entry owns:
+Some tools cannot live in a catalog that is built once at startup — they close over the turn's state beyond `ctx` (a per-request client, a value computed earlier in the node). Hold those under a skill with `skillTools` / `SkillTools`, keyed by skill name. They **merge** with the tools the entry owns:
 
 <Tabs groupId="lang">
 <TabItem value="ts" label="TypeScript">

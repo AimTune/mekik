@@ -86,6 +86,36 @@ export interface WithMekikToolsOptions {
 
 const DEFAULT_POLICY: ToolPolicy = { show: true };
 
+/** The `configurable` key under which {@link withMekikTools} hands a tool the run's ilmek `ctx`. */
+export const MEKIK_CONTEXT_KEY = "mekik_ctx";
+
+/**
+ * The ilmek `ctx` of the run that called this tool — read from the LangChain
+ * `config` every tool function receives as its second argument.
+ * {@link withMekikTools} (and so `runAgent`) passes it on each call, which is
+ * what lets a tool built once — one a skill catalog entry owns
+ * (`SkillEntry.tools`) — still emit UI or key state by the conversation,
+ * without being rebuilt per request.
+ *
+ * @throws when the tool was invoked some other way.
+ *
+ * @example
+ * ```ts
+ * const transfer = tool((args, config) => {
+ *     const ctx = toolContext(config);
+ *     mekik.genui.card(ctx, { title: "Transfer staged" });
+ *     return stage(ctx.threadId, args);
+ * }, { name: "transfer_funds", schema });
+ * ```
+ */
+export function toolContext(config: unknown): Context<any> {
+    const ctx = (config as { configurable?: Record<string, unknown> } | undefined)?.configurable?.[MEKIK_CONTEXT_KEY];
+    if (typeof ctx !== "object" || ctx === null) {
+        throw new Error("toolContext: this tool was not invoked through withMekikTools / runAgent, so it has no mekik context.");
+    }
+    return ctx as Context<any>;
+}
+
 /**
  * Wrap LangChain tools so each one, when the agent calls it:
  * emits a `tool_call` trace (unless `show: false`), optionally pauses for human
@@ -139,7 +169,11 @@ function wrapOne(
             try {
                 // Journaled: on the replay pass after an interrupt this returns
                 // the recorded value instead of invoking the tool again.
-                const result = await ctx.step(`lc:${original.name}`, () => original.invoke(input as never));
+                // The run's ctx rides in `configurable`, so a tool built once (a skill
+                // catalog's) reaches it through toolContext(config).
+                const result = await ctx.step(`lc:${original.name}`, () =>
+                    original.invoke(input as never, { configurable: { [MEKIK_CONTEXT_KEY]: ctx } }),
+                );
                 if (show) toolTrace(ctx, { id, name: original.name, status: "completed", result: maskValue(result, redact) });
                 return result as never;
             } catch (err) {

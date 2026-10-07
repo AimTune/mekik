@@ -16,7 +16,7 @@ import { mekik } from "@mekik/core";
 import { TurnSkills } from "@mekik/core";
 import type { Connection, OutgoingFrame, SkillEntry, SkillSource } from "@mekik/core";
 
-import { runAgent, withSkills, type ToolPolicyMap } from "../src/index.ts";
+import { runAgent, toolContext, withSkills, type ToolPolicyMap } from "../src/index.ts";
 
 class FakeConn implements Connection {
     readonly id = "c-1";
@@ -369,5 +369,33 @@ describe("withSkills for a hand-wired loop", () => {
         await load!.invoke({ name: "ghost" } as never);
         await load!.invoke({ name: "missing" } as never);
         assert.deepEqual(loaded, ["reporting"]);
+    });
+});
+
+describe("toolContext — a tool built once reaches the run's ctx", () => {
+    test("a catalog-owned tool reads the calling run's ctx from its config; outside a wrapped call it throws", async () => {
+        const seen: string[] = [];
+        // Built once, at module level — no ctx in scope.
+        const whoAmI = lcTool(
+            async (_input: unknown, config: unknown) => {
+                const ctx = toolContext(config);
+                seen.push(ctx.threadId);
+                mekik.text(ctx, "said by the tool");
+                return "ok";
+            },
+            { name: "who_am_i", description: "Report the conversation.", schema: z.object({}) as never },
+        ) as unknown as StructuredToolInterface;
+        const m = scriptedModel([
+            { toolCalls: [{ id: "1", name: "load_skill", args: { name: "reporting" } }] },
+            { toolCalls: [{ id: "2", name: "who_am_i", args: {} }] },
+            { text: "done" },
+        ]);
+
+        const conn = await run(makeCatalogApp(m.model, [{ ...REPORTING, tools: [whoAmI] }]));
+
+        assert.equal(seen.length, 1);
+        assert.ok(seen[0]!.length > 0, "the ctx carries the conversation's thread id");
+        assert.ok(JSON.stringify(conn.sent).includes("said by the tool"), "the tool emitted on the run's ctx");
+        await assert.rejects(whoAmI.invoke({} as never), /not invoked through withMekikTools/);
     });
 });

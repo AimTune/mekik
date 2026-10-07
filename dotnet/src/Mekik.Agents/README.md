@@ -35,7 +35,9 @@ A skill owns its tools: a `SkillEntry<AIFunction>` in the catalog carries
 `Tools`, and `Agent.RunAsync` offers them to the model only after it loads that
 skill, which keeps the per-call tool list small. The tools stay on the server —
 the catalog frame and hash never see them. `AgentRunOptions.SkillTools` adds
-functions that must be built per request; they merge with the entry's own.
+functions that must be built per request; they merge with the entry's own. A
+function built once reads the calling run's context with
+`MekikTools.ToolContext(arguments)`.
 
 ```csharp
 Skills = SkillSources.Inline(new SkillEntry<AIFunction>

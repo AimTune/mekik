@@ -1012,7 +1012,8 @@ The field is **server-side only**: it is never serialized — not on the
 (§12.5) — and a client declaration (§12.4) can never carry it (sanitization
 keeps only the known fields). `mekik.skillTools(ctx, filter)` /
 `Shuttle.SkillTools<TTool>(ctx, tags, source)` read the visible server skills'
-tools without emitting a trace.
+tools without emitting a trace. A tool built once reaches the calling run's
+context through the wrapper: `toolContext(config)` / `MekikTools.ToolContext(arguments)`.
 
 `runAgent({ skills })` / `AgentRunOptions.Skills` hold each visible entry's
 tools back: they are *not offered* to the model until it loads that skill

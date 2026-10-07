@@ -473,4 +473,29 @@ public class SkillToolsTests
         Assert.EndsWith("Tools now available from skill reporting: get_sprint, refund.", observation);
         Assert.Equal(["reporting", "docs"], loaded); // "missing" never fires
     }
+
+    [Fact]
+    public async Task ToolContext_a_catalog_owned_function_reads_the_calling_runs_context_outside_a_wrapped_call_it_throws()
+    {
+        var seen = new List<string>();
+        // Built once — no context in scope.
+        var whoAmI = AIFunctionFactory.Create((AIFunctionArguments call) =>
+        {
+            var ctx = MekikTools.ToolContext(call);
+            seen.Add(ctx.ThreadId);
+            Shuttle.Text(ctx, "said by the tool");
+            return "ok";
+        }, "who_am_i", "Report the conversation.");
+        var chat = new ScriptedChat(
+            [Call("1", "load_skill", new() { ["name"] = "reporting" })],
+            [Call("2", "who_am_i")],
+            [Text("done")]);
+
+        var conn = await Run(CatalogApp(chat, SkillSources.Inline(Owning(Reporting, whoAmI))));
+
+        Assert.Single(seen);
+        Assert.False(string.IsNullOrEmpty(seen[0]));
+        Assert.Contains("said by the tool", string.Join("\n", conn.Sent.Select(f => Json.Canonicalize(f))));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await whoAmI.InvokeAsync(new AIFunctionArguments()));
+    }
 }

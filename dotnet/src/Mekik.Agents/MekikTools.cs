@@ -78,6 +78,35 @@ public static class MekikTools
 
     private static readonly ToolPolicy DefaultPolicy = new();
 
+    /// <summary>The <see cref="AIFunctionArguments.Context"/> key under which a wrapped call carries the run's <see cref="IContext"/>.</summary>
+    public static readonly object ContextKey = typeof(IContext);
+
+    /// <summary>
+    /// The ilmek context of the run that called this function. <see cref="Wrap"/> (and so
+    /// <see cref="Agent.RunAsync"/>) puts it in <see cref="AIFunctionArguments.Context"/> on each
+    /// call, which is what lets a function built once — one a skill catalog entry owns
+    /// (<see cref="SkillEntry{TTool}"/>) — still emit UI or key state by the conversation without
+    /// being rebuilt per request. Take an <see cref="AIFunctionArguments"/> parameter in the
+    /// delegate (<see cref="AIFunctionFactory"/> binds it) and pass it here. Mirror of
+    /// TypeScript's <c>toolContext(config)</c>.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The function was invoked some other way.</exception>
+    /// <example><code>
+    /// var transfer = AIFunctionFactory.Create((string payee, decimal amount, AIFunctionArguments call) =>
+    /// {
+    ///     var ctx = MekikTools.ToolContext(call);
+    ///     return Stage(ctx.ThreadId, payee, amount);
+    /// }, "transfer_funds");
+    /// </code></example>
+    public static IContext ToolContext(AIFunctionArguments arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        return arguments.Context?.TryGetValue(ContextKey, out var ctx) == true && ctx is IContext c
+            ? c
+            : throw new InvalidOperationException(
+                "ToolContext: this function was not invoked through MekikTools.Wrap / Agent.RunAsync, so it has no mekik context.");
+    }
+
     /// <summary>
     /// Wrap each function so that, when the model calls it, it emits a
     /// `tool_call` trace (unless <see cref="ToolPolicy.Show"/> is false),
@@ -160,6 +189,11 @@ public static class MekikTools
                 // InnerFunction.InvokeAsync is what DelegatingAIFunction's own
                 // InvokeCoreAsync forwards to; calling it directly keeps `base`
                 // out of a lambda.
+                //
+                // The run's context rides in arguments.Context, so a function built once
+                // (a skill catalog's) reaches it through MekikTools.ToolContext.
+                arguments.Context ??= new Dictionary<object, object?>();
+                arguments.Context[ContextKey] = _ctx;
                 var result = await _ctx.StepAsync(
                     $"ai:{Name}",
                     () => InnerFunction.InvokeAsync(arguments, cancellationToken)).ConfigureAwait(false);

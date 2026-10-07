@@ -29,6 +29,7 @@ mekik ships two implementations that speak the identical `mekik/1` wire
 | client skills accept | `MekikOptions.clientSkills: true \| fn` | `MekikOptions.ClientSkills` (`ClientSkills.AcceptAll` / `ClientSkillsPolicy`) |
 | client skill sanitize | `sanitizeClientSkills` | `ClientSkills.Sanitize` |
 | skill model wrap | `withSkills` / `runAgent({ skills })` (`@mekik/langchain`) | `SkillFunctions.Wrap` / `AgentRunOptions.Skills` (`Mekik.Agents`) |
+| a tool's run context | `toolContext(config)` — `config.configurable.mekik_ctx` (`@mekik/langchain`) | `MekikTools.ToolContext(arguments)` — `AIFunctionArguments.Context` (`Mekik.Agents`) |
 | skill-owned tools (§12.6) | `SkillEntry<TTool>.tools` (`TTool = StructuredToolInterface`) / `mekik.skillTools(ctx, filter?)` / `runAgent({ skillTools })` | `SkillEntry<TTool>.Tools` (`TTool = AIFunction`) / `Shuttle.SkillTools<TTool>(ctx, tags?, source?)` / `AgentRunOptions.SkillTools` |
 | MCP server (§13) | `MekikMcpServer` (`@mekik/core`) / `serveMcp`, `mcpRequestHandler` (`@mekik/mcp`) | `MekikMcpServer` (`Mekik.Core`) / `MapMekikMcp` (`Mekik.AspNetCore`) |
 | MCP result reduction | `summarizeMcpTurn` | `MekikMcpServer.Summarize` |

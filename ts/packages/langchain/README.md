@@ -41,7 +41,8 @@ catalog a `tools` list and `runAgent` offers them to the model only after it
 loads that skill, which keeps the per-call tool list small. The tools stay on the
 server — the catalog frame and hash never see them.
 `runAgent({ skillTools: { skill: [tools] } })` adds tools that must be built per
-request; they merge with the entry's own.
+request; they merge with the entry's own. A tool built once reads the calling
+run's `ctx` with `toolContext(config)`.
 
 ```ts
 const catalog: SkillEntry<StructuredToolInterface>[] = [
