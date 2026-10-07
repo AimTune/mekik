@@ -56,12 +56,12 @@ public sealed record ToolPolicy
 {
     public bool Show { get; init; } = true;              // surface the trace
     public ApproveSpec? Approve { get; init; }           // pause for a human first (null = no)
-    public IReadOnlyList<string>? Redact { get; init; }  // mask these fields in the surfaced trace
+    public IReadOnlyList<string> Redact { get; init; } = []; // mask these fields in the surfaced trace
 }
 ```
 
 ```csharp
-new()
+new Dictionary<string, ToolPolicy>
 {
     ["get_order"]       = new ToolPolicy(),                               // trace shown
     ["refund_payment"]  = new ToolPolicy { Approve = new ApproveSpec() }, // ask the human first
@@ -95,7 +95,7 @@ When a policy marks a tool `approve`, the pause is a normal mekik `interrupt` fr
 
 ## Where to go next
 
-- [**LangChain**](./langchain.md) — `withMekikTools` and the callback fallback.
-- [**Microsoft.Extensions.AI**](./dotnet-agents.md) — `MekikTools.Wrap` and the relationship to `ApprovalRequiredAIFunction`.
+- [**LangChain**](./langchain.md) — the packaged `runAgent` loop, `withMekikTools`, client tools, skills, `route`, and the callback fallback.
+- [**Microsoft.Extensions.AI**](./dotnet-agents.md) — the packaged `Agent.RunAsync` loop, `MekikTools.Wrap`, client tools, skills, `Agent.RouteAsync`, and the relationship to `ApprovalRequiredAIFunction`.
 - [**Semantic Kernel**](./semantic-kernel.md) — the one filter that covers agents and planners.
 - [**MCP servers as tools**](./mcp.md) — `withMcpTools` / `McpFunctions.Wrap`: a Model Context Protocol server's tools with the mekik treatment.

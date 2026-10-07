@@ -11,7 +11,7 @@ get, per function:
 ```csharp
 .Node("agent", async (State state, IContext ctx) =>
 {
-    using var _ = kernel.UseMekik(ctx, new()
+    using var _ = kernel.UseMekik(ctx, new Dictionary<string, ToolPolicy>
     {
         ["get_order"]       = new ToolPolicy(),                              // shown
         ["refund_payment"]  = new ToolPolicy { Approve = new ApproveSpec() },// ask the human first

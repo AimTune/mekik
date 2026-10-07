@@ -166,22 +166,26 @@ An `{ok:false, error}` answer makes the `await` **throw** — a plain `Error` in
 <TabItem value="ts" label="TypeScript">
 
 ```ts
-import { withMekikTools, withClientTools, runAgent } from "@mekik/langchain";
+import { withClientTools, runAgent } from "@mekik/langchain";
 
 const tools = [
-    ...withMekikTools(ctx, serverTools, policy),
+    ...serverTools,                                  // raw — runAgent wraps them with `policy`
     ...withClientTools(ctx, { tags: ["billing"] }),
 ];
-return { reply: await runAgent(ctx, model(), { system, input: s.input, tools }) };
+return { reply: await runAgent(ctx, model(), { system, input: s.input, tools, policy }) };
 ```
 
 </TabItem>
 <TabItem value="dotnet" label=".NET">
 
 ```csharp
-var tools = MekikTools.Wrap(ctx, serverFunctions, policies)
+var tools = serverFunctions                                // raw — RunAsync wraps them with Policies
     .Concat(ClientToolFunctions.Wrap(ctx, tags: ["billing"]))
     .ToList();
+return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
+{
+    System = system, Input = state.Get<string>("input") ?? string.Empty, Tools = tools, Policies = policies,
+}));
 ```
 
 </TabItem>

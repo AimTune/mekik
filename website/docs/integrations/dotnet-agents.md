@@ -32,14 +32,16 @@ The loop is budgeted by `MaxTurns` — model↔tool round-trips, default 25. Ind
 
 **A failing call is an observation, not a crash.** A call to a function the agent does not have reads `Unknown tool <name>.`; arguments that fail `AIFunction` binding, or a function that throws, read `Error from <tool>: <message>` — traced `running → error` by the wrapper — and the model gets another round to react. An `InterruptSignalException` (an approval, a client tool call) and an abort's cancellation still propagate.
 
-You return the result as your node's reply (`Update.Of("reply", …)`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `RunAsync` returns an **empty string** — `Update.Of("reply", "")` emits nothing extra, no duplicate. With `Stream = false`, it returns the full text for the consolidated `text` reply. A model's function-call arguments and results (which `AIFunctionFactory` marshals through `System.Text.Json` as `JsonElement`) are canonicalized into the trace automatically — no plain-value converter needed. Reach for [`MekikTools.Wrap`](#mekiktoolswrap) directly when you need to drive the loop yourself.
+You return the result as your node's reply (`Update.Of("reply", …)`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `RunAsync` returns an **empty string** — `Update.Of("reply", "")` emits nothing extra, no duplicate. With `Stream = false`, it returns the full text for the consolidated `text` reply.
+
+Hand `RunAsync` **raw** functions and put their policies in `Policies`: it wraps every entry of `Tools` with `MekikTools` itself, so a function you already wrapped would be wrapped twice and each call traced twice. A model's function-call arguments and results (which `AIFunctionFactory` marshals through `System.Text.Json` as `JsonElement`) are canonicalized into the trace automatically — no plain-value converter needed. Reach for [`MekikTools.Wrap`](#mekiktoolswrap) directly when you need to drive the loop yourself.
 
 ## `MekikTools.Wrap`
 
 ```csharp
 using Mekik.Agents;
 
-var tools = MekikTools.Wrap(ctx, [getOrder, refundPayment, internalLookup, charge], new()
+var tools = MekikTools.Wrap(ctx, [getOrder, refundPayment, internalLookup, charge], new Dictionary<string, ToolPolicy>
 {
     ["get_order"]       = new ToolPolicy(),                               // shown
     ["refund_payment"]  = new ToolPolicy { Approve = new ApproveSpec() }, // ask the human first
@@ -62,15 +64,16 @@ using Mekik.Agents;
 
 .Node("agent", async (State state, IContext ctx) =>
 {
-    var tools = MekikTools.Wrap(ctx, serverFunctions, policies)       // the server's own functions
+    var tools = serverFunctions                                       // the server's own functions (RunAsync wraps them)
         .Concat(ClientToolFunctions.Wrap(ctx, tags: ["billing"]))     // the frontend's, scoped by tag
         .ToList();
 
     return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
     {
-        System = SYSTEM,
-        Input  = state.Get<string>("input") ?? string.Empty,
-        Tools  = tools,
+        System   = SYSTEM,
+        Input    = state.Get<string>("input") ?? string.Empty,
+        Tools    = tools,
+        Policies = policies,
     }));
 })
 ```
@@ -92,35 +95,44 @@ Each wrapper's executor is [`Shuttle.CallClientToolAsync`](../authoring/client-t
 
 ## `SkillFunctions.Wrap` — progressive disclosure
 
-The app's [skills](../authoring/skills.md) (PROTOCOL.md §12) reach a model in three levels: the `<available_skills>` block in the system prompt lists names and descriptions, `load_skill` pulls one skill's instructions when a task matches, and `read_skill_resource` opens a bundled file when the instructions point at it. `SkillFunctions.Wrap` builds the functions; `Shuttle.SkillsPrompt` builds the block. It is the .NET mirror of `@mekik/langchain`'s `withSkills`:
+The app's [skills](../authoring/skills.md) (PROTOCOL.md §12) reach a model in three levels: the `<available_skills>` block in the system prompt lists names and descriptions, `load_skill` pulls one skill's instructions when a task matches, and `read_skill_resource` opens a bundled file when the instructions point at it. `SkillFunctions.Wrap` builds the functions; `Shuttle.SkillsPrompt` builds the block. It is the .NET mirror of `@mekik/langchain`'s `withSkills`. `AgentRunOptions.Skills` wires both in one switch:
 
 ```csharp
 using Mekik.Agents;
 
 .Node("agent", async (State state, IContext ctx) =>
-{
-    var system = SYSTEM + "\n\n" + Shuttle.SkillsPrompt(ctx, tags: ["docs"]);
-    var tools = MekikTools.Wrap(ctx, serverFunctions, policies)
-        .Concat(SkillFunctions.Wrap(ctx, tags: ["docs"]))
-        .ToList();
-    return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions { System = system, Input = input, Tools = tools }));
-})
+    // appends <available_skills> to System and adds load_skill / read_skill_resource
+    Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
+    {
+        System = SYSTEM, Input = input, Tools = serverFunctions, Policies = policies,
+        Skills = true, SkillTags = ["docs"],
+    })))
+```
 
-// …or let Agent.RunAsync do both with one option:
-new AgentRunOptions { System = SYSTEM, Input = input, Tools = tools, Skills = true, SkillTags = ["docs"] }
+Driving the loop yourself, build both pieces by hand:
+
+```csharp
+var system = SYSTEM + "\n\n" + Shuttle.SkillsPrompt(ctx, tags: ["docs"]);
+var tools = MekikTools.Wrap(ctx, serverFunctions, policies)
+    .Concat(SkillFunctions.Wrap(ctx, tags: ["docs"]))
+    .ToList();
+// hand `system` and `new ChatOptions { Tools = [.. tools] }` to your own model↔tool loop
 ```
 
 Signature:
 
 ```csharp
 static IReadOnlyList<AIFunction> Wrap(IContext ctx, IReadOnlyList<string>? tags = null, string? source = null);
+static IReadOnlyList<AIFunction> Wrap(IContext ctx, IReadOnlyList<string>? tags, string? source,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? toolNames,   // extra tool names a load announces, per skill
+    Action<string>? onLoaded);                                      // after each successful load (also a 4-arg overload without it)
 // SkillFunctions.LoadSkillTool = "load_skill"                 — schema { name }
 // SkillFunctions.ReadSkillResourceTool = "read_skill_resource" — schema { name, path }; only when the catalog has files
 ```
 
 `load_skill` returns the instructions as the observation and emits the persistent `skill` frame. An unknown name — or one the filter hides — comes back as an error observation listing what *is* available, so the loop stays alive and the prompt and the function always agree. `AgentRunOptions.Skills` (with `SkillTags` / `SkillSource`) appends the block to `System` and adds the functions in one switch. The skill functions are not wrapped with the tool policy: a load is a catalog read that emits its own trace, not a side effect to journal.
 
-A skill **owns** its tools: put a `SkillEntry<AIFunction>` with `Tools` in the catalog. With `Skills = true`, `Agent.RunAsync` holds each visible entry's tools back — they are not offered to the model until it loads that skill successfully, then join `Tools` for the rest of the run, and the `load_skill` observation names them. A premature call is refused with an observation; once unlocked, a call that fails reads `Error from <tool>: <message>` like any other (above); the tools themselves go through `MekikTools` with the same `Policies`, and a resume rebuilds each round's toolbox. The tools never reach the wire (catalog frame and hash are unchanged), and an entry whose tools are not `AIFunction`s fails the run. `AgentRunOptions.SkillTools` adds functions keyed by skill name for the ones that must be built per request; they merge with the entry's own. See [Skills → Tools under a skill](../authoring/skills.md#tools-under-a-skill). Wiring the loop yourself, `SkillFunctions.Wrap(ctx, tags, source, toolNames, onLoaded)` names each entry's tools in the observation (plus any `toolNames`) and calls `onLoaded(name)` after each successful load; `Shuttle.SkillTools<AIFunction>(ctx, tags, source)` gives you the visible entries' functions. A function built once (a catalog's) reads the calling run's context with `MekikTools.ToolContext(arguments)` — `MekikTools.Wrap` puts it in `AIFunctionArguments.Context` on every call.
+A skill **owns** its tools: put a `SkillEntry<AIFunction>` with `Tools` in the catalog. With `Skills = true`, `Agent.RunAsync` holds each visible entry's tools back — they are not offered to the model until it loads that skill successfully, then join `Tools` for the rest of the run, and the `load_skill` observation names them. A failed load unlocks nothing. A premature call does not run the function: it is refused with an observation naming the skill to load (every skill that holds the function, when several do); once unlocked, a call that fails reads `Error from <tool>: <message>` like any other (above); the tools themselves go through `MekikTools` with the same `Policies`, and a resume rebuilds each round's toolbox. The tools never reach the wire (catalog frame and hash are unchanged), and an entry whose tools are not `AIFunction`s fails the run. `AgentRunOptions.SkillTools` adds functions keyed by skill name for the ones that must be built per request; they merge with the entry's own. See [Skills → Tools under a skill](../authoring/skills.md#tools-under-a-skill). Wiring the loop yourself, `SkillFunctions.Wrap(ctx, tags, source, toolNames, onLoaded)` names each entry's tools in the observation (plus any `toolNames`) and calls `onLoaded(name)` after each successful load; `Shuttle.SkillTools<AIFunction>(ctx, tags, source)` gives you the visible entries' functions. A function built once (a catalog's) reads the calling run's context with `MekikTools.ToolContext(arguments)` — `MekikTools.Wrap` puts it in `AIFunctionArguments.Context` on every call.
 
 ## Why wrapping
 

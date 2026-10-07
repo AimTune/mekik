@@ -247,14 +247,14 @@ defaults to `"call"` and parks until some connection answers it.
 The definitions are already model-shaped. With `@mekik/langchain`:
 
 ```ts
-import { withMekikTools, withClientTools, runAgent } from "@mekik/langchain";
+import { withClientTools, runAgent } from "@mekik/langchain";
 
 .node("agent", async (s, ctx) => {
     const tools = [
-        ...withMekikTools(ctx, serverTools, policy),   // the server's own tools
+        ...serverTools,                                 // the server's own tools, raw — runAgent wraps them
         ...withClientTools(ctx, { tags: ["billing"] }), // the frontend's, scoped by tag
     ];
-    return { reply: await runAgent(ctx, model(), { system, input: s.input, tools }) };
+    return { reply: await runAgent(ctx, model(), { system, input: s.input, tools, policy }) };
 })
 ```
 
@@ -265,7 +265,7 @@ handler error comes back as an error **observation** so the loop stays alive.
 
 .NET (`Mekik.Agents`, Microsoft.Extensions.AI) — `ClientToolFunctions.Wrap`
 returns plain `AIFunction`s, so they drop into `Agent.RunAsync`, a raw
-`IChatClient` call, or (via `KernelFunctionFactory`) a Semantic Kernel plugin
+`IChatClient` call, or (via `AsKernelFunction()`) a Semantic Kernel plugin
 collection alongside your server functions:
 
 ```csharp
@@ -273,7 +273,7 @@ using Mekik.Agents;
 
 .Node("agent", async (State state, IContext ctx) =>
 {
-    var tools = MekikTools.Wrap(ctx, serverFunctions, policies)       // the server's own functions
+    var tools = serverFunctions                                       // the server's own, raw — RunAsync wraps them
         .Concat(ClientToolFunctions.Wrap(ctx, tags: ["billing"]))     // the frontend's, scoped by tag
         .ToList();
 
@@ -282,6 +282,7 @@ using Mekik.Agents;
         System = SYSTEM,
         Input  = state.Get<string>("input") ?? string.Empty,
         Tools  = tools,
+        Policies = policies,
     }));
 })
 ```

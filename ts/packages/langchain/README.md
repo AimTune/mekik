@@ -29,6 +29,29 @@ import { withMekikTools } from "@mekik/langchain";
 The wrapped tools keep their name, description and schema, so the agent binds
 them to the model exactly as before.
 
+## `runAgent` — the loop, packaged
+
+```ts
+import { runAgent } from "@mekik/langchain";
+
+.node("agent", async (state, ctx) => ({
+    reply: await runAgent(ctx, model, {
+        system: SYSTEM,
+        input: state.input,
+        tools: [getOrder, refundPayment],                 // raw tools — runAgent wraps them
+        policy: { refund_payment: { approve: true } },
+    }),
+}))
+```
+
+`runAgent` wraps the tools with `withMekikTools`, journals each model call so a
+resume replays it, streams text live, and is budgeted by `maxTurns` (model
+rounds, default 25) and `maxToolCalls` (default 25). A tool that throws, or
+whose arguments fail its schema, becomes an `Error from <tool>: …` observation
+and the model keeps going. `withClientTools(ctx, filter?)` adds the frontend's
+declared tools, and `route(ctx, model, routes, input)` classifies a turn into
+one node (an exact answer wins, otherwise the longest route name mentioned).
+
 ## Skills — progressive disclosure
 
 `withSkills(ctx, { tags? })` turns the app's [skills](https://mekik.aimtune.dev/authoring/skills)
@@ -38,7 +61,7 @@ system prompt and adds the tools in one switch. Each load emits a persistent
 `skill` frame so the UI shows which skill the agent is following.
 A skill owns its tools: give a `SkillEntry<StructuredToolInterface>` in the
 catalog a `tools` list and `runAgent` offers them to the model only after it
-loads that skill, which keeps the per-call tool list small. The tools stay on the
+loads that skill successfully, which keeps the per-call tool list small. The tools stay on the
 server — the catalog frame and hash never see them.
 `runAgent({ skillTools: { skill: [tools] } })` adds tools that must be built per
 request; they merge with the entry's own. A tool built once reads the calling
