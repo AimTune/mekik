@@ -32,7 +32,7 @@
  * agent that owns them). It gives visibility but NOT exactly-once — see its doc.
  */
 
-import { DynamicStructuredTool, type StructuredToolInterface } from "@langchain/core/tools";
+import { DynamicStructuredTool, ToolInputParsingException, type StructuredToolInterface } from "@langchain/core/tools";
 import { AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import type { BaseMessage } from "@langchain/core/messages";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
@@ -288,6 +288,20 @@ export interface WithSkillsOptions {
     toolNames?: Readonly<Record<string, readonly string[]>>;
 }
 
+/**
+ * The skills `load_skill` actually loaded, per node context. runAgent unlocks a skill's
+ * held tools only for a load that succeeded — never for one the catalog refused — so the
+ * model never gets a skill's tools without its instructions. Rebuilt on a replay pass,
+ * because the load re-runs there (it is a catalog read, not a journaled step).
+ */
+const loadedSkills = new WeakMap<object, Set<string>>();
+
+function markLoaded(ctx: Context<any>, name: string): void {
+    const set = loadedSkills.get(ctx) ?? new Set<string>();
+    set.add(name);
+    loadedSkills.set(ctx, set);
+}
+
 /** The `load_skill` observation: the instructions, plus the tools the load unlocked. */
 export function loadSkillObservation(name: string, instructions: string, tools?: readonly string[]): string {
     const body = instructions.length > 0 ? instructions : `(skill ${name} has no instructions)`;
@@ -336,6 +350,7 @@ export function withSkills(ctx: Context<any>, filter: SkillFilter = {}, options:
             if (!names.has(name)) return `Unknown skill ${JSON.stringify(name)}. Available: ${[...names].join(", ")}.`;
             try {
                 const skill = loadSkill(ctx, name);
+                markLoaded(ctx, name);
                 return loadSkillObservation(name, skill.instructions, options.toolNames?.[name]);
             } catch (err) {
                 return `Error loading skill ${name}: ${err instanceof Error ? err.message : String(err)}`;
@@ -600,15 +615,30 @@ export async function runAgent(
                 result = `Tool ${call.name} belongs to skill "${locked}". Call ${LOAD_SKILL_TOOL} with name "${locked}" first.`;
             } else {
                 const t = byName.get(call.name);
-                // A wrapped tool may throw the interrupt that parks the graph; letting it
-                // propagate is how the pause reaches the client.
-                result = t ? await t.invoke(call.args as never) : `Unknown tool ${call.name}.`;
+                try {
+                    result = t ? await t.invoke(call.args as never) : `Unknown tool ${call.name}.`;
+                } catch (err) {
+                    // A wrapped tool may throw the interrupt that parks the graph; letting it
+                    // propagate is how the pause reaches the client.
+                    if (isInterruptLike(err)) throw err;
+                    // Anything else is the model's problem to react to, not the run's: a tool
+                    // that threw (already traced by its wrapper), or arguments that failed the
+                    // tool's schema before the wrapper ran — traced here, since nothing else did.
+                    if (err instanceof ToolInputParsingException) traceRejectedCall(ctx, call, err, options);
+                    result = `Error from ${call.name}: ${err instanceof Error ? err.message : String(err)}`;
+                }
             }
 
             // Derived from the journaled call (not live state), so a resume pass rebuilds
             // exactly the toolbox each round had the first time.
             const skill = call.args.name;
-            if (call.name === LOAD_SKILL_TOOL && typeof skill === "string" && box.bySkill.has(skill) && !activeSkills.has(skill)) {
+            if (
+                call.name === LOAD_SKILL_TOOL &&
+                typeof skill === "string" &&
+                box.bySkill.has(skill) &&
+                loadedSkills.get(ctx)?.has(skill) === true &&
+                !activeSkills.has(skill)
+            ) {
                 activeSkills.add(skill);
                 activated = true;
             }
@@ -625,6 +655,15 @@ export async function runAgent(
     }
 
     return budgetReply;
+}
+
+/** Trace a call whose arguments the tool's schema rejected: running → error, under the tool's policy. */
+function traceRejectedCall(ctx: Context<any>, call: AgentToolCall, err: Error, options: RunAgentOptions): void {
+    const policy = options.policy?.[call.name] ?? options.defaultPolicy ?? DEFAULT_POLICY;
+    if (policy.show === false) return;
+    const id = nextToolCallId(ctx);
+    toolTrace(ctx, { id, name: call.name, status: "running", params: mask(call.args, policy.redact ?? []) });
+    toolTrace(ctx, { id, name: call.name, status: "error", error: err.message });
 }
 
 /** One classification target for {@link route}: a node name and what it handles. */
