@@ -291,6 +291,23 @@ describe("runAgent with tools owned by the skill entry", () => {
         assert.ok(ok.observations().some((o) => o.startsWith('Tool get_sprint belongs to skills "docs", "reporting".')));
     });
 
+    test("a premature call lists the owning skills in catalog order, however they were declared", async () => {
+        const c = { sprint: 0, refund: 0 };
+        const { sprint } = makeTools(c);
+        const DOCS_UNTAGGED: SkillEntry = { name: "docs", description: "Docs.", instructions: "Read docs." };
+        // "reporting" owns the tool through its entry; "docs" only through skillTools,
+        // which used to append it after the entries.
+        const m = scriptedModel([{ toolCalls: [{ id: "0", name: "get_sprint", args: {} }] }, { text: "ok" }]);
+
+        await run(makeCatalogApp(m.model, [{ ...REPORTING, tools: [sprint] }, DOCS_UNTAGGED], { skillTools: { docs: [sprint] } }));
+
+        assert.ok(
+            m.observations().some((o) => o.startsWith('Tool get_sprint belongs to skills "docs", "reporting".')),
+            m.observations().join(" | "),
+        );
+        assert.equal(c.sprint, 0);
+    });
+
     test("an entry hidden by the node's tag filter never unlocks its tools", async () => {
         const c = { sprint: 0, refund: 0 };
         const { sprint } = makeTools(c);

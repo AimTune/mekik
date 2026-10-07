@@ -558,7 +558,8 @@ function buildSkillToolbox(
 
     // The entry's own tools first, then the explicit ones for the same skill.
     const held = entrySkillTools(ctx, filter);
-    const visible = new Set(skills(ctx, filter).map((s) => s.name));
+    const catalog = skills(ctx, filter).map((s) => s.name);
+    const visible = new Set(catalog);
     for (const [skill, list] of Object.entries(options.skillTools ?? {})) {
         if (!visible.has(skill) || !list || list.length === 0) continue;
         const merged = held.get(skill) ?? [];
@@ -584,6 +585,13 @@ function buildSkillToolbox(
             withMekikTools(ctx, list, options.policy ?? {}, options.defaultPolicy ? { defaultPolicy: options.defaultPolicy } : {}),
         );
     }
+    // Owners in catalog order, however they were declared (entry tools first, then
+    // skillTools), so a premature call's refusal lists them the way the prompt does.
+    const rank = new Map<string, number>();
+    catalog.forEach((name, i) => {
+        if (!rank.has(name)) rank.set(name, i);
+    });
+    for (const owners of box.skillsOf.values()) owners.sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0));
     return box;
 }
 
