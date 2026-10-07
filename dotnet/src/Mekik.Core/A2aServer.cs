@@ -303,7 +303,7 @@ public sealed class MekikA2aServer
         };
     }
 
-    private string Timestamp() => DateTimeOffset.FromUnixTimeMilliseconds(_now()).UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'");
+    private string Timestamp() => DateTimeOffset.FromUnixTimeMilliseconds(_now()).UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", System.Globalization.CultureInfo.InvariantCulture);
 
     // ── pure helpers ──────────────────────────────────────────────────────────
 
@@ -389,7 +389,9 @@ public sealed class MekikA2aServer
     {
         if (p.GetValueOrDefault("tool") is string tool) return $"a client tool call ({tool}) that only the conversation's own UI can answer";
         var payload = p.GetValueOrDefault("payload");
-        var text = payload is IReadOnlyDictionary<string, object?> or System.Collections.IList ? Json.Canonicalize(payload) : payload?.ToString() ?? "null";
+        // A string reads as itself; anything else as its canonical JSON — culture-free, and
+        // what TypeScript's String()/JSON.stringify print (249.9, true, null), never "249,9" or "True".
+        var text = payload is string str ? str : Json.Canonicalize(payload);
         var labels = (p.GetValueOrDefault("actions") as IEnumerable<object?>)?.Cast<IReadOnlyDictionary<string, object?>>().Select(a => a.GetValueOrDefault("label") as string ?? "").ToList();
         return labels is { Count: > 0 } ? $"{text} — options: {string.Join(", ", labels)}" : text;
     }
