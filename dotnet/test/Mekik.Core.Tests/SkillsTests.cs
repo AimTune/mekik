@@ -425,4 +425,94 @@ public class SkillsTests
         Assert.False(Shuttle.SkillResourcesAvailable(noFiles));
         await Assert.ThrowsAsync<NotSupportedException>(() => Shuttle.SkillResourceAsync(noFiles, "pdf", "x"));
     }
+
+    // ── skill-owned tools (§12.6) ─────────────────────────────────────────────
+
+    // Opaque to Mekik.Core: any type is a "tool" here; the agent integration closes TTool.
+    private sealed record FakeTool(string Name, string Marker = "TOOL-MARKER");
+
+    private static readonly SkillEntry<FakeTool> PdfWithTools = new()
+    {
+        Name = "pdf",
+        Description = "Fill PDF forms.",
+        Instructions = "Use scripts/fill.py.",
+        Tags = ["docs"],
+        Tools = [new FakeTool("fill_form"), new FakeTool("merge_pdfs")],
+    };
+
+    /// <summary>Replies with the tool names each visible skill owns, as <see cref="Shuttle.SkillTools{TTool}"/> sees them.</summary>
+    private static readonly CompiledGraph ToolLister = Graph.Create("tool-lister")
+        .Channel("input", Channels.LastWrite(""))
+        .Channel("reply", Channels.LastWrite(""))
+        .Node("look", (State s, IContext ctx) =>
+        {
+            var input = s.Get<string>("input");
+            var tags = string.IsNullOrEmpty(input) ? null : input.Split(',');
+            var held = Shuttle.SkillTools<FakeTool>(ctx, tags);
+            return Update.Of("reply", $"tools:{string.Join("|", held.Select(kv => $"{kv.Key}={string.Join("+", kv.Value.Select(t => t.Name))}"))}");
+        })
+        .Edge(Graph.Start, "look")
+        .Edge("look", Graph.End)
+        .Compile();
+
+    [Fact]
+    public async Task Owned_tools_never_reach_the_wire_same_catalog_frame_same_pinned_hash()
+    {
+        var plain = App(Loader, Server());
+        var owned = App(Loader, SkillSources.Inline(PdfWithTools, Voice));
+        var a = new FakeConn("c-a");
+        var b = new FakeConn("c-b");
+        await plain.ConnectAsync(a);
+        await owned.ConnectAsync(b);
+
+        Assert.Equal(Json.Canonicalize(First(a, "skills")), Json.Canonicalize(First(b, "skills")));
+        // The same literal the hash test above (and the TypeScript suite) pins — tools are not hashed.
+        Assert.Equal("ff146b86cf0ec3e532ccfcdcf41d4186fa3653aa9371121335118bfe3317f14c", Skills.Hash([PdfWithTools, Voice]));
+        Assert.Equal("ff146b86cf0ec3e532ccfcdcf41d4186fa3653aa9371121335118bfe3317f14c", First(b, "skills")!["hash"]);
+        Assert.Equal("""{"description":"Fill PDF forms.","name":"pdf","tags":["docs"]}""", Json.Canonicalize(PdfWithTools.ToWire()));
+
+        await owned.ReceiveAsync(b, TextFrame("pdf"));
+        Assert.Equal("Use scripts/fill.py.", LastBot(b));
+        Assert.Equal(["id", "name", "source", "status"], SkillFrames(b)[0].Keys.Order(StringComparer.Ordinal).ToArray());
+        Assert.DoesNotContain("TOOL-MARKER", string.Join("\n", b.Sent.Select(f => Json.Canonicalize(f))));
+    }
+
+    [Fact]
+    public async Task SkillTools_returns_each_visible_server_skills_own_tools_by_the_nodes_filter()
+    {
+        var app = App(ToolLister, SkillSources.Inline(PdfWithTools, Voice));
+        var conn = new FakeConn("c-1");
+        await app.ConnectAsync(conn);
+        await app.ReceiveAsync(conn, TextFrame(""));
+        Assert.Equal("tools:pdf=fill_form+merge_pdfs", LastBot(conn)); // brand-voice owns none
+        await app.ReceiveAsync(conn, TextFrame("billing"));
+        Assert.Equal("tools:", LastBot(conn)); // pdf is tagged docs — hidden, so nothing
+
+        Assert.Empty(Shuttle.SkillTools<FakeTool>(new StubCtx(new Dictionary<string, object?>())));
+        // The turn snapshot keeps the typed entry (records clone their runtime type).
+        var ctx = new StubCtx(new Dictionary<string, object?> { ["skills"] = new TurnSkillSource(SkillSources.Inline(PdfWithTools), []) });
+        Assert.IsType<SkillEntry<FakeTool>>(new TurnSkillSource(SkillSources.Inline(PdfWithTools), []).Get("pdf"));
+        Assert.Equal(["fill_form", "merge_pdfs"], Shuttle.SkillTools<FakeTool>(ctx)["pdf"].Select(t => t.Name).ToArray());
+        // Asking for the wrong tool type is a programming error, not a silent drop.
+        Assert.Throws<InvalidOperationException>(() => Shuttle.SkillTools<string>(ctx));
+    }
+
+    [Fact]
+    public async Task A_client_declaration_cannot_smuggle_tools_the_field_is_dropped_at_sanitization()
+    {
+        var smuggled = ClientUi();
+        smuggled["tools"] = new List<object?> { new Dictionary<string, object?> { ["name"] = "wire_money" } };
+        var defs = ClientSkills.Sanitize(new List<object?> { smuggled });
+        Assert.Single(defs);
+        Assert.Equal("ui-conventions", defs[0].Name); // accepted — without its tools
+
+        var app = App(ToolLister, clientSkills: ClientSkills.AcceptAll);
+        var conn = new FakeConn("c-1");
+        await app.ConnectAsync(conn, new ConnectParams { Hello = new HelloInfo { Skills = [smuggled] } });
+        await app.ReceiveAsync(conn, TextFrame("ui"));
+        Assert.Equal("tools:", LastBot(conn));
+
+        var entry = new TurnSkillSource(null, defs).Get("ui-conventions");
+        Assert.IsNotType<SkillEntry<object>>(entry); // a plain entry: nothing to carry tools
+    }
 }

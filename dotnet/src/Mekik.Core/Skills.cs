@@ -44,14 +44,40 @@ public record SkillSummary
     }
 }
 
-/// <summary>Level 2 — a skill with its instructions, as a source hands it back.</summary>
-public sealed record SkillEntry : SkillSummary
+/// <summary>
+/// Level 2 — a skill with its instructions, as a source hands it back. A skill that
+/// owns tools is a <see cref="SkillEntry{TTool}"/>.
+/// </summary>
+public record SkillEntry : SkillSummary
 {
     /// <summary>The markdown a model reads once it has chosen the skill.</summary>
     public required string Instructions { get; init; }
 
     /// <summary>The level-1 view of this entry.</summary>
     public SkillSummary ToSummary() => new() { Name = Name, Description = Description, Tags = Tags, Source = Source };
+
+    /// <summary>The owned tools, untyped — what <see cref="Shuttle.SkillTools{TTool}"/> reads. None on a plain entry.</summary>
+    internal virtual IReadOnlyList<object?> ToolObjects => [];
+}
+
+/// <summary>
+/// A skill that owns its tools (PROTOCOL.md §12.6): an agent loop offers <see cref="Tools"/>
+/// to the model only after it loads the skill. <c>Mekik.Core</c> stays framework-agnostic, so
+/// <typeparamref name="TTool"/> is the agent framework's tool type —
+/// <c>SkillEntry&lt;AIFunction&gt;</c> for <c>Mekik.Agents</c>. Mirror of TypeScript's
+/// <c>SkillEntry&lt;TTool&gt;</c>.
+/// </summary>
+/// <remarks>
+/// <b>Server-side only.</b> The tools are never serialized: not on the <c>skills</c> catalog
+/// frame (<see cref="ISkillSource.List"/> hands back summaries), not in the catalog hash, not
+/// on a <c>skill</c> frame. A client-declared skill (§12.4) can never carry tools.
+/// </remarks>
+public sealed record SkillEntry<TTool> : SkillEntry
+{
+    /// <summary>The tools this skill owns, in the order the model should see them.</summary>
+    public IReadOnlyList<TTool> Tools { get; init; } = [];
+
+    internal override IReadOnlyList<object?> ToolObjects => Tools.Select(t => (object?)t).ToList();
 }
 
 /// <summary>
