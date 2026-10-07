@@ -146,7 +146,7 @@ public class MessagesTests
     }
 
     [Fact]
-    public void Reserved_protocol_frame_types_are_rejected_text_is_the_allowed_overlap()
+    public async Task Reserved_protocol_frame_types_are_rejected_text_is_the_allowed_overlap()
     {
         var g = Graph.Create("noop")
             .Channel("input", Channels.LastWrite(""))
@@ -173,12 +173,12 @@ public class MessagesTests
             Reply = s => s.GetValueOrDefault("reply") as string,
         });
         var conn = new FakeConn();
-        app.ConnectAsync(conn).GetAwaiter().GetResult();
-        app.ReceiveAsync(conn, new Dictionary<string, object?>
+        await app.ConnectAsync(conn);
+        await app.ReceiveAsync(conn, new Dictionary<string, object?>
         {
             ["type"] = "text",
             ["data"] = new Dictionary<string, object?> { ["text"] = "go" },
-        }).GetAwaiter().GetResult();
+        });
 
         // Two text frames: the rich text message (with urls) and the consolidated reply.
         var texts = conn.Sent.Where(f => f.GetValueOrDefault("type") as string == "text").ToList();

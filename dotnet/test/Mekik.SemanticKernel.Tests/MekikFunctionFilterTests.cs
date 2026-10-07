@@ -346,7 +346,7 @@ public class MekikFunctionFilterTests
         await app.ConnectAsync(conn);
         await app.ReceiveAsync(conn, TextFrame("go"));
 
-        Assert.Single(Calls(conn.Sent, "probe").Where(d => d["status"] as string == "running"));
+        Assert.Single(Calls(conn.Sent, "probe"), d => d["status"] as string == "running");
         Assert.Empty(kernel.FunctionInvocationFilters);
     }
 }
