@@ -114,7 +114,7 @@ Shuttle.Ui(ctx, "card", new Dictionary<string, object?>()); // helper — called
 | `mekik.skillResource(ctx, name, path)` | `Shuttle.SkillResourceAsync(ctx, name, path)` | nothing — reads one bundled file (level 3) | **yes** — returns the file text | [Skills](./skills.md#loading-a-skill--and-the-skill-frame) |
 | `mekik.authClaims(ctx)` / `mekik.claimStrings(claims, key)` | `Shuttle.AuthClaims(ctx)` / `Shuttle.ClaimStrings(claims, key)` | nothing — reads the turn's verified auth claims (`{}` when anonymous) | no | [Reading per-conversation context](#reading-per-conversation-context) |
 
-`skillResourcesAvailable(ctx)` / `Shuttle.SkillResourcesAvailable(ctx)` reports whether the turn's skill source can serve level-3 files at all; in TypeScript it is a named export only, not attached to `mekik`.
+`mekik.skillResourcesAvailable(ctx)` / `Shuttle.SkillResourcesAvailable(ctx)` reports whether the turn's skill source can serve level-3 files at all.
 
 `text`, `ui`, `event` and `message` are fire-and-forget: they emit and return. `streamText` is the token-by-token convenience — it drives an async delta source through `text` and returns the joined string (while streaming, the streamed bubble is the durable message — don't also return it as the reply; see [Generative UI](./generative-ui.md#stream-the-answer-or-return-it--not-both)). `tool`, `approve`, `choose`, `onEvent` and `callClientTool` `await` because they wrap ilmek machinery (`ctx.step` / `ctx.StepAsync` for `tool`, `ctx.interrupt` / `ctx.InterruptAsync` for the others).
 
@@ -278,7 +278,7 @@ Shuttle.ToolTrace(ctx, new Dictionary<string, object?> { ["id"] = id, ["name"] =
 </TabItem>
 </Tabs>
 
-`toolTrace` / `Shuttle.ToolTrace` emits one `tool_call` frame (upsert by `id`); `nextToolCallId` / `Shuttle.NextToolCallId` mints a replay-stable id. `skillTrace` / `Shuttle.SkillTrace` is the same primitive for the `skill` frame behind `loadSkill`. You rarely call these directly — the [agent integrations](../integrations/overview.md) use them internally. Reach for them only when wrapping a tool runner mekik doesn't already integrate.
+`mekik.toolTrace` / `Shuttle.ToolTrace` emits one `tool_call` frame (upsert by `id`); `mekik.nextToolCallId` / `Shuttle.NextToolCallId` mints a replay-stable id (both are named exports too). `mekik.skillTrace` / `Shuttle.SkillTrace` is the same primitive for the `skill` frame behind `loadSkill`. You rarely call these directly — the [agent integrations](../integrations/overview.md) use them internally. Reach for them only when wrapping a tool runner mekik doesn't already integrate.
 
 ## Reading per-conversation context
 

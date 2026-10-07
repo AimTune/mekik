@@ -10,7 +10,8 @@
 // built-in message renderers. The data shapes mirror chativa's own components.
 //
 // Messages are persistent: they join the transcript, replay on reconnect, and
-// advance the watermark — unlike GenUI text chunks, they are not turn-transient.
+// advance the watermark — like every genui frame, but as a standalone message
+// rather than a chunk of the turn's stream.
 // A tapped button/chip/card action arrives back as the *next user turn* (its
 // `value` — or label — as `data.text`), or as the `resume` answer when the run
 // is parked on an interrupt; see `mekik.choose` for the interrupt-bound form.

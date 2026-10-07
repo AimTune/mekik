@@ -25,7 +25,7 @@ mekik ships two implementations that speak the identical `mekik/1` wire: **TypeS
 | streamed text | `mekik.streamText` | `Shuttle.StreamText` |
 | wait for a component event | `mekik.onEvent` | `Shuttle.OnEvent<T>` |
 | verified auth claims | `mekik.authClaims` / `mekik.claimStrings` | `Shuttle.AuthClaims` / `Shuttle.ClaimStrings` |
-| low-level traces | `toolTrace` / `nextToolCallId` / `skillTrace` | `Shuttle.ToolTrace` / `Shuttle.NextToolCallId` / `Shuttle.SkillTrace` |
+| low-level traces | `mekik.toolTrace` / `mekik.nextToolCallId` / `mekik.skillTrace` (also named exports) | `Shuttle.ToolTrace` / `Shuttle.NextToolCallId` / `Shuttle.SkillTrace` |
 | tool wrap | `withMekikTools(ctx, tools, policy?)` (`@mekik/langchain`) | `MekikTools.Wrap(ctx, functions, policies?)` / `functions.WithMekik(ctx, policies?)` (`Mekik.Agents`) |
 | already-wrapped check (passed through by the wraps and the agent loop) | `isMekikTool(tool)` (`@mekik/langchain`) | `MekikTools.IsMekikFunction(function)` (`Mekik.Agents`) |
 | tool policy | `ToolPolicy` / `ApproveSpec` / `REDACTED` | `ToolPolicy` / `ApproveSpec` / `MekikTools.Redacted` |

@@ -1057,7 +1057,7 @@ skills the agent followed.
 3: the text of one bundled file, when the source has files behind it. Only
 server skills can — client skills travel inline — and a folder-backed source
 confines `path` to the skill folder (`..` and absolute paths are refused).
-`skillResourcesAvailable(ctx)` / `Shuttle.SkillResourcesAvailable` says
+`mekik.skillResourcesAvailable(ctx)` / `Shuttle.SkillResourcesAvailable` says
 whether the turn's source supports it, so an agent wrapper can offer the tool
 only when it works.
 

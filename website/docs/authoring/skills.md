@@ -241,7 +241,7 @@ Every load emits a persistent **`skill` frame** — `{type:"skill", seq, data:{i
 
 Loading is a catalog read, not a side effect, so it is not journaled; the trace id is replay-stable (task id + call order, like tool ids), so the resume pass after a pause upserts the same frame rather than duplicating it.
 
-Level 3 exists only for a source with files behind it — `@ilmek/skills`' catalog confines `path` to the skill folder (`..` and absolute paths are refused). Inline and client-declared skills have no files; `skillResource` rejects for them, and `skillResourcesAvailable(ctx)` (a named import from `@mekik/core`) / `Shuttle.SkillResourcesAvailable` tells you up front.
+Level 3 exists only for a source with files behind it — `@ilmek/skills`' catalog confines `path` to the skill folder (`..` and absolute paths are refused). Inline and client-declared skills have no files; `skillResource` rejects for them, and `mekik.skillResourcesAvailable(ctx)` / `Shuttle.SkillResourcesAvailable` tells you up front.
 
 ## Client-declared skills (off by default)
 

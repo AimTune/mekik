@@ -47,7 +47,7 @@ public delegate Task<RemoteToolResult> RemoteToolInvoker(string name, IReadOnlyD
 ///     .Concat(McpFunctions.Wrap(ctx,
 ///         github.Tools().Select(t => new RemoteToolInfo { Name = t.Name, Description = t.Description, InputSchema = t.InputSchema }),
 ///         async (name, args, ct) => { var r = await github.InvokeAsync(name, args, ct); return new RemoteToolResult { Text = r.Text, Structured = r.Structured, IsError = r.IsError }; },
-///         new() { ["github__create_issue"] = new ToolPolicy { Approve = new ApproveSpec() } }))
+///         new Dictionary&lt;string, ToolPolicy&gt; { ["github__create_issue"] = new ToolPolicy { Approve = new ApproveSpec() } }))
 ///     .ToList();
 /// </code></example>
 public static class McpFunctions

@@ -211,9 +211,11 @@ public static class Shuttle
 
     /// <summary>Stream one prose delta to the client as a generative-UI text chunk.</summary>
     /// <remarks>
-    /// Text chunks are transient — they render live as the run streams, but they are not
-    /// the conversation's durable reply (that is the single <c>text</c> frame emitted at
-    /// run end from the reply selector). Use this for token-by-token model output.
+    /// Each chunk is a <c>genui</c> frame: it renders live and is persisted and replayed like
+    /// every <c>genui</c> frame (PROTOCOL.md §4.3), so streamed text is already in the transcript.
+    /// It is not the reply — that is a separate <c>text</c> frame emitted at run end from the
+    /// reply selector — so a node that streams its whole answer returns no reply; returning
+    /// the same text again shows the answer twice.
     /// A non-null <paramref name="id"/> is the chunk's client-side key — the same id
     /// updates that element in place, and opts out of text-run coalescing (PROTOCOL.md §4.1).
     /// </remarks>
@@ -232,9 +234,9 @@ public static class Shuttle
     /// <remarks>
     /// Each delta is emitted with <see cref="Text"/>, so consecutive deltas share one stream text-run
     /// and a client renders a <b>single growing bubble</b>, not one bubble per token (PROTOCOL.md §4.1).
-    /// Streamed text is transient: the return value is every delta concatenated — return it from your
-    /// node as the durable <c>reply</c>, which the mapper emits as the one persistent <c>text</c> frame
-    /// at run end. Empty deltas are skipped.
+    /// The chunks are persisted and replayed like any <c>genui</c> frame, so the bubble is already the
+    /// answer: keep the return value (every delta concatenated) for your own use and return no
+    /// <c>reply</c>, or the client shows the answer twice (PROTOCOL.md §4.3). Empty deltas are skipped.
     /// </remarks>
     /// <typeparam name="T">The element type of the source stream (e.g. a model's streaming chunk).</typeparam>
     /// <param name="ctx">The ilmek node context.</param>
@@ -244,7 +246,7 @@ public static class Shuttle
     /// <returns>The full text accumulated from every emitted delta.</returns>
     /// <example><code>
     /// var full = await Shuttle.StreamText(ctx, chat.GetStreamingResponseAsync(messages, options, ctx.CancellationToken), u => u.Text);
-    /// return Update.Of("reply", full);
+    /// return Update.Of("summary", full); // no "reply": the streamed bubble is the answer
     /// </code></example>
     public static async Task<string> StreamText<T>(
         IContext ctx,

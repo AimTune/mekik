@@ -44,7 +44,11 @@ public sealed record AgentRunOptions
     /// <summary>Default policy for tools without an explicit entry in <see cref="Policies"/>.</summary>
     public ToolPolicy? DefaultPolicy { get; init; }
 
-    /// <summary>Stream text deltas live (one growing bubble via <see cref="Shuttle.StreamText"/>). Default true.</summary>
+    /// <summary>
+    /// Stream text deltas live (one growing bubble via <see cref="Shuttle.StreamText"/>, persisted
+    /// like any <c>genui</c> frame). Default true. While streaming, <see cref="Agent.RunAsync"/>
+    /// returns an empty string; with <c>false</c> it returns the answer for the node's <c>reply</c>.
+    /// </summary>
     public bool Stream { get; init; } = true;
 
     /// <summary>Reply when the model settles with neither text nor a tool call.</summary>
@@ -105,13 +109,18 @@ public sealed record AgentRunOptions
 ///   recorded decision instead of paying for (and possibly changing) it, and text is
 ///   not re-streamed;</item>
 ///   <item>with <see cref="AgentRunOptions.Stream"/> (default), text deltas stream live
-///   through <see cref="Shuttle.StreamText"/> — one growing bubble — while the
-///   consolidated answer is the returned string.</item>
+///   through <see cref="Shuttle.StreamText"/> — one growing bubble, persisted and replayed
+///   like any <c>genui</c> frame, so it IS the answer — and the returned string is empty
+///   (returning the text again would show it twice); with <c>Stream = false</c> the
+///   returned string is the answer, for the node's <c>reply</c>.</item>
 /// </list>
 /// </summary>
 public static class Agent
 {
-    /// <summary>Run the model↔tool loop and return the consolidated reply text.</summary>
+    /// <summary>
+    /// Run the model↔tool loop. Returns the answer for the node's <c>reply</c> with
+    /// <c>Stream = false</c>, or an empty string while streaming (the streamed bubble is the answer).
+    /// </summary>
     /// <example><code>
     /// return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
     /// {

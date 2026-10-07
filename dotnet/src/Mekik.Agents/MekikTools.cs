@@ -53,7 +53,7 @@ public sealed record ApproveSpec
 /// </list>
 ///
 /// <code>
-/// var tools = MekikTools.Wrap(ctx, [getOrder, refundPayment, internalLookup], new()
+/// var tools = MekikTools.Wrap(ctx, [getOrder, refundPayment, internalLookup], new Dictionary&lt;string, ToolPolicy&gt;
 /// {
 ///     ["get_order"]       = new ToolPolicy(),                                        // shown
 ///     ["refund_payment"]  = new ToolPolicy { Approve = new ApproveSpec() },           // ask first

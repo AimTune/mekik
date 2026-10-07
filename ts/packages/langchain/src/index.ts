@@ -507,7 +507,11 @@ export interface RunAgentOptions {
     policy?: ToolPolicyMap;
     /** Default policy for tools with no entry in {@link policy}. */
     defaultPolicy?: ToolPolicy;
-    /** Stream text deltas live (one growing bubble via `mekik.text`). Default true. */
+    /**
+     * Stream text deltas live (one growing bubble via `mekik.text`, persisted like any
+     * `genui` frame). Default true. While streaming, {@link runAgent} returns `""`; with
+     * `false` it returns the answer for the node's `reply`.
+     */
     stream?: boolean;
     /** Reply when the model settles with neither text nor a tool call. */
     emptyReply?: string;
@@ -629,7 +633,9 @@ interface AgentToolCall {
  * - each model call runs inside `ctx.step`, so a resume replays the recorded decision
  *   instead of paying for (and possibly changing) it, and text is not re-streamed;
  * - with `stream` (default), text deltas stream live through `mekik.text` — one growing
- *   bubble — while the consolidated answer is the returned string.
+ *   bubble, persisted and replayed like any `genui` frame, so it IS the answer — and the
+ *   returned string is `""` (returning the text again would show it twice); with
+ *   `stream: false` the returned string is the answer, for your node's `reply`.
  *
  * @example
  * ```ts
