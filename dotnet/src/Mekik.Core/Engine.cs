@@ -120,6 +120,8 @@ public sealed class ConversationEngine
         public required IConnection Conn { get; init; }
         public required string UserId { get; init; }
         public IReadOnlyDictionary<string, object?>? Claims { get; init; }
+        /// <summary>This connection's <c>hello.meta</c> (§6) — laid under each turn's frame meta before the allowlist sees it.</summary>
+        public IReadOnlyDictionary<string, object?>? HelloMeta { get; init; }
         /// <summary>
         /// The tools this connection declared (§11.1), already sanitized and passed
         /// through the <see cref="ClientToolsPolicy"/>. <c>Stamp</c> orders
@@ -181,7 +183,7 @@ public sealed class ConversationEngine
         var (conversationId, watermarkReset) = await ResolveConversationAsync(hello.ConversationId, userId).ConfigureAwait(false);
 
         var live = await EnsureLiveAsync(conversationId).ConfigureAwait(false);
-        var state = new ConnState { Conn = conn, UserId = userId, Claims = claims };
+        var state = new ConnState { Conn = conn, UserId = userId, Claims = claims, HelloMeta = hello.Meta };
         lock (live.Gate)
         {
             live.Connections[conn.Id] = state;
@@ -513,7 +515,7 @@ public sealed class ConversationEngine
                 ["timestamp"] = _cfg.Now(),
             }, conn.Id).ConfigureAwait(false);
 
-            var meta = BuildMeta(convId, state.UserId, text, frame.GetValueOrDefault("meta") as IReadOnlyDictionary<string, object?>, state.Claims);
+            var meta = BuildMeta(convId, state, text, frame.GetValueOrDefault("meta") as IReadOnlyDictionary<string, object?>);
             var input = _cfg.Input(frame);
             await DriveAsync(convId, live, _cfg.Adapter.Run(input, new RunContext { ThreadId = convId, Meta = meta, CancellationToken = ct })).ConfigureAwait(false);
         });
@@ -547,7 +549,7 @@ public sealed class ConversationEngine
                 }).ConfigureAwait(false);
             }
 
-            var meta = BuildMeta(convId, state.UserId, "", null, state.Claims);
+            var meta = BuildMeta(convId, state, "", null);
             await DriveAsync(convId, live, _cfg.Adapter.Resume(answers, new RunContext { ThreadId = convId, Meta = meta, CancellationToken = ct })).ConfigureAwait(false);
         });
 
@@ -645,7 +647,7 @@ public sealed class ConversationEngine
 
             // No `text` frame is dispatched: a click is not something the user said,
             // and the transcript already carries the widget it came from.
-            var meta = BuildMeta(convId, state.UserId, "", null, state.Claims);
+            var meta = BuildMeta(convId, state, "", null);
             await DriveAsync(convId, live, _cfg.Adapter.Run(input, new RunContext { ThreadId = convId, Meta = meta, CancellationToken = ct })).ConfigureAwait(false);
         }).ConfigureAwait(false);
     }
@@ -692,11 +694,21 @@ public sealed class ConversationEngine
         }
     }
 
-    private IReadOnlyDictionary<string, object?> BuildMeta(string convId, string userId, string text, IReadOnlyDictionary<string, object?>? clientMeta, IReadOnlyDictionary<string, object?>? claims)
+    private IReadOnlyDictionary<string, object?> BuildMeta(string convId, ConnState state, string text, IReadOnlyDictionary<string, object?>? frameMeta)
     {
         var meta = new Frame();
-        if (_cfg.Context is not null) meta["mekik"] = _cfg.Context((convId, userId), (text, clientMeta));
-        if (claims is not null) meta["auth"] = claims;
+        if (_cfg.Context is not null) meta["mekik"] = _cfg.Context((convId, state.UserId), (text, frameMeta));
+        if (state.Claims is not null) meta["auth"] = state.Claims;
+        // Client meta is this connection's hello.meta with the frame's own meta laid
+        // over it per key (§6); only the allowlisted subset survives.
+        IReadOnlyDictionary<string, object?>? clientMeta = null;
+        if (state.HelloMeta is not null || frameMeta is not null)
+        {
+            var merged = new Frame();
+            foreach (var kv in state.HelloMeta ?? new Frame()) merged[kv.Key] = kv.Value;
+            foreach (var kv in frameMeta ?? new Frame()) merged[kv.Key] = kv.Value;
+            clientMeta = merged;
+        }
         if (_cfg.AcceptClientMeta is not null && clientMeta is not null)
         {
             var client = _cfg.AcceptClientMeta(clientMeta);
