@@ -20,23 +20,32 @@ The wire rules are normative in [`PROTOCOL.md §12`](https://github.com/AimTune/
 
 ## Configuring the server's skills
 
+A skill is its instructions **plus the tools those instructions use**. Give each entry its `tools`; they stay out of the model's request until the skill is loaded (see [Tools under a skill](#tools-under-a-skill)). A skill with no tools — pure guidance, like a house style — simply omits the field.
+
 <Tabs groupId="lang">
 <TabItem value="ts" label="TypeScript">
 
 ```ts
-import { mekik } from "@mekik/core";
-import { SkillCatalog } from "@ilmek/skills";
+import { mekik, type SkillEntry } from "@mekik/core";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 
-// From folders — @ilmek/skills' catalog is a SkillSource as-is.
-const app = mekik({ graph, skills: await SkillCatalog.fromDirectories(["./skills"]) });
-
-// …or inline, for a small fixed set (or a test).
-const app2 = mekik({
+const app = mekik({
     graph,
     skills: [
-        { name: "brand-voice", description: "Write in the house voice.", instructions: "Short sentences. No exclamation marks." },
-        { name: "pdf", description: "Fill, merge and read PDF forms.", instructions: "…", tags: ["docs"] },
-    ],
+        {
+            name: "pdf",
+            description: "Fill, merge and read PDF forms.",
+            instructions: "Read the form's fields first, then fill only the ones the user gave values for.",
+            tags: ["docs"],
+            tools: [readPdfFields, fillPdfForm, mergePdfs],  // offered once `pdf` is loaded
+        },
+        {
+            name: "brand-voice",
+            description: "Write in the house voice.",
+            instructions: "Short sentences. No exclamation marks.",
+            // no tools: guidance only
+        },
+    ] satisfies SkillEntry<StructuredToolInterface>[],
 });
 ```
 
@@ -44,27 +53,99 @@ const app2 = mekik({
 <TabItem value="dotnet" label=".NET">
 
 ```csharp
-using Ilmek.Skills;
+using Microsoft.Extensions.AI;
 
-// Inline, for a small fixed set (or a test).
 var app = new MekikApp(new MekikOptions
 {
     Graph = g,
     Skills = SkillSources.Inline(
-        new SkillEntry { Name = "brand-voice", Description = "Write in the house voice.", Instructions = "Short sentences. No exclamation marks." },
-        new SkillEntry { Name = "pdf", Description = "Fill, merge and read PDF forms.", Instructions = "…", Tags = ["docs"] }),
+        new SkillEntry<AIFunction>
+        {
+            Name = "pdf",
+            Description = "Fill, merge and read PDF forms.",
+            Instructions = "Read the form's fields first, then fill only the ones the user gave values for.",
+            Tags = ["docs"],
+            Tools = [readPdfFields, fillPdfForm, mergePdfs],   // offered once `pdf` is loaded
+        },
+        new SkillEntry
+        {
+            Name = "brand-voice",
+            Description = "Write in the house voice.",
+            Instructions = "Short sentences. No exclamation marks.",
+            // no tools: guidance only
+        }),
 });
-
-// From folders — map Ilmek.Skills' catalog into entries.
-var catalog = await SkillCatalog.FromDirectoriesAsync("./skills");
-Skills = SkillSources.Inline(catalog.All().Select(s => new SkillEntry
-{
-    Name = s.Name, Description = s.Description, Instructions = s.Instructions,
-})),
 ```
 
 </TabItem>
 </Tabs>
+
+### Skills from `SKILL.md` folders, with their tools
+
+A folder holds the instructions; the **tools are code**, so you attach them by skill name when you load the catalog. Everything else about the folder — progressive disclosure, bundled files (level 3) — keeps working.
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
+```ts
+import { mekik, type SkillSource } from "@mekik/core";
+import { SkillCatalog } from "@ilmek/skills";
+
+const folders = await SkillCatalog.fromDirectories(["./skills"]);
+
+// The tools each folder skill owns, by skill name.
+const toolsFor: Record<string, StructuredToolInterface[]> = {
+    pdf: [readPdfFields, fillPdfForm, mergePdfs],
+};
+
+// The catalog as-is, plus each skill's tools. `readResource` still reads the
+// folder's bundled files.
+const skills: SkillSource = {
+    list: () => folders.list(),
+    get: (name) => {
+        const s = folders.get(name);
+        return s && { ...s, tools: toolsFor[name] };
+    },
+    readResource: (name, path) => folders.readResource(name, path),
+};
+
+const app = mekik({ graph, skills });
+```
+
+`SkillCatalog` is a `SkillSource` as-is, so a folder catalog without tools needs no wrapper: `mekik({ graph, skills: folders })`.
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+using Ilmek.Skills;
+using Microsoft.Extensions.AI;
+
+var folders = await SkillCatalog.FromDirectoriesAsync("./skills");
+
+// The tools each folder skill owns, by skill name.
+var toolsFor = new Dictionary<string, IReadOnlyList<AIFunction>>
+{
+    ["pdf"] = [readPdfFields, fillPdfForm, mergePdfs],
+};
+
+var app = new MekikApp(new MekikOptions
+{
+    Graph = g,
+    Skills = SkillSources.Inline(folders.All().Select(s => new SkillEntry<AIFunction>
+    {
+        Name = s.Name,
+        Description = s.Description,
+        Instructions = s.Instructions,
+        Tools = toolsFor.GetValueOrDefault(s.Name) ?? [],
+    })),
+});
+```
+
+</TabItem>
+</Tabs>
+
+A tool built once in the catalog still gets the run that called it: read it with `toolContext(config)` / `MekikTools.ToolContext(arguments)` (see [below](#a-skill-owns-its-tools)). Tools that must be built **per request** — closing over a value only the node knows — go in `runAgent`'s `skillTools` / `AgentRunOptions.SkillTools` instead, keyed by skill name; they merge with the entry's own (see [Tools built per request](#tools-built-per-request-skilltools)).
 
 `skills` takes a **`SkillSource`** — anything with `list()` (level 1) and `get(name)` (level 2), optionally `readResource(name, path)` (level 3) — or a plain list. Tags on an entry scope which node sees it, exactly as [client tool tags](./client-tools.md#reading-the-toolbox--and-tags) do: an untagged skill is visible to every query, a tagged one only to queries whose tags intersect its own.
 
