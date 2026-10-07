@@ -58,7 +58,6 @@ const config: Config = {
   ],
 
   themeConfig: {
-    image: "img/mekik-social-card.png",
     colorMode: {
       respectPrefersColorScheme: true,
     },
