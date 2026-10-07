@@ -220,14 +220,14 @@ public class AgentTests
         new Route("general", "everything else"),
     ];
 
-    private static MekikApp RouteApp(IChatClient chat, string? fallback = null, float? temperature = null)
+    private static MekikApp RouteApp(IChatClient chat, string? fallback = null, float? temperature = null, IReadOnlyList<Route>? routes = null)
     {
         var g = Graph.Create("router")
             .Channel("input", Channels.LastWrite(""))
             .Channel("reply", Channels.LastWrite(""))
             .Node("route", async (State state, IContext ctx) =>
                 Update.Of("reply", await Agent.RouteAsync(
-                    ctx, chat, Routes, state.Get<string>("input") ?? string.Empty, fallback, temperature: temperature)))
+                    ctx, chat, routes ?? Routes, state.Get<string>("input") ?? string.Empty, fallback, temperature: temperature)))
             .Edge(Graph.Start, "route")
             .Edge("route", Graph.End)
             .Compile();
@@ -290,5 +290,38 @@ public class AgentTests
         await app.ReceiveAsync(conn, TextFrame("show me the sprint report"));
 
         Assert.Equal(0f, chat.LastOptions?.Temperature);
+    }
+
+    private static async Task<string?> RouteOf(string answer, params string[] names)
+    {
+        var app = RouteApp(new ScriptedChat([TextUpdate(answer)]), routes: names.Select(n => new Route(n, n)).ToList());
+        var conn = new FakeConn();
+        await app.ConnectAsync(conn);
+        await app.ReceiveAsync(conn, TextFrame("classify me"));
+        return Reply(conn);
+    }
+
+    [Theory]
+    [InlineData("reporting", "reporting")]
+    [InlineData("report", "report")]
+    [InlineData("REPORTING", "reporting")]
+    [InlineData("Category: reporting.", "reporting")]
+    public async Task Route_prefers_an_exact_match_then_the_longest_contained_name(string answer, string expected)
+    {
+        Assert.Equal(expected, await RouteOf(answer, "report", "reporting"));
+        Assert.Equal(expected, await RouteOf(answer, "reporting", "report")); // declaration order does not matter
+    }
+
+    [Fact]
+    public async Task Route_strips_whitespace_and_punctuation_around_the_answer()
+    {
+        Assert.Equal("billing", await RouteOf("  Billing.\n", "shipping", "billing", "general"));
+        Assert.Equal("billing", await RouteOf("**billing**", "shipping", "billing", "general"));
+    }
+
+    [Fact]
+    public async Task Route_falls_back_to_the_last_route_when_nothing_matches()
+    {
+        Assert.Equal("general", await RouteOf("banana", "shipping", "billing", "general"));
     }
 }

@@ -326,11 +326,24 @@ public static class Agent
 
     private static string NormalizeRoute(string modelOutput, IReadOnlyList<Route> routes, string? fallback)
     {
+        // Strip what a model wraps a one-word answer in (whitespace, "**", a full stop).
         var text = modelOutput.Trim().ToLowerInvariant();
+        var start = 0;
+        var end = text.Length;
+        while (start < end && !char.IsLetterOrDigit(text[start])) start++;
+        while (end > start && !char.IsLetterOrDigit(text[end - 1])) end--;
+        text = text[start..end];
+
+        // An exact match wins; otherwise the LONGEST contained name, so routes
+        // "report" and "reporting" with the answer "reporting" pick "reporting".
         foreach (var r in routes)
-            if (text.Contains(r.Name.ToLowerInvariant(), StringComparison.Ordinal))
+            if (string.Equals(text, r.Name, StringComparison.OrdinalIgnoreCase))
                 return r.Name;
-        return fallback ?? routes[^1].Name;
+        Route? best = null;
+        foreach (var r in routes)
+            if (text.Contains(r.Name.ToLowerInvariant(), StringComparison.Ordinal) && (best is null || r.Name.Length > best.Name.Length))
+                best = r;
+        return best?.Name ?? fallback ?? routes[^1].Name;
     }
 
     // A model's function-call arguments arrive as JsonElement (System.Text.Json); fold
