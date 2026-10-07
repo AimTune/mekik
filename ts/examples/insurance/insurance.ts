@@ -6,8 +6,8 @@
 //   1. intake    — the claim form is a pause: an interrupt that mounts a
 //                  genui-form; the submitted values are the resume answer
 //   2. approve   — the adjuster model looks up the policy and LOADS A SKILL
-//                  mid-run. The decision tools are held UNDER the skill
-//                  (runAgent `skillTools`, §12): not offered before the load,
+//                  mid-run. Each skill in the catalog OWNS its decision tools
+//                  (SkillEntry.tools, §12): not offered before the load,
 //                  a premature call is refused without running, offered from
 //                  the next round on — and still offered after the senior
 //                  adjuster's sign-off pause and resume
@@ -21,14 +21,13 @@
 //   node examples/insurance/insurance.ts     # offline self-test, exit 0/1
 
 import { channel, END, graph, START } from "@ilmek/core";
-import type { Context } from "@ilmek/core";
 import { tool } from "@langchain/core/tools";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
 import { mekik } from "@mekik/core";
 import type { OutgoingFrame, SkillEntry } from "@mekik/core";
-import { runAgent } from "@mekik/langchain";
+import { runAgent, toolContext } from "@mekik/langchain";
 
 import {
     botText,
@@ -110,8 +109,82 @@ interface ClaimForm {
 const CLAIMS: ClaimDecision[] = [];
 const effects = { lookup_policy: 0, check_coverage: 0, approve_claim: 0, reject_claim: 0 };
 
-/** The server's skill catalog — level 1 travels to the client, instructions stay here until loaded. */
-const SKILLS: SkillEntry[] = [
+// ── tools ─────────────────────────────────────────────────────────────────────
+//
+// Built once, at module level. The decision tools mount the claim-decision
+// card on the run that called them, read with toolContext(config).
+
+/** Always offered: the policy lookup. */
+const lookupPolicy = tool(
+    ({ policyNumber }) => {
+        effects.lookup_policy++;
+        const p = POLICIES[policyNumber];
+        if (!p) throw new Error(`No policy ${policyNumber}.`);
+        return p;
+    },
+    { name: "lookup_policy", description: "Fetch a policy by number.", schema: z.object({ policyNumber: z.string() }) },
+);
+
+const checkCoverage = tool(
+    ({ policyNumber, peril }) => {
+        effects.check_coverage++;
+        const p = POLICIES[policyNumber];
+        if (!p) throw new Error(`No policy ${policyNumber}.`);
+        const clause = p.exclusions[peril];
+        return clause
+            ? { covered: false, exclusionClause: clause, deductible: p.deductible }
+            : { covered: p.covered.includes(peril), deductible: p.deductible };
+    },
+    {
+        name: "check_coverage",
+        description: "Is this peril covered by the policy? Returns the deductible and any exclusion clause.",
+        schema: z.object({ policyNumber: z.string(), peril: z.string() }),
+    },
+);
+
+// The decision tools emit the claim-decision component themselves: their
+// bodies run exactly once (journaled), so the card is mounted exactly once.
+const approveClaim = tool(
+    ({ payout }, config): ClaimDecision => {
+        effects.approve_claim++;
+        const decision: ClaimDecision = { claimId: `CLM-${7000 + CLAIMS.length}`, outcome: "approved", payout };
+        CLAIMS.push(decision);
+        claimDecision(toolContext(config), decision);
+        return decision;
+    },
+    {
+        name: "approve_claim",
+        description: "Approve the claim with a payout.",
+        schema: z.object({ policyNumber: z.string(), payout: z.number() }),
+    },
+);
+
+const rejectClaim = tool(
+    ({ reason }, config): ClaimDecision => {
+        effects.reject_claim++;
+        const decision: ClaimDecision = { claimId: `CLM-${7000 + CLAIMS.length}`, outcome: "rejected", reason };
+        CLAIMS.push(decision);
+        claimDecision(toolContext(config), decision);
+        return decision;
+    },
+    {
+        name: "reject_claim",
+        description: "Decline the claim with a typed reason.",
+        schema: z.object({
+            policyNumber: z.string(),
+            reason: z.object({ code: z.enum(REJECTION_CODES), clause: z.string(), detail: z.string() }),
+        }),
+    },
+);
+
+// ── the skill catalog (§12): each skill is its instructions + the tools it governs ──
+
+/**
+ * Level 1 travels to the client; the instructions stay here until loaded, and
+ * the tools never leave the server. check_coverage sits under both home skills
+ * (loading either one unlocks it); each skill owns its own decision tool.
+ */
+const SKILLS: SkillEntry<StructuredToolInterface>[] = [
     {
         name: "water-damage-assessment",
         description: "How to assess an escape-of-water claim (burst pipes, leaks): evidence, deductible, payout.",
@@ -120,6 +193,7 @@ const SKILLS: SkillEntry[] = [
             "2. Payout = estimate minus the policy deductible, capped at the estimate.\n" +
             "3. Record it with approve_claim before replying.",
         tags: ["home"],
+        tools: [checkCoverage, approveClaim],
     },
     {
         name: "rejection-letter",
@@ -128,6 +202,7 @@ const SKILLS: SkillEntry[] = [
             "Decline with reject_claim, using a reason code from EXCLUDED_PERIL, POLICY_LAPSED, BELOW_DEDUCTIBLE. " +
             "Quote the policy clause. Be plain and kind; tell the customer how to appeal.",
         tags: ["home"],
+        tools: [checkCoverage, rejectClaim],
     },
     {
         name: "auto-collision",
@@ -136,75 +211,6 @@ const SKILLS: SkillEntry[] = [
         tags: ["auto"],
     },
 ];
-
-// ── tools ─────────────────────────────────────────────────────────────────────
-
-/** Always offered: the policy lookup. */
-function lookupTool(): StructuredToolInterface {
-    return tool(
-        ({ policyNumber }) => {
-            effects.lookup_policy++;
-            const p = POLICIES[policyNumber];
-            if (!p) throw new Error(`No policy ${policyNumber}.`);
-            return p;
-        },
-        { name: "lookup_policy", description: "Fetch a policy by number.", schema: z.object({ policyNumber: z.string() }) },
-    );
-}
-
-/** Held under skills: the coverage check and the two decisions. */
-function decisionTools(ctx: Context<any>) {
-    const coverage = tool(
-        ({ policyNumber, peril }) => {
-            effects.check_coverage++;
-            const p = POLICIES[policyNumber];
-            if (!p) throw new Error(`No policy ${policyNumber}.`);
-            const clause = p.exclusions[peril];
-            return clause
-                ? { covered: false, exclusionClause: clause, deductible: p.deductible }
-                : { covered: p.covered.includes(peril), deductible: p.deductible };
-        },
-        {
-            name: "check_coverage",
-            description: "Is this peril covered by the policy? Returns the deductible and any exclusion clause.",
-            schema: z.object({ policyNumber: z.string(), peril: z.string() }),
-        },
-    );
-    // The decision tools emit the claim-decision component themselves: their
-    // bodies run exactly once (journaled), so the card is mounted exactly once.
-    const approve = tool(
-        ({ payout }): ClaimDecision => {
-            effects.approve_claim++;
-            const decision: ClaimDecision = { claimId: `CLM-${7000 + CLAIMS.length}`, outcome: "approved", payout };
-            CLAIMS.push(decision);
-            claimDecision(ctx, decision);
-            return decision;
-        },
-        {
-            name: "approve_claim",
-            description: "Approve the claim with a payout.",
-            schema: z.object({ policyNumber: z.string(), payout: z.number() }),
-        },
-    );
-    const reject = tool(
-        ({ reason }): ClaimDecision => {
-            effects.reject_claim++;
-            const decision: ClaimDecision = { claimId: `CLM-${7000 + CLAIMS.length}`, outcome: "rejected", reason };
-            CLAIMS.push(decision);
-            claimDecision(ctx, decision);
-            return decision;
-        },
-        {
-            name: "reject_claim",
-            description: "Decline the claim with a typed reason.",
-            schema: z.object({
-                policyNumber: z.string(),
-                reason: z.object({ code: z.enum(REJECTION_CODES), clause: z.string(), detail: z.string() }),
-            }),
-        },
-    );
-    return { coverage, approve, reject };
-}
 
 // ── the graph ─────────────────────────────────────────────────────────────────
 
@@ -248,19 +254,14 @@ const claims = graph("insurance")
 
     .node("assess", async (s, ctx) => {
         const c = s.claim!;
-        const { coverage, approve, reject } = decisionTools(ctx);
         const reply = await runAgent(ctx, model.asChatModel("assess"), {
             system: ADJUSTER,
             input: `Claim on ${c.policyNumber}: ${c.peril} on ${c.incidentDate}, estimate $${c.estimate}. ${c.description}`,
-            tools: [lookupTool()], // always offered
+            tools: [lookupPolicy], // always offered
             stream: false,
-            // Level 1 in the prompt (home skills only) + load_skill …
+            // Level 1 in the prompt (home skills only) + load_skill — and each
+            // skill's own tools, offered only once that skill is loaded.
             skills: { tags: ["home"] },
-            // … and each skill holds the tools it governs: offered only once loaded.
-            skillTools: {
-                "water-damage-assessment": [coverage, approve],
-                "rejection-letter": [coverage, reject],
-            },
             policy: { approve_claim: { approve: SIGN_OFF }, reject_claim: { approve: SIGN_OFF } },
         });
         return { reply };
@@ -326,6 +327,7 @@ async function probe(): Promise<void> {
     const catalog = skillsCatalog(hello);
     check(catalog?.skills?.length === 3, "a `skills` frame lists the 3 server skills");
     check(!JSON.stringify(catalog).includes("Payout = estimate"), "instructions never travel in the catalog");
+    check(!JSON.stringify(catalog).includes("approve_claim"), "…and neither do the tools each skill owns");
 
     // ── 1. a covered claim: the skill unlocks its tools mid-run ───────────────
     section("1. intake + approval — a burst pipe on POL-1001; the skill unlocks the decision tools");
@@ -352,8 +354,8 @@ async function probe(): Promise<void> {
     let rounds = offered(0);
     check(rounds.slice(0, 3).every((r) => r === ALWAYS), "(a) before load_skill the model is offered only lookup_policy + load_skill");
     check(
-        model.observations.assess?.some((o) => o.includes('belongs to skill "water-damage-assessment"') && o.includes("load_skill")) === true,
-        "(b) the premature check_coverage is refused as an observation naming the skill to load",
+        model.observations.assess?.some((o) => o.includes('Tool check_coverage belongs to skills "rejection-letter", "water-damage-assessment"') && o.includes("load_skill")) === true,
+        "(b) the premature check_coverage is refused as an observation naming both skills that own it",
     );
     check(effects.check_coverage === 1 && traces(t, "check_coverage").length === 2, "(b) …and did not run: one coverage run, one traced call (running → completed)");
     const skills = skillUses(t);
