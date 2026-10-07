@@ -220,7 +220,8 @@ public static class Json
         JsonValueKind.String => el.GetString(),
         // Integer JSON tokens become long, everything else double — so an integer
         // seq prints "7" and 249.9 prints "249.9", both matching JSON.stringify.
-        JsonValueKind.Number => el.TryGetInt64(out var l) ? l : el.GetDouble(),
+        // (Boxed per branch: a plain `? l : d` would type the whole conditional as double.)
+        JsonValueKind.Number => el.TryGetInt64(out var l) ? (object)l : el.GetDouble(),
         JsonValueKind.True => true,
         JsonValueKind.False => false,
         _ => null,
