@@ -441,7 +441,7 @@ public class SkillToolsTests
         var conn = await Run(CatalogApp(chat, SkillSources.Inline(Owning(Reporting, boom))));
 
         Assert.Contains(chat.Observations, o => o == "Error from get_sprint: sprint service down");
-        Assert.Equal(["running", "error"], conn.Sent
+        Assert.Equal(new string?[] { "running", "error" }, conn.Sent
             .Where(f => Type(f) == "tool_call" && (string?)Data(f)["name"] == "get_sprint")
             .Select(f => (string?)Data(f)["status"]).ToArray());
         Assert.Contains(conn.Sent, f => Type(f) == "run" && Data(f).GetValueOrDefault("status") as string == "finished");
