@@ -488,9 +488,17 @@ public sealed class ConversationEngine
         }
         finally
         {
-            if (lease is not null) await lease.DisposeAsync().ConfigureAwait(false);
-            lock (live.Gate) live.Turn = null;
-            cts.Dispose();
+            // Free the local lock even when the lease release fails (a Redis blip): the
+            // remote lease has a TTL, but a stuck live.Turn would answer busy forever.
+            try
+            {
+                if (lease is not null) await lease.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (live.Gate) live.Turn = null;
+                cts.Dispose();
+            }
         }
     }
 
