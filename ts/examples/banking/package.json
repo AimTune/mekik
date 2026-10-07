@@ -1,0 +1,11 @@
+{
+  "name": "@mekik/example-banking",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "mekik domain probe — a banking desk: balance tools, one- and two-approver transfers, a genui-table history, and a silent fraud-tool failure.",
+  "scripts": {
+    "selftest": "node banking.ts"
+  },
+  "license": "MIT"
+}

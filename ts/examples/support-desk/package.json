@@ -1,0 +1,11 @@
+{
+  "name": "@mekik/example-support-desk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "mekik domain probe — a support desk: routing, per-node tool scoping, an MCP knowledge-base tool, and an A2A hand-off to a specialist agent.",
+  "scripts": {
+    "selftest": "node support.ts"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@mekik/example-insurance",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "mekik domain probe — an insurance claims desk: a genui-form intake pause, policy tools, a skill loaded mid-run, and a typed rejection reason.",
+  "scripts": {
+    "selftest": "node insurance.ts"
+  },
+  "license": "MIT"
+}

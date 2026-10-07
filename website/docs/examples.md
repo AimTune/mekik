@@ -131,6 +131,14 @@ fails the run, and a journaled lookup before the pause runs exactly once.
 
 See [Client tools](./authoring/client-tools.md).
 
+## Domain scenarios
+
+Five more probes put the features above to work in realistic desks — banking, insurance claims, healthcare triage, travel booking and a support desk that talks to other agents over MCP and A2A. Each runs offline against a scripted model and asserts its own frame stream; see [Domain scenarios](./domain-examples.md).
+
+```bash
+cd ts && pnpm run examples:domain
+```
+
 ## Rendering end-to-end
 
 The GenUI components these emit — `data-table`, `weather-card`, `approval-form`, `order-card`, plus the `genui-*` built-ins `storefront` uses — are registered in [chativa's sandbox](https://github.com/AimTune/chativa), so `--serve` renders end to end against a real client. `server-components` is the exception that proves the rule: it needs no registration at all, because it ships its own definitions. To see the full loop: run an example with `--serve`, point chativa's `MekikConnector` at `ws://localhost:8800`, and type an order number (`ORD-42` in the refund example) to trigger the approval flow.
@@ -149,6 +157,7 @@ Both are green in [CI](https://github.com/AimTune/mekik/actions): TypeScript bui
 
 ## Where to go next
 
+- [**Domain scenarios**](./domain-examples.md) — five realistic desks (banking, insurance, healthcare, travel, support) as offline probes.
 - [**Getting started**](./getting-started.md) — build your own server from scratch.
 - [**Human-in-the-loop**](./authoring/human-in-the-loop.md) — the pause the refund example is built around.
 - [**Agent integrations**](./integrations/overview.md) — how the LLM examples wire their tools.
