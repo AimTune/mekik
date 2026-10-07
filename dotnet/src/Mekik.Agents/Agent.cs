@@ -231,11 +231,20 @@ public static class Agent
                 }
                 else
                 {
-                    // A wrapped function may throw the interrupt that parks the graph; letting
-                    // it propagate is how the pause reaches the client.
-                    result = byName.TryGetValue(name, out var fn)
-                        ? await fn.InvokeAsync(new AIFunctionArguments(args), ctx.CancellationToken).ConfigureAwait(false)
-                        : $"Unknown tool {name}.";
+                    try
+                    {
+                        result = byName.TryGetValue(name, out var fn)
+                            ? await fn.InvokeAsync(new AIFunctionArguments(args), ctx.CancellationToken).ConfigureAwait(false)
+                            : $"Unknown tool {name}.";
+                    }
+                    catch (Exception ex) when (!InterruptSignalException.IsInterrupt(ex) && ex is not OperationCanceledException)
+                    {
+                        // A wrapped function may throw the interrupt that parks the graph (and an
+                        // abort cancels); those propagate. Anything else — a function that threw,
+                        // or arguments that failed binding — is the model's to react to, not the
+                        // run's: the wrapper already traced it running → error.
+                        result = $"Error from {name}: {ex.Message}";
+                    }
                 }
 
                 // Derived from the journaled call (not live state), so a resume pass rebuilds
@@ -243,6 +252,7 @@ public static class Agent
                 if (name == SkillFunctions.LoadSkillTool
                     && args.GetValueOrDefault("name") is string skill
                     && skillToolbox.Has(skill)
+                    && SkillFunctions.HasLoaded(ctx, skill)
                     && activeSkills.Add(skill))
                 {
                     activated = true;

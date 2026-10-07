@@ -27,6 +27,17 @@ namespace Mekik.Agents;
 /// </code></example>
 public static class SkillFunctions
 {
+    /// <summary>
+    /// The skills <c>load_skill</c> actually loaded, per node context. <see cref="Agent.RunAsync"/>
+    /// unlocks a skill's held tools only for a load that succeeded, so the model never gets a
+    /// skill's tools without its instructions. Rebuilt on a replay pass, where the load re-runs.
+    /// </summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IContext, HashSet<string>> Loaded = new();
+
+    /// <summary>True when <c>load_skill</c> loaded <paramref name="name"/> on this node context.</summary>
+    internal static bool HasLoaded(IContext ctx, string name) =>
+        Loaded.TryGetValue(ctx, out var set) && set.Contains(name);
+
     /// <summary>The function a model calls to read a skill's instructions (level 2).</summary>
     public const string LoadSkillTool = "load_skill";
 
@@ -102,6 +113,7 @@ public static class SkillFunctions
             try
             {
                 var skill = Shuttle.LoadSkill(ctx, name);
+                Loaded.GetOrCreateValue(ctx).Add(name);
                 return new ValueTask<object?>(LoadObservation(name, skill.Instructions, toolNames?.GetValueOrDefault(name)));
             }
             catch (Exception ex)
