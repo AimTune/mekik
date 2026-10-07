@@ -113,6 +113,9 @@ so single-node runs need no Redis and the fleet swaps implementations in.
      while the run streams, released with a token-checked Lua script. TTL must
      exceed a turn's worst case, and a crashed owner's lock must expire so the
      next turn can proceed elsewhere.
+   - A release that fails (a Redis blip) still frees the node's local turn lock;
+     the remote lease then simply expires on its TTL, so the conversation never
+     answers `busy` forever.
 5. **`Backplane` (new)** — `publish(convId, frame)` / `subscribe(convId, handler)`.
    - In-memory default: no-op — single node fans out directly.
    - Redis default: Pub/Sub. `dispatch` fans out to local sockets **and**

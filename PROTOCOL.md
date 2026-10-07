@@ -187,7 +187,9 @@ ilmek `IlmekEvent` variants (from the ilmek repo — `ts/packages/core/src/engin
 
 Order within a run is the order ilmek yields events; the mapper preserves it. The
 `run{interrupted}`/`run{finished}`/… transient frame is always the last frame of
-its run.
+its run. If the event stream throws after `run_start` instead of yielding a
+`run_end` (ilmek's recursion limit, a failing checkpointer), the engine closes
+the run as `run_end{error}` would: a `⚠️ <message>` bot `text`, then `run{error}`.
 
 ### 4.2 Interrupt payload wrapping (`unwrapInterrupt`)
 
@@ -336,7 +338,9 @@ The graph run receives context from three merged sources, placed on ilmek
   evaluated per turn. `conv = {conversationId, userId}`, `turn = {text, meta}`.
 - `meta.client` - the allowlisted subset of the client's `hello.meta` / frame
   `meta` (the server decides via `MekikOptions.acceptClientMeta`; default: drop
-  everything).
+  everything). The allowlist sees the connection's `hello.meta` with the turn
+  frame's `meta` laid over it per key; a `resume` or a component-driven turn
+  carries no frame meta, so it sees `hello.meta` alone.
 - `meta.auth` - the verified `claims` from the Authenticator, if any.
 - `meta.clientTools` - the turn's client tool snapshot (§11.2), present only when
   the server opted in via `MekikOptions.clientTools` and something is declared.

@@ -173,6 +173,8 @@ var target = await Agent.RouteAsync(ctx, chat,
 return Command.Create(Update.Of("route", target), target); // set channel + goto node
 ```
 
+Normalization is case- and punctuation-insensitive. An answer that *is* a route name wins outright; otherwise the **longest** route name the answer mentions wins, so with routes `report` and `reporting` an answer of `reporting` is never captured by `report`. An answer naming no route goes to `fallback`, or the last route.
+
 **No sampling options are sent unless you ask for them.** Reasoning models (gpt-5.x and friends) reject any explicitly-set `temperature` with an HTTP 400, so a router that pinned `temperature: 0` would fail *every* classification instead of merely varying — the turn would then land on whatever fallback node you gave it. `RouteAsync` therefore calls the model with no `ChatOptions` at all; determinism is not load-bearing here, because the prompt pins the answer to one word and an off-list answer falls back. Pass `temperature:` when your model accepts it:
 
 ```csharp

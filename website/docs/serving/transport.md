@@ -92,6 +92,8 @@ flowchart LR
   M -->|"hello wins on conflict"| E["engine.connect(conn, params)"]
 ```
 
+Each field is taken only in its declared type — non-empty strings for `userId`, `conversationId` and `token`, a finite number for `watermark`, an object for `meta` — and anything else is ignored as if absent. So `?watermark=abc` replays the whole transcript rather than nothing, and a `hello` carrying `userId: 42` gets a minted id.
+
 The merged result is a `ConnectParams` — `{ hello, credential }` — handed to `app.connect(conn, params)`. The `credential` carries the token, the raw headers (for a cookie/session authenticator), and the raw query params. See [Authentication](../authentication.md).
 
 ## Ordering guarantees the transport keeps
@@ -101,6 +103,7 @@ The Node transport serializes per socket so the protocol invariants hold:
 - **The handshake finishes before any frame is delivered.** `app.connect` must complete before the first `app.receive`, or replay would race live frames.
 - **Frames stay in order.** Inbound frames chain through a per-socket promise, so `receive` calls never overlap or reorder.
 - A non-`hello` first frame (identity came via the query string) is still processed after the handshake, not dropped.
+- **A close never overtakes the handshake.** A socket that closes while `app.connect` is still awaiting (a slow authenticator or store) is disconnected only once the connect has landed — otherwise the engine would register it afterwards and keep it, and its declared [client tools](../authoring/client-tools.md) would linger in every later turn.
 
 These are transport responsibilities precisely because they're about the socket, not the protocol. The engine assumes ordered, post-handshake delivery; the transport provides it.
 

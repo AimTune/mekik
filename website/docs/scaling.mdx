@@ -124,6 +124,10 @@ every method takes a `CancellationToken`. `LocalTurnLock` and `NoopBackplane` ar
 the defaults, so a plain `new MekikApp(new MekikOptions { Graph = graph })` still
 runs exactly as before.
 
+A lease whose release fails (a Redis blip) still frees the node's local turn
+lock — the remote lease simply expires on its TTL — so a transient error never
+leaves a conversation answering `busy`.
+
 :::note What ships today
 The two fleet-critical ports **and their Redis implementations** ship: pass
 `RedisTurnLock` / `RedisBackplane` from **[`@mekik/redis`](https://www.npmjs.com/package/@mekik/redis)**

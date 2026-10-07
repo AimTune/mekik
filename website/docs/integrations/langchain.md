@@ -260,6 +260,8 @@ import { route } from "@mekik/langchain";
 })
 ```
 
+Normalization is case- and punctuation-insensitive. An answer that *is* a route name wins outright; otherwise the **longest** route name the answer mentions wins, so with routes `report` and `reporting` an answer of `reporting` is never captured by `report`. An answer naming no route goes to `fallback`, or the last route.
+
 ## Where to go next
 
 - [**Agent integrations → Overview**](./overview.md) — the shared policy shape and the three integrations.
