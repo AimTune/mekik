@@ -123,6 +123,15 @@ public sealed class ConversationEngine
         /// <summary>This connection's <c>hello.meta</c> (§6) — laid under each turn's frame meta before the allowlist sees it.</summary>
         public IReadOnlyDictionary<string, object?>? HelloMeta { get; init; }
         /// <summary>
+        /// Live frames that arrived while this connection's replay tail was still being
+        /// read (§2). Flushed — minus anything the tail already carried — once the tail
+        /// is sent, so a tab joining mid-stream never sees a seq twice or out of order.
+        /// Null once the handshake is done. Guarded by <see cref="Live.Gate"/>.
+        /// </summary>
+        public List<IReadOnlyDictionary<string, object?>>? Backlog { get; set; } = new();
+        /// <summary>The highest seq the replay tail carried; a later live copy of one of those is not re-sent.</summary>
+        public long ReplayedThrough { get; set; }
+        /// <summary>
         /// The tools this connection declared (§11.1), already sanitized and passed
         /// through the <see cref="ClientToolsPolicy"/>. <c>Stamp</c> orders
         /// declarations across a conversation's connections: when two tabs declare
@@ -241,8 +250,26 @@ public sealed class ConversationEngine
         }
 
         var clientWatermark = watermarkReset ? 0 : hello.Watermark ?? 0;
-        foreach (var frame in await _cfg.History.AfterAsync(conversationId, clientWatermark).ConfigureAwait(false))
-            conn.Send(frame);
+        var tail = await _cfg.History.AfterAsync(conversationId, clientWatermark).ConfigureAwait(false);
+        foreach (var frame in tail) conn.Send(frame);
+
+        // Frames dispatched while the handshake was in flight were held back (see
+        // FanOutLocal). The tail was read after some of them were recorded, so it may
+        // already carry them: drop any persistent frame at or below the last replayed
+        // seq and send the rest, in order. Under the gate, so a concurrent fan-out
+        // cannot overtake the backlog.
+        var lastReplayed = tail.Count > 0 ? SeqOf(tail[^1]) ?? 0 : 0;
+        var replayedTo = tail.Count > 0 ? lastReplayed : clientWatermark;
+        lock (live.Gate)
+        {
+            foreach (var frame in state.Backlog ?? [])
+            {
+                if (Protocol.IsPersistent(frame) && SeqOf(frame) is { } s && s <= replayedTo) continue;
+                conn.Send(frame);
+            }
+            state.Backlog = null;
+            state.ReplayedThrough = lastReplayed;
+        }
 
         // A fresh conversation gets a one-time bot greeting, persisted like any
         // bot frame so a later reconnect replays it instead of greeting twice.
@@ -695,14 +722,29 @@ public sealed class ConversationEngine
     private void FanOutLocal(string convId, IReadOnlyDictionary<string, object?> frame, string? exceptConnId = null)
     {
         if (!_live.TryGetValue(convId, out var live)) return;
-        List<ConnState> targets;
-        lock (live.Gate) targets = live.Connections.Values.ToList();
-        foreach (var state in targets)
+        var targets = new List<ConnState>();
+        var seq = Protocol.IsPersistent(frame) ? SeqOf(frame) : null;
+        lock (live.Gate)
         {
-            if (exceptConnId is not null && state.Conn.Id == exceptConnId) continue;
-            state.Conn.Send(frame);
+            foreach (var state in live.Connections.Values)
+            {
+                if (exceptConnId is not null && state.Conn.Id == exceptConnId) continue;
+                // Still handshaking: hold the frame until welcome and the replay tail are out.
+                if (state.Backlog is not null) { state.Backlog.Add(frame); continue; }
+                // Recorded before the replay read but fanned out after it: already delivered.
+                if (seq is { } s && s <= state.ReplayedThrough) continue;
+                targets.Add(state);
+            }
         }
+        foreach (var state in targets) state.Conn.Send(frame);
     }
+
+    private static long? SeqOf(IReadOnlyDictionary<string, object?> frame) => frame.GetValueOrDefault("seq") switch
+    {
+        long l => l,
+        int i => i,
+        _ => null,
+    };
 
     private IReadOnlyDictionary<string, object?> BuildMeta(string convId, ConnState state, string text, IReadOnlyDictionary<string, object?>? frameMeta)
     {
