@@ -128,7 +128,7 @@ once.
 
 The history is a `genui-table` mounted from inside the tool. The fraud check
 runs with a `show: false` policy, so no frame for it reaches the wire. When
-the service is down, the model reads `Error: fraud screening service timed out`
+the service is down the tool throws, and `runAgent` hands the model `Error from fraud_screen: fraud screening service timed out`
 as an observation. Following the skill, it calls `flag_for_review` instead of
 `transfer_funds`, and no money moves.
 

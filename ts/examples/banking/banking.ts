@@ -168,7 +168,9 @@ const lookupPayee = tool(
 const fraudScreen = tool(
     ({ payeeId, amount }) => {
         effects.fraud_screen++;
-        if (!fraudServiceUp) return "Error: fraud screening service timed out";
+        // An outage throws, like any failing tool: runAgent turns it into an
+        // `Error from fraud_screen: …` observation the model can act on.
+        if (!fraudServiceUp) throw new Error("fraud screening service timed out");
         return { payeeId, amount, risk: "low" };
     },
     {
@@ -531,13 +533,25 @@ async function probe(): Promise<void> {
     await app.receive(c, { type: "text", data: { text: "Send $900 to QuickCash Intl" } });
     t = c.drain();
     describe(t);
-    check(effects.fraud_screen === 3, "fraud_screen really ran (and failed)");
+    check(effects.fraud_screen === 3, "fraud_screen really ran (and threw)");
+    // The exact wire of this turn — the same frames a tool that returned an error string produced:
+    // the hidden tool's failure adds nothing (no trace, no error frame), the run just carries on.
+    const wireSig = c.wire.slice(before).map((f) => {
+        const d = (f as { data?: { name?: string; status?: string } }).data;
+        return `${f.type}:${d?.name ?? ""}:${d?.status ?? ""}`;
+    });
+    check(
+        wireSig.join(" ") ===
+            "run::started tool_call:lookup_payee:running tool_call:lookup_payee:completed skill:wire-transfer-rules:loaded " +
+                "tool_call:flag_for_review:running tool_call:flag_for_review:completed text:: run::finished",
+        "the wire is unchanged by the throw: lookup, skill, flag_for_review, reply, finished",
+    );
     check(!c.wire.slice(before).some((f) => f.type === "tool_call" && f.data.name === "fraud_screen"), "…yet no fraud_screen frame reached the wire");
     check(!traces(t).some((f) => f.data.status === "error"), "no error trace at all");
     check(errorCode(t) === undefined && runStatus(t) === "finished", "no error frame; the run finishes normally");
     check(
-        model.observations.payments?.some((o) => o === "Error: fraud screening service timed out") === true,
-        "the model read the failure as an observation",
+        model.observations.payments?.some((o) => o === "Error from fraud_screen: fraud screening service timed out") === true,
+        "the model read the thrown failure as an observation (Error from fraud_screen: …)",
     );
     check(toolNames(t).join("|") === "lookup_payee|flag_for_review", "and followed the skill: flag for review, no transfer_funds");
     check(interrupts(t).length === 0 && effects.execute_transfer === 2 && effects.transfer_funds === 2, "no approval was asked for, nothing staged, no money moved");
