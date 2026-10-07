@@ -33,7 +33,7 @@ app.Disconnect(conn);                   // the socket closed
 </TabItem>
 </Tabs>
 
-`conn` is a `Connection` — anything with `send(frame)` and `close(code?, reason?)`. The engine never constructs one; the transport does. This is the seam that keeps protocol logic out of the socket layer.
+`conn` is a `Connection` (`IConnection` in .NET) — anything with an `id`, `send(frame)` and `close(code?, reason?)`. The engine never constructs one; the transport does. This is the seam that keeps protocol logic out of the socket layer.
 
 ## The turn lock
 
@@ -43,12 +43,13 @@ The core concurrency rule is one line:
 
 A per-conversation lock guards it. The lifecycle of a turn:
 
-1. A client sends `text` (or `resume`). If the conversation already has a run in flight, the engine replies `error{code:"busy"}` **to that sender only** and drops the frame — no second run starts.
-2. `run{started}` → the graph runs, streaming `genui` / `tool_call` frames as its nodes emit.
-3. The run reaches a terminal state, and the engine sends the matching transient `run` frame (below).
-4. The lock releases.
+1. A client sends `text` (or `resume`, or a component interaction that [`onGenUiEvent`](./authoring/components.md) turns into a turn). If the conversation already has a run in flight, the engine replies `error{code:"busy"}` **to that sender only** and drops the frame — no second run starts.
+2. The engine takes the local lock, then the cross-node lease from the `turnLock` port (`LocalTurnLock` always grants; a Redis lease may answer "another node owns it", which is also `busy`).
+3. `run{started}` → the graph runs, streaming `genui` / `tool_call` / `skill` frames as its nodes emit.
+4. The run reaches a terminal state, and the engine sends the matching transient `run` frame (below).
+5. The lease and the lock release — the local lock even when releasing the lease fails (a Redis blip), so a conversation never answers `busy` forever.
 
-The lock is **process-local**. Horizontal scale — a distributed lock plus cross-node fan-out — is out of scope for v1 and would require sticky routing per `conversationId`. Within one process, the guarantee is absolute: a burst of `text` frames on one conversation runs strictly one at a time, and every extra one gets `busy`.
+The local lock is taken synchronously, before the first `await`, so within one process the guarantee is absolute: a burst of `text` frames on one conversation runs strictly one at a time, and every extra one gets `busy`. The turn belongs to the conversation, not the socket: a tab that sends a turn and closes at once still gets that turn run for the conversation's other tabs and the transcript. Across a fleet, the `turnLock` lease extends the same rule — see [Horizontal scale](./scaling.mdx).
 
 ## The four terminal states
 
@@ -60,6 +61,8 @@ Every run ends in exactly one of four states, and each maps to a transient `run`
 | interrupted | `run{interrupted}` | one `interrupt` frame per pending pause | The graph paused for a human; the thread is parked and resumable. |
 | error | `run{error}` | a `⚠️ ` `bot` `text` carrying the message | The run threw. The last checkpoint stands. |
 | aborted | `run{aborted}` | — | An `abort` frame cancelled the run at a superstep boundary; the last checkpoint stands. |
+
+The error row also covers an event stream that throws after `run_start` instead of yielding a `run_end` — ilmek's recursion limit (`recursionLimit`), a failing checkpointer. Every tab has already seen `run{started}`, so the engine closes the turn exactly as `run_end{error}` would: the `⚠️` text, then `run{error}`.
 
 `run` frames are transient — never stored, never replayed. A reconnecting client doesn't re-see `run{interrupted}`; it learns the thread is parked from `welcome.data.pending` instead. See [Frames](./protocol/frames.md#transient-frames).
 
@@ -92,8 +95,10 @@ On every `connect`, the engine:
 
 1. Resolves identity (mints or adopts `userId` / `conversationId`; see [Identity & resume](./protocol/identity.md)).
 2. Sends a `welcome` frame with the resolved ids, the current `watermark`, and `pending` — the open interrupts re-announced so a reopened UI can re-render approval forms.
-3. Replays every persistent frame with `seq > watermark`, in order.
-4. Resumes live delivery.
+3. Sends the server's catalogs, when configured: `genui_components` ([components](./authoring/components.md)) and `skills` ([skills](./authoring/skills.md)), each hash-versioned so an unchanged catalog costs one tiny frame.
+4. Replays every persistent frame with `seq > watermark`, in order.
+5. Resumes live delivery. Frames another tab's run produced while steps 2–4 were in flight were held back; the engine sends them now, minus any the replay already carried — so a tab joining mid-stream gets each `seq` exactly once, in order.
+6. On a fresh conversation (nothing in the transcript yet), sends the one-time `greeting`, if configured.
 
 Transient frames are never part of replay. If the client's asserted `conversationId` didn't resolve (expired, deleted), the server hands back a *different* one and the client resets its watermark to 0 — the old watermark belonged to a transcript that no longer exists.
 
@@ -108,13 +113,16 @@ When the resume run starts, the engine first emits an `interrupt_resolved` frame
 
 ## Refusing the wrong frame at the wrong time
 
-The engine rejects two out-of-order cases with a specific `error` code, leaving the socket open:
+The engine rejects out-of-order and malformed frames with a specific `error` code, leaving the socket open:
 
 | Situation | Response | Why |
 |---|---|---|
-| `text` while a run is in flight | `error{busy}` | The turn lock. Only one run per conversation. |
-| `text` while the thread is parked on an interrupt | `error{interrupted}` | A plain new turn would drop the pause (mirrors ilmek's `ResumeError`). Send `resume` instead. |
-| malformed frame (bad JSON, missing `type`) | `error{bad_request}` | The frame is ignored; the connection survives. |
+| `text`, `resume` or a component-driven turn while a run is in flight | `error{busy}` | The turn lock. Only one run per conversation. |
+| `text` (or a component-driven turn) while the thread is parked on an interrupt | `error{interrupted}` | A plain new turn would drop the pause (mirrors ilmek's `ResumeError`). Send `resume` instead. |
+| `resume` with no open interrupt | `error{not_interrupted}` | There is nothing to answer. |
+| `resume` that omits an open interrupt | `error{incomplete_resume}` | See [Resume routing](#resume-routing). |
+| malformed frame (bad JSON, missing or unknown `type`, missing required fields) | `error{bad_request}` | The frame is ignored; the connection survives. |
+| a frame on a connection the engine never registered | `error{no_session}` | Connect (handshake) first. |
 
 The distinction between `busy` and `interrupted` matters to a client: `busy` means "wait, a run is going"; `interrupted` means "you must answer the open pause before you can send a new turn."
 

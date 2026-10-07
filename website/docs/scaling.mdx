@@ -65,8 +65,8 @@ know; the last two are the scaling ports.
 
 | Port | Default (single node) | Fleet |
 |---|---|---|
-| `HistoryStore` | in-memory | Redis (Stream / sorted set by `seq`) |
-| `ConversationStore` | in-memory | Redis (hash) |
+| `HistoryStore` | in-memory | durable, bring your own — e.g. Redis (Stream / sorted set by `seq`) |
+| `ConversationStore` | in-memory | durable, bring your own — e.g. Redis (hash) |
 | **`TurnLock`** | `LocalTurnLock` (no lease) | Redis `SET NX PX` lease + heartbeat |
 | **`Backplane`** | `NoopBackplane` (direct fan-out) | Redis Pub/Sub |
 | ilmek `Checkpointer` | in-memory | durable (Redis / Postgres) — swap ilmek's |
@@ -127,6 +127,23 @@ runs exactly as before.
 A lease whose release fails (a Redis blip) still frees the node's local turn
 lock — the remote lease simply expires on its TTL — so a transient error never
 leaves a conversation answering `busy`.
+
+`RedisTurnLock` holds the key `{prefix}:lock:{conversationId}` (`SET NX PX`,
+default TTL 30 s); the lease renews itself every TTL / 3 (at least 1 s) while
+the run streams, and renew and release are token-checked, so a node can never
+free a lock another node now owns. `RedisBackplane` publishes each dispatched
+frame on `{prefix}:bp:{conversationId}` together with the producing node's id,
+so a node skips its own messages and only re-fans frames from the others to its
+local sockets — it never re-records them. The default prefix is `mekik`; the
+options are listed in the [`@mekik/redis`](https://github.com/AimTune/mekik/tree/main/ts/packages/redis#readme)
+and [`Mekik.Redis`](https://github.com/AimTune/mekik/tree/main/dotnet/src/Mekik.Redis#readme) READMEs.
+
+:::caution Keep a fleet to one language
+The lock keys are compatible, but the backplane payload is not: the TypeScript
+backplane publishes `{"originId", "frame"}` while the .NET one publishes
+`{"OriginId", "Frame"}`. Run TypeScript and .NET nodes against separate key
+prefixes rather than one shared fleet.
+:::
 
 :::note What ships today
 The two fleet-critical ports **and their Redis implementations** ship: pass

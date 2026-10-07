@@ -6,6 +6,9 @@ human-in-the-loop over the **`mekik/1`** wire protocol. The .NET mirror of the
 TypeScript `@mekik/core`; both are held to one wire by shared golden fixtures.
 
 ```csharp
+using Ilmek;
+using Mekik;
+
 var graph = Graph.Create("refund")
     .Channel("input", Channels.LastWrite(""))
     .Channel("reply", Channels.LastWrite(""))
@@ -26,6 +29,12 @@ Serve it with `Mekik.AspNetCore`. Helpers live on `Shuttle` (what *mekik* means 
 the loom part that carries the thread across); it can't be named `Mekik` because a
 static class may not share its namespace's name.
 
-Docs and the normative protocol spec: https://github.com/AimTune/mekik
+Also in this package: server-defined components and rich messages, client tools
+and client skills (both opt-in), a skill catalog whose skills can own their
+tools, `MekikMcpServer` / `MekikA2aServer` (served over HTTP by
+`Mekik.AspNetCore`'s `MapMekikMcp` / `MapMekikA2a`), and the `ITurnLock` /
+`IBackplane` ports a fleet fills with `Mekik.Redis`.
+
+Docs: https://mekik.aimtune.dev · Protocol spec: https://github.com/AimTune/mekik
 
 MIT

@@ -32,6 +32,12 @@ serveWs(app, { port: 8800, path: "/ws" });
 The single `mekik` export is both the app factory (`mekik({ graph })`) and the
 node-authoring helpers (`mekik.ui`, `mekik.tool`, `mekik.approve`, …).
 
-Docs, the normative protocol spec, and the .NET port: https://github.com/AimTune/mekik
+Also in this package: server-defined components and rich messages, client tools
+and client skills (both opt-in), a skill catalog whose skills can own their
+tools, `MekikMcpServer` / `MekikA2aServer` (serve the app as MCP tools or an A2A
+agent, with `@mekik/mcp` / `@mekik/a2a` as the HTTP transports), and the
+`TurnLock` / `Backplane` ports a fleet fills with `@mekik/redis`.
+
+Docs: https://mekik.aimtune.dev · Protocol spec and the .NET port: https://github.com/AimTune/mekik
 
 MIT

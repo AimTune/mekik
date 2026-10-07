@@ -41,8 +41,8 @@ connection internally, so no second connection to wire up).
 new RedisTurnLock(redis, new RedisTurnLockOptions
 {
     KeyPrefix = "mekik",                  // share one Redis across apps. Default "mekik".
-    Ttl       = TimeSpan.FromSeconds(30), // lock TTL; must exceed a turn's worst case.
-    Heartbeat = TimeSpan.FromSeconds(10), // self-renew interval. Default Ttl / 3.
+    Ttl       = TimeSpan.FromSeconds(30), // lock TTL; must exceed a turn's worst case. Default 30s.
+    Heartbeat = TimeSpan.FromSeconds(10), // self-renew interval. Default Ttl / 3 (at least 1s).
     OnLost    = convId => logger.LogWarning("turn lease lost {Conv}", convId),
 });
 ```
@@ -50,7 +50,9 @@ new RedisTurnLock(redis, new RedisTurnLockOptions
 The lease is token-checked: a node can only renew or release a lock it still
 holds, so a slow node whose TTL lapsed can never free the new owner's lock. The
 key is `{KeyPrefix}:lock:{conversationId}`. The lease releases on `DisposeAsync`
-(the engine disposes it when the turn ends).
+(the engine disposes it when the turn ends). If that release fails (a Redis blip),
+the engine still frees its local turn lock and the key simply expires on its TTL,
+so the conversation never answers `busy` forever.
 
 ## `RedisBackplane` options
 
@@ -58,8 +60,12 @@ key is `{KeyPrefix}:lock:{conversationId}`. The lease releases on `DisposeAsync`
 new RedisBackplane(redis, new RedisBackplaneOptions { KeyPrefix = "mekik" });
 ```
 
-The channel is `{KeyPrefix}:bp:{conversationId}`. The returned subscription
-unsubscribes on `DisposeAsync`.
+The channel is `{KeyPrefix}:bp:{conversationId}`, and each message is the JSON
+`{ "OriginId", "Frame" }` — the engine skips its own by `OriginId`, and a relayed
+frame reaches the engine in the same shape as a locally produced one. The
+TypeScript `@mekik/redis` backplane uses camelCase keys, so don't mix TypeScript
+and .NET nodes on one backplane prefix. The returned subscription unsubscribes on
+`DisposeAsync`.
 
 ## Routing
 
