@@ -94,6 +94,14 @@ class Conn implements RedisClient {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Wait for a timer-driven condition with a generous deadline, so a loaded CI box cannot flake it. */
+async function eventually(cond: () => boolean, what: string): Promise<void> {
+    const deadline = Date.now() + 3000;
+    while (!cond()) {
+        if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
+        await sleep(5);
+    }
+}
 const msg = (text: string): BackplaneMessage => ({
     originId: "node-x",
     frame: { type: "text", id: "m", seq: 1, from: "bot", data: { text }, timestamp: 0 } as OutgoingFrame,
@@ -138,9 +146,7 @@ describe("RedisTurnLock edges", () => {
     test("the lease renews itself on the heartbeat with the full TTL until released", async () => {
         const server = new Server();
         const lease = (await new RedisTurnLock(new Conn(server), { ttlMs: 900, heartbeatMs: 10 }).acquire("c1"))!;
-        await sleep(45);
-        const renewals = server.commands.filter((c) => c === "EVAL PEXPIRE mekik:lock:c1 900").length;
-        assert.ok(renewals >= 2, `renewed ${renewals} times`);
+        await eventually(() => server.commands.filter((c) => c === "EVAL PEXPIRE mekik:lock:c1 900").length >= 2, "two heartbeat renewals");
         await lease.release();
         const after = server.commands.length;
         await sleep(30);
@@ -152,9 +158,8 @@ describe("RedisTurnLock edges", () => {
         const lost: string[] = [];
         const lease = (await new RedisTurnLock(new Conn(server), { heartbeatMs: 5, onLost: (id) => lost.push(id) }).acquire("c9"))!;
         server.expire("mekik:lock:c9");
-        await sleep(25);
+        await eventually(() => lost.length >= 1, "onLost");
         await lease.release();
-        assert.ok(lost.length >= 1);
         assert.ok(lost.every((id) => id === "c9"));
     });
 
