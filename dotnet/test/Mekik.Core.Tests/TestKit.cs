@@ -269,3 +269,41 @@ internal static class Graphs
 
     public static MekikApp App(CompiledGraph graph) => new(Options(graph));
 }
+
+/// <summary>
+/// A bare <see cref="IContext"/> that records what a helper emits — for unit tests of the
+/// author-facing helpers outside a run. Journal steps run inline; interrupts are not modelled.
+/// </summary>
+internal sealed class RecordingCtx(IReadOnlyDictionary<string, object?>? meta = null, string taskId = "task") : IContext
+{
+    public CompiledGraph Graph => throw new NotSupportedException();
+    public State State => throw new NotSupportedException();
+    public string ThreadId => "t";
+    public string RunId => "r";
+    public string Node => "n";
+    public string TaskId => taskId;
+    public int StepIndex => 0;
+    public int RecursionLimit => 1;
+    public int RemainingSteps => 1;
+    public IReadOnlyDictionary<string, object?> Meta => meta ?? new Dictionary<string, object?>();
+    public IReadOnlyList<KeyValuePair<string, JournalEntry>> Journal => [];
+    public CancellationToken CancellationToken => default;
+    public List<object?> Emitted { get; } = new();
+    public List<(object? Payload, string Key)> Interrupts { get; } = new();
+    public ValueTask<T> StepAsync<T>(string key, Func<ValueTask<T>> fn) => fn();
+    public ValueTask<T> StepAsync<T>(string key, Func<T> fn) => new(fn());
+    public ValueTask<T> InterruptAsync<T>(object? payload = null, string key = "interrupt")
+    {
+        Interrupts.Add((payload, key));
+        return ValueTask.FromResult(default(T)!);
+    }
+    public void Emit(object? payload) => Emitted.Add(payload);
+    public void EmitToken(string text, IReadOnlyDictionary<string, object?>? meta = null) { }
+
+    /// <summary>The genui chunks emitted, unwrapped from their <c>$mekik</c> envelope.</summary>
+    public List<IReadOnlyDictionary<string, object?>> Chunks => Emitted
+        .OfType<IReadOnlyDictionary<string, object?>>()
+        .Where(e => e.GetValueOrDefault("$mekik") as string == "genui")
+        .Select(e => (IReadOnlyDictionary<string, object?>)e["chunk"]!)
+        .ToList();
+}
