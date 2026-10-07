@@ -144,6 +144,17 @@ describe("run_end mapping (§4.1, §4.3)", () => {
         assert.deepEqual(seen[0], { reply: "x" });
     });
 
+    test("fail() closes a run whose stream threw: the same ⚠️ text then run{error} as run_end{error}", () => {
+        const m = new TurnMapper(deps());
+        m.map(ev({ type: "run_start" }));
+        m.map(token("partial"));
+        assert.deepEqual(m.fail(new Error("exceeded 3 supersteps")), [
+            { type: "text", id: "msg-1", seq: 2, from: "bot", data: { text: "⚠️ exceeded 3 supersteps" }, timestamp: 1 },
+            { type: "run", data: { status: "error" } },
+        ]);
+        assert.equal((new TurnMapper(deps()).fail("disk full")[0] as { data: { text: string } }).data.text, "⚠️ disk full");
+    });
+
     test("the reply comes after stream_done and before run{finished}", () => {
         const frames = eventToFrames([token("a"), done()], deps({ reply: () => "bye" }));
         assert.deepEqual(frames.map((f) => (f.type === "genui" ? `genui:${(f as GenUIFrame).done}` : f.type)), ["genui:false", "genui:true", "text", "run"]);

@@ -648,8 +648,23 @@ export class ConversationEngine {
             now: this.cfg.now,
             ...(this.cfg.reply ? { reply: this.cfg.reply } : {}),
         });
-        for await (const ev of events) {
-            for (const out of mapper.map(ev)) await this.dispatch(convId, out);
+        let started = false;
+        let ended = false;
+        try {
+            for await (const ev of events) {
+                if (ev.type === "run_start") started = true;
+                if (ev.type === "run_end") ended = true;
+                for (const out of mapper.map(ev)) await this.dispatch(convId, out);
+            }
+        } catch (err) {
+            // A stream that throws mid-run (ilmek's recursion limit, a failing
+            // checkpointer) never yields its run_end. Every tab already saw
+            // run{started}, so close the run on the wire as an error rather than
+            // leave them spinning; it is a failure inside the graph, not of the
+            // transport (§4.1, §13.2). A stream that fails before it started has
+            // put nothing on the wire — let the caller see that one.
+            if (!started || ended) throw err;
+            for (const out of mapper.fail(err)) await this.dispatch(convId, out);
         }
     }
 
