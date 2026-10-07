@@ -62,17 +62,22 @@ public sealed record AgentRunOptions
     public string? SkillSource { get; init; }
 
     /// <summary>
-    /// Tools held <em>under</em> a skill, keyed by skill name — progressive disclosure for the
-    /// toolbox, not only the instructions. A skill's tools are NOT sent to the model until it
-    /// calls <c>load_skill</c> for that skill; from the next model round on they join
+    /// Extra tools held <em>under</em> a skill, keyed by skill name. The primary form is the
+    /// catalog entry itself: a <see cref="SkillEntry{TTool}"/> of <see cref="AIFunction"/>
+    /// owns its <see cref="SkillEntry{TTool}.Tools"/>, and <see cref="Agent.RunAsync"/> holds
+    /// them back automatically. Use this map for functions that must be built per node or per
+    /// request (closing over the turn's state); they merge with the entry's own.
+    /// <para>Either way a skill's tools are NOT sent to the model until it loads that skill
+    /// successfully with <c>load_skill</c>; from the next model round on they join
     /// <see cref="Tools"/> for the rest of the run, and the <c>load_skill</c> observation names
-    /// them. Keeps the per-call tool list small when a node owns many tools.
+    /// them. Keeps the per-call tool list small when a node owns many tools.</para>
     /// <para>Needs <see cref="Skills"/>; an entry whose skill is not visible to this node
     /// (unknown, or hidden by <see cref="SkillTags"/> / <see cref="SkillSource"/>) is ignored.
     /// Tools are wrapped with <see cref="MekikTools"/> like <see cref="Tools"/> (same
-    /// <see cref="Policies"/>). The active set is derived from the journaled calls, so a resume
-    /// rebuilds the same toolbox per round. A call to a tool whose skill is not loaded yet is
-    /// answered with an observation asking the model to load the skill first.</para>
+    /// <see cref="Policies"/>). The load re-runs on a resume's replay pass, so the toolbox
+    /// each round had is rebuilt exactly. A call to a tool whose skill is not loaded yet is
+    /// answered with an observation asking the model to load the skill first. A name both
+    /// always-on and skill-held, or two different functions sharing a name, fails the run.</para>
     /// </summary>
     public IReadOnlyDictionary<string, IReadOnlyList<AIFunction>>? SkillTools { get; init; }
 }
@@ -122,12 +127,22 @@ public static class Agent
         // that emits its own `skill` trace, not a side effect to journal.
         var system = options.System;
         var skillToolbox = new SkillToolbox();
+        var activeSkills = new HashSet<string>(StringComparer.Ordinal);
+        var activated = false;
         if (options.Skills)
         {
             var block = Shuttle.SkillsPrompt(ctx, options.SkillTags, options.SkillSource);
             if (block.Length > 0) system = system.Length > 0 ? $"{system}\n\n{block}" : block;
             skillToolbox = SkillToolbox.Build(ctx, options, tools);
-            tools.AddRange(SkillFunctions.Wrap(ctx, options.SkillTags, options.SkillSource, skillToolbox.ToolNames));
+            var box = skillToolbox;
+            // Only a successful load unlocks. load_skill is a catalog read that re-runs on a
+            // resume's replay pass (same journaled decisions, same order), so the toolbox
+            // each round had the first time is rebuilt exactly.
+            void OnLoaded(string skill)
+            {
+                if (box.Has(skill) && activeSkills.Add(skill)) activated = true;
+            }
+            tools.AddRange(SkillFunctions.Wrap(ctx, options.SkillTags, options.SkillSource, skillToolbox.ToolNames, OnLoaded));
         }
 
         // Every tool — the always-on ones and every skill's — is dispatchable from the start;
@@ -135,7 +150,6 @@ public static class Agent
         var byName = tools.ToDictionary(t => t.Name);
         foreach (var fn in skillToolbox.All) byName.TryAdd(fn.Name, fn);
 
-        var activeSkills = new HashSet<string>(StringComparer.Ordinal);
         var chatOptions = new ChatOptions { Tools = [.. tools] };
 
         var messages = new List<ChatMessage>
@@ -216,18 +230,18 @@ public static class Agent
             toolCallsUsed += calls.Count;
             if (toolCallsUsed > options.MaxToolCalls) return options.BudgetReply;
 
-            var activated = false;
+            activated = false;
             foreach (var call in calls)
             {
                 var callId = (string)call["id"]!;
                 var name = (string)call["name"]!;
                 var args = ToArgs(call.GetValueOrDefault("args"));
                 object? result;
-                if (skillToolbox.LockedSkillOf(name, activeSkills) is { } lockedSkill)
+                if (skillToolbox.LockedSkillsOf(name, activeSkills) is { } lockedSkills)
                 {
                     // Offered only once its skill is loaded — never run it before, or the
                     // model would act without the skill's instructions.
-                    result = $"Tool {name} belongs to skill \"{lockedSkill}\". Call {SkillFunctions.LoadSkillTool} with name \"{lockedSkill}\" first.";
+                    result = SkillToolbox.LockedObservation(name, lockedSkills);
                 }
                 else
                 {
@@ -245,17 +259,6 @@ public static class Agent
                         // run's: the wrapper already traced it running → error.
                         result = $"Error from {name}: {ex.Message}";
                     }
-                }
-
-                // Derived from the journaled call (not live state), so a resume pass rebuilds
-                // exactly the toolbox each round had the first time.
-                if (name == SkillFunctions.LoadSkillTool
-                    && args.GetValueOrDefault("name") is string skill
-                    && skillToolbox.Has(skill)
-                    && SkillFunctions.HasLoaded(ctx, skill)
-                    && activeSkills.Add(skill))
-                {
-                    activated = true;
                 }
 
                 messages.Add(new ChatMessage(ChatRole.Tool, new List<AIContent>

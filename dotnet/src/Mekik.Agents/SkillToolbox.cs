@@ -6,8 +6,9 @@ using Mekik;
 namespace Mekik.Agents;
 
 /// <summary>
-/// The tools held under skills for one <see cref="Agent.RunAsync"/> run
-/// (<see cref="AgentRunOptions.SkillTools"/>): which skill owns which wrapped function,
+/// The tools held under skills for one <see cref="Agent.RunAsync"/> run (each catalog
+/// entry's own <see cref="SkillEntry{TTool}.Tools"/> merged with
+/// <see cref="AgentRunOptions.SkillTools"/>): which skill owns which wrapped function,
 /// and which of them the model may be offered given the skills loaded so far.
 /// </summary>
 internal sealed class SkillToolbox
@@ -32,14 +33,22 @@ internal sealed class SkillToolbox
         skills.Where(_bySkill.ContainsKey).SelectMany(s => _bySkill[s]).DistinctBy(f => f.Name);
 
     /// <summary>
-    /// When <paramref name="tool"/> is skill-held and none of its skills is active, the skill
-    /// the model should load (the first that holds it); otherwise null.
+    /// When <paramref name="tool"/> is skill-held and none of its skills is active, the skills
+    /// that hold it (any one of them unlocks it); otherwise null.
     /// </summary>
-    public string? LockedSkillOf(string tool, IReadOnlySet<string> active) =>
-        _skillsOf.TryGetValue(tool, out var owners) && !owners.Any(active.Contains) ? owners[0] : null;
+    public IReadOnlyList<string>? LockedSkillsOf(string tool, IReadOnlySet<string> active) =>
+        _skillsOf.TryGetValue(tool, out var owners) && !owners.Any(active.Contains) ? owners : null;
+
+    /// <summary>The observation for a call to a skill's tool before any skill holding it is loaded.</summary>
+    public static string LockedObservation(string tool, IReadOnlyList<string> owners) =>
+        owners.Count == 1
+            ? $"Tool {tool} belongs to skill \"{owners[0]}\". Call {SkillFunctions.LoadSkillTool} with name \"{owners[0]}\" first."
+            : $"Tool {tool} belongs to skills {string.Join(", ", owners.Select(o => $"\"{o}\""))}. Call {SkillFunctions.LoadSkillTool} with the one that fits the task first.";
 
     /// <summary>
-    /// Wrap the visible skills' tools with <see cref="MekikTools"/> (same policies as the
+    /// Collect the tools each visible skill owns (<see cref="SkillEntry{TTool}"/> with
+    /// <see cref="AIFunction"/> tools) plus the explicit <see cref="AgentRunOptions.SkillTools"/>
+    /// for the same skill, and wrap them with <see cref="MekikTools"/> (same policies as the
     /// always-on tools). A skill hidden by the node's tag/source filter is skipped.
     /// </summary>
     /// <exception cref="ArgumentException">
@@ -49,17 +58,29 @@ internal sealed class SkillToolbox
     public static SkillToolbox Build(IContext ctx, AgentRunOptions options, IReadOnlyList<AIFunction> alwaysOn)
     {
         var box = new SkillToolbox();
-        if (options.SkillTools is not { Count: > 0 } held) return box;
+
+        // The entry's own tools first, then the explicit ones for the same skill.
+        var held = new Dictionary<string, List<AIFunction>>(StringComparer.Ordinal);
+        foreach (var (skill, owned) in Shuttle.SkillTools<AIFunction>(ctx, options.SkillTags, options.SkillSource))
+            held[skill] = [.. owned];
 
         var visible = Shuttle.Skills(ctx, options.SkillTags, options.SkillSource)
             .Select(s => s.Name)
             .ToHashSet(StringComparer.Ordinal);
+        foreach (var (skill, extra) in options.SkillTools ?? new Dictionary<string, IReadOnlyList<AIFunction>>())
+        {
+            if (!visible.Contains(skill) || extra is null || extra.Count == 0) continue;
+            if (!held.TryGetValue(skill, out var merged)) held[skill] = merged = [];
+            foreach (var fn in extra)
+                if (!merged.Contains(fn)) merged.Add(fn);
+        }
+
         var baseNames = alwaysOn.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
         var originals = new Dictionary<string, AIFunction>(StringComparer.Ordinal);
 
         foreach (var (skill, functions) in held)
         {
-            if (!visible.Contains(skill) || functions is null || functions.Count == 0) continue;
+            if (functions.Count == 0) continue;
             foreach (var fn in functions)
             {
                 if (baseNames.Contains(fn.Name))

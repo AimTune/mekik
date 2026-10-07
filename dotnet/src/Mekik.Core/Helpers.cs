@@ -107,6 +107,40 @@ public static class Shuttle
         Mekik.Skills.RenderPrompt(Skills(ctx, tags, source), intro);
 
     /// <summary>
+    /// The tools the visible <b>server</b> skills own (<see cref="SkillEntry{TTool}.Tools"/>,
+    /// PROTOCOL.md §12.6), keyed by skill name — what an agent loop holds back until the
+    /// model loads each skill. Same filter as <see cref="Skills"/>; a skill without tools is
+    /// absent, and a client-declared skill never contributes (declarations carry no tools).
+    /// Reads the catalog without emitting a <c>skill</c> frame. Mirror of TypeScript's
+    /// <c>mekik.skillTools</c>.
+    /// </summary>
+    /// <typeparam name="TTool">The agent framework's tool type, e.g. <c>AIFunction</c>.</typeparam>
+    /// <exception cref="InvalidOperationException">A skill owns a tool that is not a <typeparamref name="TTool"/>.</exception>
+    public static IReadOnlyDictionary<string, IReadOnlyList<TTool>> SkillTools<TTool>(
+        IContext ctx, IReadOnlyList<string>? tags = null, string? source = null)
+    {
+        var result = new Dictionary<string, IReadOnlyList<TTool>>(StringComparer.Ordinal);
+        if (SkillSourceOf(ctx) is not { } src) return result;
+        foreach (var summary in Skills(ctx, tags, source))
+        {
+            if (summary.Source == SkillOrigin.Client) continue;
+            if (src.Get(summary.Name) is not { } entry || entry.Source == SkillOrigin.Client) continue;
+            var owned = entry.ToolObjects;
+            if (owned.Count == 0) continue;
+            var typed = new List<TTool>(owned.Count);
+            foreach (var t in owned)
+            {
+                if (t is not TTool tool)
+                    throw new InvalidOperationException(
+                        $"Skill \"{summary.Name}\" owns a tool of type {t?.GetType().Name ?? "null"}, not {typeof(TTool).Name}.");
+                typed.Add(tool);
+            }
+            result[summary.Name] = typed;
+        }
+        return result;
+    }
+
+    /// <summary>
     /// Emit a single <c>skill</c> frame — the low-level primitive behind
     /// <see cref="LoadSkill"/>, public for integrations that resolve skills themselves.
     /// Upserts by <c>use["id"]</c>.

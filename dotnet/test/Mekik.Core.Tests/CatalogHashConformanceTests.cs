@@ -72,5 +72,17 @@ public class CatalogHashConformanceTests
 
         Assert.Equal((string)c["canonical"]!, canonical);
         Assert.Equal((string)c["hash"]!, Skills.Hash(summaries));
+
+        // Tools a skill owns (SkillEntry<TTool>, §12.6) never enter the hash: the same golden
+        // holds for entries carrying tools, through the source's level-1 list.
+        var withTools = summaries
+            .Select((s, i) => (SkillEntry)new SkillEntry<string>
+            {
+                Name = s.Name, Description = s.Description, Tags = s.Tags, Instructions = "…",
+                Tools = [$"tool_{i}", "another"],
+            })
+            .ToList();
+        Assert.Equal((string)c["hash"]!, Skills.Hash(withTools));
+        if (withTools.Count > 0) Assert.Equal((string)c["hash"]!, Skills.Hash(SkillSources.Inline(withTools).List()));
     }
 }

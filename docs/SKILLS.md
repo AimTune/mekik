@@ -48,15 +48,32 @@ Agent wrappers: `withSkills(ctx, filter)` / `runAgent({ skills })` in
 - **Why `source` is stamped.** A node can list only server skills, or only
   client ones, and a UI can render them differently. The stamp never enters the
   catalog hash.
-- **Why tools can sit under a skill, and why it's agent-side.** A node with many
-  tools sends every schema on every call. `skillTools` (TS) / `SkillTools` (.NET)
-  keep a skill's tools out of the request until the model loads that skill. It
-  needs no wire change — the catalog and the `skill` frame are unchanged — so it
-  lives in the agent loop: the loop rebuilds the offered list after a load, and
-  derives the loaded set from the journaled calls so a resume replays the same
-  toolbox. A premature call is refused as an observation rather than run, and only
-  a load that succeeded unlocks anything, so the model never acts without the
-  skill's instructions.
+- **Why a skill owns its tools, and why it's agent-side.** A node with many
+  tools sends every schema on every call, and a skill's instructions are only
+  useful together with the tools they talk about — so the skill definition
+  carries them: `SkillEntry<TTool>.tools` (TS) / `SkillEntry<TTool>.Tools`
+  (.NET). The agent loop keeps a skill's tools out of the request until the
+  model loads that skill successfully, rebuilds the offered list after a load,
+  and — because `load_skill` re-runs on a replay pass — offers each round the
+  same toolbox on a resume. A premature call is refused as an observation
+  rather than run, so the model never acts without the skill's instructions.
+  `skillTools` / `SkillTools` on the run options add tools that must be built
+  per request (closing over the turn's state); they merge with the entry's own.
+- **Why the tools never reach the wire.** A tool is a server object (a function
+  with its credentials and side effects), not data. The catalog frame, the
+  catalog hash and the `skill` frame are computed from the summary fields
+  only, so adding tools to an entry changes nothing a client sees — both
+  suites assert the pinned hash literal for an entry with and without tools. A
+  client declaration can never carry tools: sanitization keeps only the known
+  fields, and the turn merge builds client entries from those fields alone.
+- **Why `SkillEntry` is generic over the tool type.** `@mekik/core` /
+  `Mekik.Core` know no agent framework. TS: `SkillEntry<TTool = unknown>`,
+  closed as `SkillEntry<StructuredToolInterface>` by `@mekik/langchain`,
+  which checks each entry at run start. .NET: `SkillEntry` stays the plain
+  record and `SkillEntry<TTool> : SkillEntry` adds `Tools` (records clone their
+  runtime type, so the turn snapshot keeps it); `Mekik.Agents` reads
+  `SkillEntry<AIFunction>`. A tool of the wrong type fails the run rather
+  than being dropped silently.
 - **Why the prompt renderer is duplicated in mekik.** `@mekik/core` does not
   depend on `@ilmek/skills` (a `SkillSource` is structural), so mekik ships the
   same renderer and both suites pin the same output — the ilmek fixture's

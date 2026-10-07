@@ -350,3 +350,70 @@ describe("loadSkill and the skill frame (§12.5)", () => {
         await assert.rejects(mekik.skillResource(noFiles, "pdf", "x"), /has no resources/);
     });
 });
+
+// ── skill-owned tools (§12.6) ─────────────────────────────────────────────────
+
+describe("skill-owned tools (§12.6)", () => {
+    // Opaque to @mekik/core: any value is a "tool" here; the agent integration types it.
+    const FILL = { name: "fill_form", marker: "TOOL-MARKER" };
+    const MERGE = { name: "merge_pdfs", marker: "TOOL-MARKER" };
+    const PDF_WITH_TOOLS: SkillEntry<{ name: string; marker: string }> = { ...PDF, tools: [FILL, MERGE] };
+
+    /** Replies with the tool names each visible skill owns, as `mekik.skillTools` sees them. */
+    const toolLister = graph("tool-lister")
+        .channel("input", channel.lastWrite<string>(""))
+        .channel("reply", channel.lastWrite<string>(""))
+        .node("look", (s, ctx) => {
+            const tags = s.input ? s.input.split(",") : undefined;
+            const held = mekik.skillTools<{ name: string }>(ctx, tags ? { tags } : {});
+            return { reply: `tools:${Object.entries(held).map(([k, v]) => `${k}=${v.map((t) => t.name).join("+")}`).join("|")}` };
+        })
+        .edge(START, "look")
+        .edge("look", END)
+        .compile();
+
+    test("tools never reach the wire: same catalog frame, same pinned hash, no field on the skill frame", async () => {
+        const plain = mekik({ graph: loader, reply: (s) => s.reply as string, skills: SERVER });
+        const owned = mekik({ graph: loader, reply: (s) => s.reply as string, skills: [PDF_WITH_TOOLS, VOICE] });
+        const a = conn();
+        const b = conn();
+        await plain.connect(a);
+        await owned.connect(b);
+        assert.deepEqual(first(b, "skills"), first(a, "skills"));
+        // The same literal the hash test above (and the .NET suite) pins — tools are not hashed.
+        assert.equal(hashSkills([PDF_WITH_TOOLS, VOICE]), "ff146b86cf0ec3e532ccfcdcf41d4186fa3653aa9371121335118bfe3317f14c");
+        assert.equal(first(b, "skills").hash, "ff146b86cf0ec3e532ccfcdcf41d4186fa3653aa9371121335118bfe3317f14c");
+        assert.deepEqual(new StaticSkillSource([PDF_WITH_TOOLS]).list(), [{ name: "pdf", description: "Fill PDF forms.", tags: ["docs"] }]);
+
+        await owned.receive(b, { type: "text", data: { text: "pdf" } });
+        assert.equal(lastBot(b), "Use scripts/fill.py.");
+        assert.deepEqual(Object.keys(all(b, "skill")[0]!.data).sort(), ["id", "name", "source", "status"]);
+        assert.ok(!JSON.stringify(b.sent).includes("TOOL-MARKER"), "no frame carries a tool");
+    });
+
+    test("mekik.skillTools: each visible server skill's own tools, by the node's filter", async () => {
+        const app = mekik({ graph: toolLister, reply: (s) => s.reply as string, skills: [PDF_WITH_TOOLS, VOICE] });
+        const c = conn();
+        await app.connect(c);
+        await app.receive(c, { type: "text", data: { text: "" } });
+        assert.equal(lastBot(c), "tools:pdf=fill_form+merge_pdfs"); // brand-voice owns none
+        await app.receive(c, { type: "text", data: { text: "billing" } });
+        assert.equal(lastBot(c), "tools:"); // pdf is tagged docs — hidden, so nothing
+        assert.deepEqual(mekik.skillTools({ meta: {} } as never), {});
+    });
+
+    test("a client declaration cannot smuggle tools: the field is dropped at sanitization", async () => {
+        const smuggled = { ...CLIENT_UI, tools: [{ name: "wire_money" }] };
+        assert.deepEqual(sanitizeClientSkills([smuggled]), [CLIENT_UI]);
+
+        const app = mekik({ graph: toolLister, reply: (s) => s.reply as string, clientSkills: true });
+        const c = conn();
+        await app.connect(c, { hello: { skills: [smuggled as never] } });
+        await app.receive(c, { type: "text", data: { text: "ui" } });
+        assert.equal(lastBot(c), "tools:"); // the skill is accepted, its tools are not
+
+        const ctx = { meta: { skills: new TurnSkills(undefined, [smuggled as never]) } } as never;
+        assert.equal(skills(ctx).length, 1);
+        assert.equal(new TurnSkills(undefined, [smuggled as never]).get("ui-conventions")!.tools, undefined);
+    });
+});

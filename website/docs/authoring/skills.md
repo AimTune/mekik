@@ -230,7 +230,122 @@ var tools = MekikTools.Wrap(ctx, serverFunctions, policies)
 
 ## Tools under a skill
 
-A node that owns many tools pays for all of them on every model call — every schema is in every request, and a long tool list makes the model pick worse. Hold the specialised ones **under a skill** instead: the model first sees only the always-on tools plus `load_skill`; loading a skill unlocks its tools from the next round on.
+A node that owns many tools pays for all of them on every model call — every schema is in every request, and a long tool list makes the model pick worse. Give the specialised ones **to a skill** instead: the model first sees only the always-on tools plus `load_skill`; loading a skill unlocks its tools from the next round on.
+
+### A skill owns its tools
+
+The skill's definition carries its tools: a skill is its instructions **plus** the tools those instructions use. `SkillEntry` is generic over the agent framework's tool type — `SkillEntry<StructuredToolInterface>` for `@mekik/langchain`, `SkillEntry<AIFunction>` for `Mekik.Agents` — and `runAgent` / `Agent.RunAsync` with skills on hold each visible entry's `tools` back automatically.
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
+```ts
+import type { SkillEntry } from "@mekik/core";
+import type { StructuredToolInterface } from "@langchain/core/tools";
+
+const catalog: SkillEntry<StructuredToolInterface>[] = [
+  {
+    name: "sprint-performance",
+    description: "Sprint velocity and iteration metrics. Use for any question about a sprint's numbers.",
+    instructions: "List the iterations first, then fetch the one the user means. Quote velocity as points.",
+    tools: [listIterations, getIterationPerformance],
+  },
+  {
+    name: "report-pdf",
+    description: "Render a report as a PDF.",
+    instructions: "Only after the user asked for a file.",
+    tools: [generateReportPdf],
+  },
+];
+
+const app = mekik({ graph, skills: catalog });
+
+// in the node — no tool wiring beyond the always-on ones:
+return {
+  reply: await runAgent(ctx, model, {
+    system, input: s.input,
+    tools: [today],                       // always offered
+    skills: true,                         // sprint-performance / report-pdf tools held until loaded
+  }),
+};
+```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+var app = new MekikApp(new MekikOptions
+{
+    Graph = g,
+    Skills = SkillSources.Inline(
+        new SkillEntry<AIFunction>
+        {
+            Name = "sprint-performance",
+            Description = "Sprint velocity and iteration metrics. Use for any question about a sprint's numbers.",
+            Instructions = "List the iterations first, then fetch the one the user means. Quote velocity as points.",
+            Tools = [listIterations, getIterationPerformance],
+        },
+        new SkillEntry<AIFunction>
+        {
+            Name = "report-pdf",
+            Description = "Render a report as a PDF.",
+            Instructions = "Only after the user asked for a file.",
+            Tools = [generateReportPdf],
+        }),
+});
+
+// in the node — no tool wiring beyond the always-on ones:
+return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
+{
+    System = system, Input = input,
+    Tools = [today],                      // always offered
+    Skills = true,                        // sprint-performance / report-pdf tools held until loaded
+}));
+```
+
+</TabItem>
+</Tabs>
+
+A skill's tools are **server-side only**. They are never serialized: the `skills` catalog frame still carries `name` / `description` / `tags`, the catalog hash is computed over those same fields (adding tools to an entry does not change it), and the `skill` frame a load emits is unchanged. A [client-declared skill](#client-declared-skills-off-by-default) can never carry tools — sanitization keeps only `name`, `description`, `instructions` and `tags`, so a `tools` field in a declaration is dropped and the skill is accepted without it.
+
+A tool in the catalog is built **once**, so it has no `ctx` in scope — yet a tool often needs the run: to mount UI, or to key state by the conversation. The wrapper hands it over on every call: read it with `toolContext(config)` from the LangChain `config` (the tool function's second argument) / `MekikTools.ToolContext(arguments)` from the `AIFunctionArguments` (take it as a delegate parameter; `AIFunctionFactory` binds it).
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
+```ts
+import { toolContext } from "@mekik/langchain";
+
+const transferFunds = tool(
+  (args, config) => {
+    const ctx = toolContext(config);            // the run that called this tool
+    STAGED.set(ctx.threadId, stage(args));
+    return { staged: true };
+  },
+  { name: "transfer_funds", description: "Submit a transfer for approval.", schema },
+);
+```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+var transferFunds = AIFunctionFactory.Create((string payee, decimal amount, AIFunctionArguments call) =>
+{
+    var ctx = MekikTools.ToolContext(call);     // the run that called this function
+    Staged[ctx.ThreadId] = Stage(payee, amount);
+    return "staged";
+}, "transfer_funds", "Submit a transfer for approval.");
+```
+
+</TabItem>
+</Tabs>
+
+`mekik.skillTools(ctx, filter)` / `Shuttle.SkillTools<TTool>(ctx, tags, source)` read the visible server skills' tools (keyed by skill name, without emitting a `skill` frame) when you need them yourself.
+
+### Tools built per request: `skillTools`
+
+Some tools cannot live in a catalog that is built once at startup — they close over the turn's state beyond `ctx` (a per-request client, a value computed earlier in the node). Hold those under a skill with `skillTools` / `SkillTools`, keyed by skill name. They **merge** with the tools the entry owns:
 
 <Tabs groupId="lang">
 <TabItem value="ts" label="TypeScript">
@@ -239,12 +354,10 @@ A node that owns many tools pays for all of them on every model call — every s
 return {
   reply: await runAgent(ctx, model, {
     system, input: s.input,
-    tools: [today],                       // always offered
+    tools: [today],
     skills: true,
-    skillTools: {
-      "sprint-performance": [listIterations, getIterationPerformance],
-      "report-pdf": [generateReportPdf],
-    },
+    // built per request: closes over this turn's customer
+    skillTools: { "report-pdf": [emailReportTo(s.customer)] },
   }),
 };
 ```
@@ -256,12 +369,12 @@ return {
 return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
 {
     System = system, Input = input,
-    Tools = [today],                      // always offered
+    Tools = [today],
     Skills = true,
+    // built per request: closes over this turn's customer
     SkillTools = new Dictionary<string, IReadOnlyList<AIFunction>>
     {
-        ["sprint-performance"] = [listIterations, getIterationPerformance],
-        ["report-pdf"] = [generateReportPdf],
+        ["report-pdf"] = [EmailReportTo(customer)],
     },
 }));
 ```
@@ -269,12 +382,19 @@ return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
 </TabItem>
 </Tabs>
 
-- The skill must exist in the turn's catalog (the server's [`skills`](#configuring-the-servers-skills) or an accepted client declaration) and be visible to the node's tag/origin filter; an entry for any other skill is ignored. Its description is what the model reads in `<available_skills>` to decide when to load it.
-- Loading names the unlocked tools in the observation (`Tools now available from skill sprint-performance: list_iterations, get_iteration_performance.`).
-- A call to a skill's tool before the skill is loaded is refused with an observation naming the skill to load; the tool does not run.
-- Only a load that **succeeds** unlocks: a `load_skill` the catalog refuses (an unknown or filtered-out name, or a listed skill the source cannot return) leaves the skill's tools locked. Loading a skill again changes nothing, and loading several in one round unlocks them all for the next round.
-- Skill tools are ordinary server tools: the same `policy` / `Policies` apply (approval, visibility, redaction), each call is a `tool_call` trace, and calls are journaled. The set of loaded skills is derived from the journaled calls, so a resume after an approval pause offers each round exactly the tools it had before.
-- A tool may sit under several skills (any one of them unlocks it). A name that is both always-on and skill-held — or two different tools with one name — fails the run.
+`skillTools` is also how you hold tools under a skill the catalog does not own as an entry — one read from `SKILL.md` folders, or a client declaration the app accepted (the server picks the tools; the client only named the skill).
+
+### The rules
+
+- The skill must be in the turn's catalog and visible to the node's tag/origin filter; a hidden skill's tools are never offered, and loading it is refused like any hidden name. Its description is what the model reads in `<available_skills>` to decide when to load it.
+- Only a load that **succeeds** unlocks: a `load_skill` the catalog refuses (an unknown or filtered-out name, or a listed skill the source cannot return — a `status: "error"` `skill` frame) leaves the skill's tools locked. Loading a skill again changes nothing, and loading several in one round unlocks them all for the next round.
+- Loading names the unlocked tools in the observation (`Tools now available from skill sprint-performance: list_iterations, get_iteration_performance.`) — the entry's own first, then the `skillTools` ones.
+- A call to a skill's tool before the skill is loaded is refused with an observation naming the skill to load (every skill that holds it, when there are several); the tool does not run.
+- Skill tools are ordinary server tools: the same `policy` / `Policies` apply (approval, visibility, redaction), each call is a `tool_call` trace, and calls are journaled. Once unlocked, a skill tool that throws (or whose arguments fail its schema) comes back as `Error from <tool>: <message>` like any other tool — traced `running → error`, the run goes on. `load_skill` re-runs on a resume's replay pass, so a resume after an approval pause offers each round exactly the tools it had before.
+- A tool may sit under several skills (any one of them unlocks it). A name that is both always-on and skill-held — or two different tools with one name, wherever they were declared — fails the run.
+- An entry whose `tools` are not the integration's tool type (not a LangChain tool / not an `AIFunction`) fails the run instead of being dropped.
+
+Wiring the loop yourself? `withSkills(ctx, filter, { toolNames, onLoaded })` / `SkillFunctions.Wrap(ctx, tags, source, toolNames, onLoaded)` name each entry's own tools in the `load_skill` observation without being told (`toolNames` adds extra ones), and call `onLoaded(name)` after each successful load — your cue to add that skill's tools to the next model call.
 
 ## Authoring the folders
 

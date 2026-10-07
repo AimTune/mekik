@@ -55,7 +55,7 @@ function runAgent(
     emptyReply?: string;
     budgetReply?: string;
     skills?: boolean | SkillFilter; // append <available_skills> to system + add the withSkills tools; default off
-    skillTools?: Readonly<Record<string, readonly StructuredToolInterface[]>>; // tools held under a skill — offered only after load_skill
+    skillTools?: Readonly<Record<string, readonly StructuredToolInterface[]>>; // extra tools held under a skill (per-request ones) — merged with SkillEntry.tools
   },
 ): Promise<string>;
 ```
@@ -164,7 +164,7 @@ const READ_SKILL_RESOURCE_TOOL = "read_skill_resource"; // schema { name, path }
 
 `load_skill` returns the instructions as the observation and emits the persistent `skill` frame, so the conversation shows which skill the agent is following. An unknown name — or one the `filter` hides — comes back as an error observation listing what *is* available, so the loop stays alive and the prompt and the tool always agree. The skill tools are not wrapped with the tool policy: a load is a catalog read that emits its own trace, not a side effect to journal.
 
-`runAgent({ skillTools })` holds tools **under** a skill: keyed by skill name, they are not offered to the model until it loads that skill, then join `tools` for the rest of the run, and the `load_skill` observation names them. A premature call is refused with an observation; the tools themselves go through `withMekikTools` with the same `policy`, and the loaded set is rebuilt from the journal on resume. See [Skills → Tools under a skill](../authoring/skills.md#tools-under-a-skill). `withSkills(ctx, filter, { toolNames })` names each skill's tools in the observation when you wire the loop yourself.
+A skill **owns** its tools: declare the catalog as `SkillEntry<StructuredToolInterface>[]` and give an entry `tools`. With `skills` on, `runAgent` holds each visible entry's tools back — they are not offered to the model until it loads that skill successfully, then join `tools` for the rest of the run, and the `load_skill` observation names them. A premature call is refused with an observation; once unlocked, a call that fails reads `Error from <tool>: <message>` like any other (above); the tools themselves go through `withMekikTools` with the same `policy`, and a resume rebuilds each round's toolbox. The tools never reach the wire (catalog frame and hash are unchanged), and an entry holding something that is not a LangChain tool fails the run. `runAgent({ skillTools })` adds tools keyed by skill name for the ones that must be built per request; they merge with the entry's own. See [Skills → Tools under a skill](../authoring/skills.md#tools-under-a-skill). Wiring the loop yourself, `withSkills(ctx, filter, { toolNames, onLoaded })` names each entry's tools in the observation (plus any `toolNames`) and calls `onLoaded(name)` after each successful load; `mekik.skillTools(ctx, filter)` gives you the visible entries' tools. A tool built once (a catalog's) reads the calling run's `ctx` with `toolContext(config)` — `withMekikTools` passes it in the LangChain `config.configurable` on every call.
 
 ## Why wrapping, not just callbacks
 
