@@ -123,7 +123,8 @@ export function toolContext(config: unknown): Context<any> {
  * interrupt/resume cycle.
  *
  * The returned tools keep their name, description and schema, so an agent binds
- * them to the model exactly as before.
+ * them to the model exactly as before. A tool mekik already built
+ * ({@link isMekikTool}) is returned as-is, keeping its own policy.
  */
 export function withMekikTools<T extends StructuredToolInterface>(
     ctx: Context<any>,
@@ -132,7 +133,30 @@ export function withMekikTools<T extends StructuredToolInterface>(
     options: WithMekikToolsOptions = {},
 ): StructuredToolInterface[] {
     const fallback = options.defaultPolicy ?? DEFAULT_POLICY;
-    return tools.map((t) => wrapOne(ctx, t, policy[t.name] ?? fallback));
+    // A tool mekik already wrapped (withMekikTools, withMcpTools, withClientTools)
+    // passes through untouched: wrapping it again would trace and journal each call twice.
+    return tools.map((t) => (isMekikTool(t) ? t : wrapOne(ctx, t, policy[t.name] ?? fallback)));
+}
+
+/**
+ * The brand on every tool mekik built — a non-enumerable, registry-wide symbol, so
+ * it survives two copies of this package and never shows up in the tool's JSON.
+ */
+const MEKIK_TOOL = Symbol.for("mekik.langchain.tool");
+
+function brand<T extends object>(tool: T): T {
+    Object.defineProperty(tool, MEKIK_TOOL, { value: true, enumerable: false });
+    return tool;
+}
+
+/**
+ * Whether `tool` was built by mekik — {@link withMekikTools}, {@link withMcpTools} or
+ * {@link withClientTools} — and so already traces (and, for server and MCP tools,
+ * journals) its calls. {@link withMekikTools} and {@link runAgent} pass such a tool
+ * through untouched, keeping the policy it was wrapped with.
+ */
+export function isMekikTool(tool: unknown): boolean {
+    return typeof tool === "object" && tool !== null && (tool as Record<symbol, unknown>)[MEKIK_TOOL] === true;
 }
 
 function wrapOne(
@@ -191,7 +215,7 @@ function wrapOne(
         },
     });
 
-    return wrapped as unknown as StructuredToolInterface;
+    return brand(wrapped) as unknown as StructuredToolInterface;
 }
 
 // ── client-declared tools (PROTOCOL.md §11) ───────────────────────────────────
@@ -243,7 +267,7 @@ function wrapClientTool(ctx: Context<any>, def: ClientToolDefinition): Structure
             }
         },
     });
-    return wrapped as unknown as StructuredToolInterface;
+    return brand(wrapped) as unknown as StructuredToolInterface;
 }
 
 // ── MCP servers as tools (PROTOCOL.md §13) ────────────────────────────────────
@@ -463,7 +487,12 @@ export interface RunAgentOptions {
     system: string;
     /** The user's message for this turn (usually `state.input`). */
     input: string;
-    /** Tools the model may call. Wrapped with {@link withMekikTools} automatically. */
+    /**
+     * Tools the model may call. Raw LangChain tools are wrapped with
+     * {@link withMekikTools} automatically (with {@link policy}); tools mekik already
+     * built — {@link withMekikTools}, {@link withMcpTools}, {@link withClientTools} — pass
+     * through untouched and keep their own policy, so hand them in directly.
+     */
     tools?: readonly StructuredToolInterface[];
     /**
      * Max model↔tool round-trips — how many times the model may run again after
@@ -585,8 +614,10 @@ interface AgentToolCall {
  * the .NET `Mekik.Agents.Agent.RunAsync`.
  *
  * What the loop owns, so callers don't re-derive it every node:
- * - tools are wrapped with {@link withMekikTools} — each call is a visible `tool_call`
+ * - raw tools are wrapped with {@link withMekikTools} — each call is a visible `tool_call`
  *   trace, gated by any approval policy, and journaled exactly-once across a resume;
+ *   tools mekik already wrapped (MCP, client, pre-wrapped server tools) pass through, so
+ *   each call is still traced and journaled exactly once;
  * - each model call runs inside `ctx.step`, so a resume replays the recorded decision
  *   instead of paying for (and possibly changing) it, and text is not re-streamed;
  * - with `stream` (default), text deltas stream live through `mekik.text` — one growing
@@ -595,7 +626,12 @@ interface AgentToolCall {
  * @example
  * ```ts
  * .node("answer", async (state, ctx) =>
- *   ({ reply: await runAgent(ctx, model, { system, input: state.input, tools }) }))
+ *   ({ reply: await runAgent(ctx, model, {
+ *       system,
+ *       input: state.input,
+ *       // raw tools, MCP tools and the client's tools side by side — each traced once
+ *       tools: [...serverTools, ...withMcpTools(ctx, github), ...withClientTools(ctx)],
+ *   }) }))
  * ```
  */
 export async function runAgent(

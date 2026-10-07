@@ -37,7 +37,9 @@ are preserved and the model sees exactly the same tools.
     })))
 ```
 
-`Agent.RunAsync` wraps the functions with `MekikTools`, journals each model call
+`Agent.RunAsync` wraps raw functions with `MekikTools` (functions mekik already built —
+`MekikTools.Wrap`, `McpFunctions.Wrap`, `ClientToolFunctions.Wrap` output — pass through
+untouched, so hand them in directly), journals each model call
 so a resume replays it, streams text live, and is budgeted by `MaxTurns` (model
 rounds, default 25) and `MaxToolCalls` (default 25). A function that throws, or
 whose arguments fail binding, becomes an `Error from <tool>: …` observation and

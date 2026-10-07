@@ -19,7 +19,13 @@ public sealed record AgentRunOptions
     /// <summary>The user's message for this turn (usually <c>state.Get&lt;string&gt;("input")</c>).</summary>
     public required string Input { get; init; }
 
-    /// <summary>The tools the model may call. Wrapped with <see cref="MekikTools"/> automatically.</summary>
+    /// <summary>
+    /// The tools the model may call. Raw functions are wrapped with <see cref="MekikTools"/>
+    /// automatically (with <see cref="Policies"/>); functions mekik already built —
+    /// <see cref="MekikTools.Wrap"/>, <see cref="McpFunctions.Wrap"/>,
+    /// <see cref="ClientToolFunctions.Wrap"/> — pass through untouched and keep their own
+    /// policy, so hand them in directly.
+    /// </summary>
     public IReadOnlyList<AIFunction> Tools { get; init; } = [];
 
     /// <summary>
@@ -90,9 +96,11 @@ public sealed record AgentRunOptions
 ///
 /// <para>What the loop owns, so callers don't re-derive it every node:</para>
 /// <list type="bullet">
-///   <item>tools are wrapped with <see cref="MekikTools"/> — each call is a visible
+///   <item>raw tools are wrapped with <see cref="MekikTools"/> — each call is a visible
 ///   <c>tool_call</c> trace, gated by any approval policy, and journaled exactly-once
-///   across an interrupt/resume;</item>
+///   across an interrupt/resume; functions mekik already wrapped (MCP, client,
+///   pre-wrapped server functions) pass through, so each call is still traced and
+///   journaled exactly once;</item>
 ///   <item>each model call runs inside <c>ctx.StepAsync</c>, so a resume replays the
 ///   recorded decision instead of paying for (and possibly changing) it, and text is
 ///   not re-streamed;</item>
@@ -109,7 +117,8 @@ public static class Agent
     /// {
     ///     System = prompt,
     ///     Input  = state.Get&lt;string&gt;("input") ?? string.Empty,
-    ///     Tools  = BuildTools(scope, user),
+    ///     // raw functions, MCP functions and the client's tools side by side — each traced once
+    ///     Tools  = [.. BuildTools(scope, user), .. McpFunctions.Wrap(ctx, githubTools, githubInvoke), .. ClientToolFunctions.Wrap(ctx)],
     /// }));
     /// </code></example>
     public static async ValueTask<string> RunAsync(IContext ctx, IChatClient chat, AgentRunOptions options)

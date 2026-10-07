@@ -34,7 +34,7 @@ The loop is budgeted by `MaxTurns` — model↔tool round-trips, default 25. Ind
 
 You return the result as your node's reply (`Update.Of("reply", …)`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `RunAsync` returns an **empty string** — `Update.Of("reply", "")` emits nothing extra, no duplicate. With `Stream = false`, it returns the full text for the consolidated `text` reply.
 
-Hand `RunAsync` **raw** functions and put their policies in `Policies`: it wraps every entry of `Tools` with `MekikTools` itself, so a function you already wrapped would be wrapped twice and each call traced twice. A model's function-call arguments and results (which `AIFunctionFactory` marshals through `System.Text.Json` as `JsonElement`) are canonicalized into the trace automatically — no plain-value converter needed. Reach for [`MekikTools.Wrap`](#mekiktoolswrap) directly when you need to drive the loop yourself.
+Hand `RunAsync` raw functions and put their policies in `Policies`: it wraps them with `MekikTools` itself. Functions mekik already built — the output of `MekikTools.Wrap`, [`McpFunctions.Wrap`](./mcp.md) and [`ClientToolFunctions.Wrap`](#clienttoolfunctionswrap--the-frontends-tools) — are marked (`MekikTools.IsMekikFunction(f)`) and pass through untouched, keeping the policy they were wrapped with, so mix them into `Tools` directly: each call is still traced once and journaled once. A model's function-call arguments and results (which `AIFunctionFactory` marshals through `System.Text.Json` as `JsonElement`) are canonicalized into the trace automatically — no plain-value converter needed. Reach for [`MekikTools.Wrap`](#mekiktoolswrap) directly when you need to drive the loop yourself.
 
 ## `MekikTools.Wrap`
 
@@ -65,7 +65,7 @@ using Mekik.Agents;
 .Node("agent", async (State state, IContext ctx) =>
 {
     var tools = serverFunctions                                       // the server's own functions (RunAsync wraps them)
-        .Concat(ClientToolFunctions.Wrap(ctx, tags: ["billing"]))     // the frontend's, scoped by tag
+        .Concat(ClientToolFunctions.Wrap(ctx, tags: ["billing"]))     // the frontend's, scoped by tag — passed through as-is
         .ToList();
 
     return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions

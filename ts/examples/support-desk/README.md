@@ -38,8 +38,8 @@ Each skill **owns** its tool (`SkillEntry.tools`):
 | `refund-policy` | `billing` | `issue_credit` | `runAgent` with `skills: { tags: ["billing"] }` |
 | `incident-runbook` | `tech` | `escalate_to_specialist` | a hand-wired loop: the probe kit's `runTools({ skills: { tags: ["tech"] } })` |
 
-The tech loop is hand-wired because its MCP tools come pre-wrapped by
-`withMcpTools`. It wires skills the way such loops do: `withSkills(ctx, filter,
+The tech loop is hand-wired on purpose, to show a custom loop (its `withMcpTools`
+tools could equally go to `runAgent` directly — pre-wrapped tools pass through). It wires skills the way such loops do: `withSkills(ctx, filter,
 { onLoaded })` supplies `load_skill`, which names each entry's tools in its
 observation on its own, and `onLoaded` tells the loop which skill loaded
 successfully, so it can offer that skill's tools (`mekik.skillTools`, wrapped

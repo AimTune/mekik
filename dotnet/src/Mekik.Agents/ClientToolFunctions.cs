@@ -39,7 +39,7 @@ public static class ClientToolFunctions
             .ToList();
     }
 
-    private sealed class ClientToolFunction : AIFunction
+    private sealed class ClientToolFunction : AIFunction, IMekikFunction
     {
         private static readonly JsonElement EmptyObjectSchema = JsonDocument.Parse("""{"type":"object","properties":{}}""").RootElement;
 

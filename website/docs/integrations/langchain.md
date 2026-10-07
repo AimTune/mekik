@@ -66,7 +66,7 @@ The loop is budgeted twice. `maxTurns` counts **model rounds** — how many time
 
 You return the result as your node's reply (`{ reply }`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `runAgent` returns an **empty string** — `{ reply: "" }` emits nothing extra, no duplicate. With `stream: false`, it returns the full text for the consolidated `text` reply.
 
-Hand `runAgent` **raw** tools and put their policies in `policy`: it wraps every entry of `tools` with `withMekikTools` itself, so a tool you already wrapped would be wrapped twice and each call traced twice. Reach for [`withMekikTools`](#withmekiktools) directly when you need to drive the loop yourself (a custom agent framework, a non-standard message shape).
+Hand `runAgent` raw tools and put their policies in `policy`: it wraps them with `withMekikTools` itself. Tools mekik already built — the output of `withMekikTools`, [`withMcpTools`](./mcp.md) and [`withClientTools`](#withclienttools--the-frontends-tools) — carry a brand (`isMekikTool(tool)`) and pass through untouched, keeping the policy they were wrapped with, so mix them into `tools` directly: each call is still traced once and journaled once. Reach for [`withMekikTools`](#withmekiktools) directly when you need to drive the loop yourself (a custom agent framework, a non-standard message shape).
 
 ## `withMekikTools`
 
@@ -112,7 +112,7 @@ import { withClientTools, runAgent } from "@mekik/langchain";
 .node("agent", async (state, ctx) => {
   const tools = [
     ...serverTools,                                 // the server's own tools (runAgent wraps them)
-    ...withClientTools(ctx, { tags: ["billing"] }), // the frontend's, scoped by tag
+    ...withClientTools(ctx, { tags: ["billing"] }), // the frontend's, scoped by tag — passed through as-is
   ];
   return { reply: await runAgent(ctx, model(), { system: SYSTEM, input: state.input, tools, policy }) };
 })

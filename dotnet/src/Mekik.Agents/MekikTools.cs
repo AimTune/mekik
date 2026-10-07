@@ -113,7 +113,8 @@ public static class MekikTools
     /// optionally pauses for human approval, and executes inside
     /// <c>ctx.StepAsync</c> so it runs exactly once across an interrupt/resume.
     /// Name, description and JSON schema are preserved, so the model sees the
-    /// same tools as before.
+    /// same tools as before. A function mekik already built
+    /// (<see cref="IsMekikFunction"/>) is returned as-is, keeping its own policy.
     /// </summary>
     public static IReadOnlyList<AIFunction> Wrap(
         IContext ctx,
@@ -125,10 +126,27 @@ public static class MekikTools
         ArgumentNullException.ThrowIfNull(functions);
 
         var fallback = defaultPolicy ?? DefaultPolicy;
+        // A function mekik already wrapped (Wrap, McpFunctions.Wrap, ClientToolFunctions.Wrap)
+        // passes through untouched: wrapping it again would trace and journal each call twice.
         return functions
-            .Select(f => (AIFunction)new MekikFunction(
-                f, ctx, policies is not null && policies.TryGetValue(f.Name, out var p) ? p : fallback))
+            .Select(f => IsMekikFunction(f)
+                ? f
+                : new MekikFunction(f, ctx, policies is not null && policies.TryGetValue(f.Name, out var p) ? p : fallback))
             .ToList();
+    }
+
+    /// <summary>
+    /// Whether <paramref name="function"/> was built by mekik — <see cref="Wrap"/>,
+    /// <see cref="McpFunctions.Wrap"/> or <see cref="ClientToolFunctions.Wrap"/>, also behind
+    /// another <see cref="DelegatingAIFunction"/> — and so already traces (and, for server and
+    /// MCP functions, journals) its calls. <see cref="Wrap"/> and <see cref="Agent.RunAsync"/>
+    /// pass such a function through untouched, keeping the policy it was wrapped with.
+    /// Mirror of TypeScript's <c>isMekikTool</c>.
+    /// </summary>
+    public static bool IsMekikFunction(AIFunction function)
+    {
+        ArgumentNullException.ThrowIfNull(function);
+        return function.GetService(typeof(IMekikFunction)) is not null;
     }
 
     /// <summary>Fluent form of <see cref="Wrap"/>: <c>tools.WithMekik(ctx, policies)</c>.</summary>
@@ -140,7 +158,7 @@ public static class MekikTools
 
     // ── the wrapper ───────────────────────────────────────────────────────────
 
-    private sealed class MekikFunction : DelegatingAIFunction
+    private sealed class MekikFunction : DelegatingAIFunction, IMekikFunction
     {
         private readonly IContext _ctx;
         private readonly ToolPolicy _policy;
@@ -318,3 +336,6 @@ public static class MekikTools
         _ => json,
     };
 }
+
+/// <summary>The marker on every function mekik built; see <see cref="MekikTools.IsMekikFunction"/>.</summary>
+internal interface IMekikFunction;

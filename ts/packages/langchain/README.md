@@ -44,7 +44,8 @@ import { runAgent } from "@mekik/langchain";
 }))
 ```
 
-`runAgent` wraps the tools with `withMekikTools`, journals each model call so a
+`runAgent` wraps raw tools with `withMekikTools` (tools mekik already built — `withMekikTools`,
+`withMcpTools`, `withClientTools` output — pass through untouched, so hand them in directly), journals each model call so a
 resume replays it, streams text live, and is budgeted by `maxTurns` (model
 rounds, default 25) and `maxToolCalls` (default 25). A tool that throws, or
 whose arguments fail its schema, becomes an `Error from <tool>: …` observation
