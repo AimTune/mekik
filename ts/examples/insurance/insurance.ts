@@ -1,16 +1,19 @@
 // Insurance claims desk — a domain probe. An ilmek graph served over mekik,
 // driven offline by a scripted model, asserting its own frame stream:
 //
-//     START → intake (genui-form pause) → assess (policy tools + skills) → END
+//     START → intake (genui-form pause) → assess (runAgent + skills) → END
 //
 //   1. intake    — the claim form is a pause: an interrupt that mounts a
 //                  genui-form; the submitted values are the resume answer
-//   2. approve   — the adjuster model looks up the policy, LOADS A SKILL
-//                  mid-run (a `skill` frame between two tool traces), checks
-//                  coverage and records an approval with a payout
+//   2. approve   — the adjuster model looks up the policy and LOADS A SKILL
+//                  mid-run. The decision tools are held UNDER the skill
+//                  (runAgent `skillTools`, §12): not offered before the load,
+//                  a premature call is refused without running, offered from
+//                  the next round on — and still offered after the senior
+//                  adjuster's sign-off pause and resume
 //   3. reject    — a flood claim on a policy that excludes floods: a different
-//                  skill, an off-list reason code refused by the schema, then
-//                  a typed rejection reason (code + clause) on the wire
+//                  skill unlocks a different decision tool, and the rejection
+//                  carries a typed reason (code + clause) on the wire
 //
 // The server's skill catalog is announced on connect (`skills` frame, level 1
 // only) and the node only offers the skills tagged for home claims.
@@ -25,7 +28,7 @@ import { z } from "zod";
 
 import { mekik } from "@mekik/core";
 import type { OutgoingFrame, SkillEntry } from "@mekik/core";
-import { withMekikTools, withSkills } from "@mekik/langchain";
+import { runAgent } from "@mekik/langchain";
 
 import {
     botText,
@@ -36,7 +39,6 @@ import {
     interrupts,
     main,
     runStatus,
-    runTools,
     say,
     ScriptedModel,
     section,
@@ -82,15 +84,6 @@ const POLICIES: Record<string, Policy> = {
 const REJECTION_CODES = ["EXCLUDED_PERIL", "POLICY_LAPSED", "BELOW_DEDUCTIBLE"] as const;
 export type RejectionCode = (typeof REJECTION_CODES)[number];
 
-const decisionSchema = z.object({
-    policyNumber: z.string(),
-    outcome: z.enum(["approved", "rejected"]),
-    payout: z.number().optional(),
-    reason: z
-        .object({ code: z.enum(REJECTION_CODES), clause: z.string(), detail: z.string() })
-        .optional(),
-});
-
 export interface RejectionReason {
     code: RejectionCode;
     clause: string;
@@ -115,7 +108,7 @@ interface ClaimForm {
 }
 
 const CLAIMS: ClaimDecision[] = [];
-const effects = { lookup_policy: 0, record_decision: 0 };
+const effects = { lookup_policy: 0, check_coverage: 0, approve_claim: 0, reject_claim: 0 };
 
 /** The server's skill catalog — level 1 travels to the client, instructions stay here until loaded. */
 const SKILLS: SkillEntry[] = [
@@ -125,14 +118,14 @@ const SKILLS: SkillEntry[] = [
         instructions:
             "1. Confirm the peril is a sudden escape of water, not gradual seepage.\n" +
             "2. Payout = estimate minus the policy deductible, capped at the estimate.\n" +
-            "3. Record the decision with record_decision before replying.",
+            "3. Record it with approve_claim before replying.",
         tags: ["home"],
     },
     {
         name: "rejection-letter",
         description: "How to decline a claim: cite the exclusion clause and a typed reason code.",
         instructions:
-            "Decline only with a reason code from EXCLUDED_PERIL, POLICY_LAPSED, BELOW_DEDUCTIBLE. " +
+            "Decline with reject_claim, using a reason code from EXCLUDED_PERIL, POLICY_LAPSED, BELOW_DEDUCTIBLE. " +
             "Quote the policy clause. Be plain and kind; tell the customer how to appeal.",
         tags: ["home"],
     },
@@ -146,8 +139,9 @@ const SKILLS: SkillEntry[] = [
 
 // ── tools ─────────────────────────────────────────────────────────────────────
 
-function adjusterTools(ctx: Context<any>): StructuredToolInterface[] {
-    const lookup = tool(
+/** Always offered: the policy lookup. */
+function lookupTool(): StructuredToolInterface {
+    return tool(
         ({ policyNumber }) => {
             effects.lookup_policy++;
             const p = POLICIES[policyNumber];
@@ -156,8 +150,13 @@ function adjusterTools(ctx: Context<any>): StructuredToolInterface[] {
         },
         { name: "lookup_policy", description: "Fetch a policy by number.", schema: z.object({ policyNumber: z.string() }) },
     );
+}
+
+/** Held under skills: the coverage check and the two decisions. */
+function decisionTools(ctx: Context<any>) {
     const coverage = tool(
         ({ policyNumber, peril }) => {
+            effects.check_coverage++;
             const p = POLICIES[policyNumber];
             if (!p) throw new Error(`No policy ${policyNumber}.`);
             const clause = p.exclusions[peril];
@@ -171,24 +170,40 @@ function adjusterTools(ctx: Context<any>): StructuredToolInterface[] {
             schema: z.object({ policyNumber: z.string(), peril: z.string() }),
         },
     );
-    const record = tool(
-        (d: z.infer<typeof decisionSchema>): ClaimDecision => {
-            effects.record_decision++;
-            const claimId = `CLM-${7000 + CLAIMS.length}`;
-            const decision: ClaimDecision =
-                d.outcome === "approved"
-                    ? { claimId, outcome: "approved", payout: d.payout ?? 0 }
-                    : { claimId, outcome: "rejected", reason: d.reason! };
+    // The decision tools emit the claim-decision component themselves: their
+    // bodies run exactly once (journaled), so the card is mounted exactly once.
+    const approve = tool(
+        ({ payout }): ClaimDecision => {
+            effects.approve_claim++;
+            const decision: ClaimDecision = { claimId: `CLM-${7000 + CLAIMS.length}`, outcome: "approved", payout };
             CLAIMS.push(decision);
+            claimDecision(ctx, decision);
             return decision;
         },
         {
-            name: "record_decision",
-            description: "Record the claim decision. A rejection must carry a typed reason.",
-            schema: decisionSchema,
+            name: "approve_claim",
+            description: "Approve the claim with a payout.",
+            schema: z.object({ policyNumber: z.string(), payout: z.number() }),
         },
     );
-    return [...withMekikTools(ctx, [lookup, coverage, record]), ...withSkills(ctx, { tags: ["home"] })];
+    const reject = tool(
+        ({ reason }): ClaimDecision => {
+            effects.reject_claim++;
+            const decision: ClaimDecision = { claimId: `CLM-${7000 + CLAIMS.length}`, outcome: "rejected", reason };
+            CLAIMS.push(decision);
+            claimDecision(ctx, decision);
+            return decision;
+        },
+        {
+            name: "reject_claim",
+            description: "Decline the claim with a typed reason.",
+            schema: z.object({
+                policyNumber: z.string(),
+                reason: z.object({ code: z.enum(REJECTION_CODES), clause: z.string(), detail: z.string() }),
+            }),
+        },
+    );
+    return { coverage, approve, reject };
 }
 
 // ── the graph ─────────────────────────────────────────────────────────────────
@@ -198,6 +213,9 @@ const model = new ScriptedModel();
 const ADJUSTER =
     "You are a home-insurance claims adjuster. Look up the policy, load the skill that matches the claim, " +
     "check coverage, record the decision, then explain it to the customer in two sentences.";
+
+/** Every decision needs a senior adjuster's sign-off — a pause in the middle of the agent loop. */
+const SIGN_OFF = { title: "Senior adjuster sign-off" };
 
 const claims = graph("insurance")
     .channel("input", channel.lastWrite<string>(""))
@@ -230,14 +248,22 @@ const claims = graph("insurance")
 
     .node("assess", async (s, ctx) => {
         const c = s.claim!;
-        // Level 1 in the prompt: names and descriptions of the home skills only.
-        const system = `${ADJUSTER}\n\n${mekik.skillsPrompt(ctx, { tags: ["home"] })}`;
-        const input = `Claim on ${c.policyNumber}: ${c.peril} on ${c.incidentDate}, estimate $${c.estimate}. ${c.description}`;
-        const out = await runTools(ctx, model, "assess", adjusterTools(ctx), system, input);
-
-        const decision = out.results.record_decision as ClaimDecision | undefined;
-        if (decision) claimDecision(ctx, decision);
-        return { reply: out.text };
+        const { coverage, approve, reject } = decisionTools(ctx);
+        const reply = await runAgent(ctx, model.asChatModel("assess"), {
+            system: ADJUSTER,
+            input: `Claim on ${c.policyNumber}: ${c.peril} on ${c.incidentDate}, estimate $${c.estimate}. ${c.description}`,
+            tools: [lookupTool()], // always offered
+            stream: false,
+            // Level 1 in the prompt (home skills only) + load_skill …
+            skills: { tags: ["home"] },
+            // … and each skill holds the tools it governs: offered only once loaded.
+            skillTools: {
+                "water-damage-assessment": [coverage, approve],
+                "rejection-letter": [coverage, reject],
+            },
+            policy: { approve_claim: { approve: SIGN_OFF }, reject_claim: { approve: SIGN_OFF } },
+        });
+        return { reply };
     })
 
     .edge(START, "intake")
@@ -257,7 +283,10 @@ function makeApp() {
 
 // ── the probe ─────────────────────────────────────────────────────────────────
 
+const ALWAYS = "lookup_policy|load_skill";
+const offered = (from: number) => (model.rounds.assess ?? []).slice(from).map((r) => r.join("|"));
 
+/** The intake turn: the form pause, then the submitted form. Returns the frames after the submit. */
 async function fileClaim(app: ReturnType<typeof makeApp>, c: Collector, form: ClaimForm): Promise<OutgoingFrame[]> {
     user("I'd like to file a claim");
     await app.receive(c, { type: "text", data: { text: "I'd like to file a claim" } });
@@ -276,6 +305,17 @@ async function fileClaim(app: ReturnType<typeof makeApp>, c: Collector, form: Cl
     return r;
 }
 
+/** Answer the senior adjuster's sign-off pause in `frames`. Returns the frames after it. */
+async function signOff(app: ReturnType<typeof makeApp>, c: Collector, frames: OutgoingFrame[], tool: string): Promise<OutgoingFrame[]> {
+    const pause = interrupts(frames)[0];
+    check((pause?.data.payload as { title: string; tool: string }).tool === tool && runStatus(frames) === "interrupted", `${tool} parks the run for the senior adjuster's sign-off`);
+    console.log("   (senior adjuster approves)");
+    await app.receive(c, { type: "resume", answers: { [pause!.id]: { approved: true } } });
+    const r = c.drain();
+    describe(r);
+    return r;
+}
+
 async function probe(): Promise<void> {
     const app = makeApp();
     const c = new Collector("conn-insurance");
@@ -287,14 +327,16 @@ async function probe(): Promise<void> {
     check(catalog?.skills?.length === 3, "a `skills` frame lists the 3 server skills");
     check(!JSON.stringify(catalog).includes("Payout = estimate"), "instructions never travel in the catalog");
 
-    // ── 1–2. a covered claim: the skill is loaded mid-run ─────────────────────
-    section("1. intake + approval — a burst pipe on POL-1001, a skill loaded mid-run");
+    // ── 1. a covered claim: the skill unlocks its tools mid-run ───────────────
+    section("1. intake + approval — a burst pipe on POL-1001; the skill unlocks the decision tools");
     model.load({
         assess: [
             call("lookup_policy", { policyNumber: "POL-1001" }),
+            // Premature: check_coverage is held under a skill nobody has loaded yet.
+            call("check_coverage", { policyNumber: "POL-1001", peril: "burst pipe" }),
             call("load_skill", { name: "water-damage-assessment" }),
             call("check_coverage", { policyNumber: "POL-1001", peril: "burst pipe" }),
-            call("record_decision", { policyNumber: "POL-1001", outcome: "approved", payout: 3700 }),
+            call("approve_claim", { policyNumber: "POL-1001", payout: 3700 }),
             say("Your claim is approved: we'll pay $3,700 (the $4,200 estimate less your $500 deductible)."),
         ],
     });
@@ -307,46 +349,56 @@ async function probe(): Promise<void> {
     });
 
     check(traces(t, "lookup_policy")[0]?.data.params?.policyNumber === "POL-1001", "the form's values reach the policy lookup");
+    let rounds = offered(0);
+    check(rounds.slice(0, 3).every((r) => r === ALWAYS), "(a) before load_skill the model is offered only lookup_policy + load_skill");
+    check(
+        model.observations.assess?.some((o) => o.includes('belongs to skill "water-damage-assessment"') && o.includes("load_skill")) === true,
+        "(b) the premature check_coverage is refused as an observation naming the skill to load",
+    );
+    check(effects.check_coverage === 1 && traces(t, "check_coverage").length === 2, "(b) …and did not run: one coverage run, one traced call (running → completed)");
     const skills = skillUses(t);
     check(skills.length === 1 && skills[0]!.data.name === "water-damage-assessment", "one `skill` frame: water-damage-assessment");
     check(skills[0]!.data.status === "loaded" && skills[0]!.data.source === "server", "loaded from the server catalog");
-    const lookupSeq = seqOf(traces(t, "lookup_policy")[0]!)!;
-    const decideSeq = seqOf(traces(t, "record_decision")[0]!)!;
-    const skillSeq = seqOf(skills[0]!)!;
-    check(lookupSeq < skillSeq && skillSeq < decideSeq, `mid-run: after lookup_policy (seq ${lookupSeq}), before record_decision (seq ${decideSeq})`);
     check(
-        model.observations.assess?.some((o) => o.includes("Payout = estimate minus the policy deductible")) === true,
-        "the model got the instructions (level 2) as the load_skill observation",
+        model.observations.assess?.some((o) => o.includes("Tools now available from skill water-damage-assessment: check_coverage, approve_claim.")) === true,
+        "the load_skill observation carries the instructions and names the unlocked tools",
     );
+    check(rounds[3] === `${ALWAYS}|check_coverage|approve_claim`, "(c) from the next round on, check_coverage and approve_claim are offered");
+    check(!rounds.some((r) => r.includes("reject_claim")), "(c) reject_claim (under the other skill) is never offered");
+    const lookupSeq = seqOf(traces(t, "lookup_policy")[0]!)!;
+    const skillSeq = seqOf(skills[0]!)!;
+    const coverageSeq = seqOf(traces(t, "check_coverage")[0]!)!;
+    check(lookupSeq < skillSeq && skillSeq < coverageSeq, `mid-run: the skill frame (seq ${skillSeq}) sits between lookup_policy and check_coverage`);
     const sys = model.systems.assess ?? "";
     check(sys.includes("<name>water-damage-assessment</name>") && sys.includes("<name>rejection-letter</name>"), "the prompt lists the home skills");
     check(!sys.includes("auto-collision"), "…and not the auto-tagged one (tag scoping)");
+    check(effects.approve_claim === 0, "nothing recorded before the sign-off");
+
+    const before = rounds.length;
+    t = await signOff(app, c, t, "approve_claim");
+    rounds = offered(before);
+    check(rounds.length === 1, "after the resume the model is asked once more (earlier rounds replay from the journal)");
+    check(rounds[0] === `${ALWAYS}|check_coverage|approve_claim`, "(d) and that round is still offered the unlocked tools");
+    check(effects.approve_claim === 1 && effects.check_coverage === 1, "(c) approve_claim ran exactly once; the replay did not re-run check_coverage");
     let card = uiChunks(t, "claim-decision")[0]?.props as ClaimDecision | undefined;
     check(card?.outcome === "approved" && card.payout === 3700, "the claim-decision component shows the approval and payout");
     check(botText(t)?.includes("$3,700") === true && runStatus(t) === "finished", "the reply explains the payout; the run finishes");
 
-    // ── 3. rejection with a typed reason ──────────────────────────────────────
-    section("2. rejection — a flood on POL-2002, with a typed reason");
+    // ── 2. rejection with a typed reason ──────────────────────────────────────
+    section("2. rejection — a flood on POL-2002; another skill, another tool, a typed reason");
     model.load({
         assess: [
             call("lookup_policy", { policyNumber: "POL-2002" }),
             call("load_skill", { name: "rejection-letter" }),
             call("check_coverage", { policyNumber: "POL-2002", peril: "flood" }),
-            // An off-list code: the schema refuses it before the tool body runs.
-            call("record_decision", {
+            call("reject_claim", {
                 policyNumber: "POL-2002",
-                outcome: "rejected",
-                reason: { code: "NOT_COVERED", clause: "4.2(b)", detail: "Flood is excluded." },
-            }),
-            call("record_decision", {
-                policyNumber: "POL-2002",
-                outcome: "rejected",
                 reason: { code: "EXCLUDED_PERIL", clause: "4.2(b)", detail: "Flood and surface water are excluded by clause 4.2(b)." },
             }),
             say("I'm sorry — flood damage is excluded under clause 4.2(b) of your policy, so we can't pay this claim. You can appeal within 30 days."),
         ],
     });
-    const decisionsBefore = effects.record_decision;
+    const start = (model.rounds.assess ?? []).length;
     t = await fileClaim(app, c, {
         policyNumber: "POL-2002",
         incidentDate: "2026-10-04",
@@ -354,27 +406,22 @@ async function probe(): Promise<void> {
         estimate: "18000",
         description: "River overflowed into the basement.",
     });
-
-    const loaded = skillUses(t).map((f) => f.data.name);
-    check(loaded.join("|") === "rejection-letter", "this time the rejection-letter skill is loaded");
-    check(
-        model.observations.assess?.some((o) => o.startsWith("Error:") && o.includes("schema")) === true,
-        "the off-list reason code was refused by the schema (an observation, not a crash)",
-    );
-    check(effects.record_decision === decisionsBefore + 1, "so only the valid decision was recorded");
-    const recorded = traces(t, "record_decision").filter((f) => f.data.status === "completed");
-    check(recorded.length === 1, "and only that one is traced");
+    check(skillUses(t).map((f) => f.data.name).join("|") === "rejection-letter", "this time the rejection-letter skill is loaded");
+    rounds = offered(start);
+    check(rounds[2] === `${ALWAYS}|check_coverage|reject_claim`, "it unlocks check_coverage and reject_claim — not approve_claim");
+    t = await signOff(app, c, t, "reject_claim");
+    check(effects.reject_claim === 1, "reject_claim ran exactly once");
     card = uiChunks(t, "claim-decision")[0]?.props as ClaimDecision | undefined;
     check(card?.outcome === "rejected", "the claim-decision component shows a rejection");
     const reason = card?.outcome === "rejected" ? card.reason : undefined;
     check(reason?.code === "EXCLUDED_PERIL" && (REJECTION_CODES as readonly string[]).includes(reason.code), "with a typed reason code: EXCLUDED_PERIL");
     check(reason?.clause === "4.2(b)", "citing the policy clause 4.2(b)");
     check(botText(t)?.includes("clause 4.2(b)") === true, "and the reply tells the customer why, and how to appeal");
-    check(!uiChunks(t, "claim-decision").some((u) => (u.props as ClaimDecision).outcome === "approved"), "nothing on the wire says approved");
+    check(effects.approve_claim === 1, "nothing new was approved");
 
     check(effects.lookup_policy === 2, "one policy lookup per claim");
     console.log(`\nclaims ledger: ${JSON.stringify(CLAIMS)}`);
-    console.log("\n✅ insurance probe passed — a genui-form intake pause, policy tools, a skill loaded mid-run, and a typed rejection reason all verified");
+    console.log("\n✅ insurance probe passed — a genui-form intake pause, tools held under a skill until it loads, a sign-off pause that keeps them, and a typed rejection reason all verified");
 }
 
 main(probe);

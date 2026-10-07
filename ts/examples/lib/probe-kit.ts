@@ -22,6 +22,7 @@ import type { Context } from "@ilmek/core";
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import type { BaseMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 
 import type { Connection, ErrorFrame, OutgoingFrame, RunFrame, SkillFrame, SkillsFrame, TextOutFrame, WelcomeFrame } from "@mekik/core";
 
@@ -87,6 +88,30 @@ export class ScriptedModel {
         const i = this.cursors[node] ?? 0;
         this.cursors[node] = i + 1;
         return this.scripts[node]?.[i] ?? say("(script exhausted)");
+    }
+
+    /** Every round's offered tool names, per node, in order (via {@link asChatModel}). */
+    readonly rounds: Record<string, string[][]> = {};
+
+    /**
+     * This model as a LangChain chat model, for `runAgent` (`@mekik/langchain`):
+     * `bindTools(tools).invoke(messages)` answers from the node's script and
+     * records what each round offered — which is how a probe sees `skillTools`
+     * unlock a skill's tools. Only rounds the model is actually asked are
+     * recorded; a journaled replay does not call it.
+     */
+    asChatModel(node: string): BaseChatModel {
+        const bindTools = (tools: StructuredToolInterface[]) => ({
+            invoke: async (messages: BaseMessage[]) => {
+                (this.rounds[node] ??= []).push(tools.map((t) => t.name));
+                const d = await this.decide(node, tools, messages);
+                return new AIMessage({
+                    content: d.text,
+                    tool_calls: d.toolCalls.map((c) => ({ id: c.id, name: c.name, args: c.args })),
+                });
+            },
+        });
+        return { bindTools } as unknown as BaseChatModel;
     }
 
     /** A one-word classification, journaled by the caller — the router-node seam. */

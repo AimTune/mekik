@@ -1,27 +1,43 @@
 # Insurance claims desk
 
 An ilmek graph served over mekik, driven offline by a scripted adjuster model.
-The probe plays the client — including submitting the claim form — and asserts
-its own frame stream, so it is also an integration test: no network, no API
-key, exit code 0 or 1.
+The probe plays the client (it submits the claim form and the senior adjuster's
+sign-off) and asserts its own frame stream, so it is also an integration test:
+no network, no API key, exit code 0 or 1.
 
 ```text
-START → intake (genui-form pause) → assess (policy tools + skills) → END
+START → intake (genui-form pause) → assess (runAgent + skills) → END
+```
+
+The adjuster node is a `runAgent` loop from `@mekik/langchain`. Only
+`lookup_policy` is always offered. The decision tools are **held under a
+skill** with `skillTools` (§12): the model doesn't see them until it loads the
+skill that governs them.
+
+```ts
+skillTools: {
+    "water-damage-assessment": [checkCoverage, approveClaim],
+    "rejection-letter": [checkCoverage, rejectClaim],
+},
+policy: { approve_claim: { approve: SIGN_OFF }, reject_claim: { approve: SIGN_OFF } },
 ```
 
 ## What it shows
 
 | # | Scenario | What the probe asserts |
 |---|---|---|
-| 0 | Connect | The server's skill catalog (`skills` option, three skills) is announced in a `skills` frame — names and descriptions only, never the instructions. |
-| 1 | Intake + approval | The intake is a pause: an `interrupt` that mounts a `genui-form` (policy, date, peril, estimate, description) with no chips. The submitted values are the resume answer and reach `lookup_policy`. The model calls `load_skill` **mid-run**: one `skill` frame (`water-damage-assessment`, `status: "loaded"`, `source: "server"`) whose `seq` falls between the `lookup_policy` and `record_decision` traces. The model gets the instructions as the tool observation; the prompt lists only the skills tagged `home`, not the `auto` one. A typed `claim-decision` component shows the payout. |
-| 2 | Rejection | A flood claim on a policy that excludes floods. The model loads `rejection-letter`, then tries an off-list reason code, which the tool's zod schema refuses before the body runs (an observation, not a crash, and no trace). The retry records the rejection; `claim-decision` carries a typed reason `{ code: "EXCLUDED_PERIL", clause: "4.2(b)", detail }`. |
+| 0 | Connect | The server's skill catalog (`skills` option, three skills) is announced in a `skills` frame. It carries names and descriptions only, never the instructions. |
+| 1 | Intake + approval | The intake is a pause: an `interrupt` that mounts a `genui-form` with no chips, and the submitted values are the resume answer that reaches `lookup_policy`. **(a)** Until `load_skill`, every model round is offered only `lookup_policy` and `load_skill`. **(b)** A scripted premature `check_coverage` call is refused with an observation naming the skill to load; the tool doesn't run and no trace is emitted. One `skill` frame (`water-damage-assessment`, `source: "server"`) follows. The `load_skill` observation names the unlocked tools. **(c)** From the next round on, `check_coverage` and `approve_claim` are offered, and `reject_claim` never is. `approve_claim` parks the run for the senior adjuster's sign-off. **(d)** After the resume, only one new model round runs (the earlier ones replay from the journal). That round is still offered the unlocked tools, and `approve_claim` runs exactly once. The typed `claim-decision` component shows the payout. The prompt lists only the `home`-tagged skills. |
+| 2 | Rejection | A flood claim on a policy that excludes floods. Loading `rejection-letter` unlocks `check_coverage` and `reject_claim` (not `approve_claim`). After the sign-off, `reject_claim` runs once, and `claim-decision` carries a typed reason `{ code: "EXCLUDED_PERIL", clause: "4.2(b)", detail }` whose code is pinned by the tool's zod enum. |
 
-The mekik pieces in play: `mekik.approve` with `ui: mekik.genui.form.ref(…)`,
-the `skills` app option, `mekik.skillsPrompt(ctx, { tags })`, `withSkills` from
-`@mekik/langchain` (the `load_skill` tool and its `skill` frame),
-`withMekikTools`, and `mekik.component<ClaimDecision>("claim-decision")` for a
-typed component whose props the compiler checks.
+The mekik pieces in play are:
+
+- `mekik.approve` with `ui: mekik.genui.form.ref(…)`
+- the `skills` app option
+- `runAgent` with `skills: { tags }`, `skillTools` and an approval `policy`
+- `mekik.component<ClaimDecision>("claim-decision")`, a typed component whose props the compiler checks
+
+The probe drives `runAgent` through `ScriptedModel.asChatModel`, which records the tool list offered in each round.
 
 ## Run it
 
