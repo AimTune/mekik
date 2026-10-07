@@ -670,8 +670,17 @@ function routePrompt(routes: readonly RouteChoice[]): string {
 
 function normalizeRoute(modelOutput: string, routes: readonly RouteChoice[], fallback?: string): string {
     const text = modelOutput.trim().toLowerCase();
-    for (const r of routes) if (text.includes(r.name.toLowerCase())) return r.name;
-    return fallback ?? routes.at(-1)!.name;
+    // An exact answer (ignoring case and surrounding punctuation) wins outright.
+    const bare = text.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    const exact = routes.find((r) => r.name.toLowerCase() === bare);
+    if (exact) return exact.name;
+    // Otherwise the longest route name the answer mentions — so "reporting" is
+    // not captured by a route named "report" just because it was declared first.
+    let best: RouteChoice | undefined;
+    for (const r of routes) {
+        if (text.includes(r.name.toLowerCase()) && (!best || r.name.length > best.name.length)) best = r;
+    }
+    return best?.name ?? fallback ?? routes.at(-1)!.name;
 }
 
 /** The text of a message or streamed chunk — string content, or the text parts of an array. */
