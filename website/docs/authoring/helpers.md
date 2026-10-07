@@ -107,6 +107,7 @@ Shuttle.Ui(ctx, "card", new Dictionary<string, object?>()); // helper — called
 | `mekik.clientTools(ctx, filter?)` | `Shuttle.ClientTools(ctx, tags?, mode?)` | nothing — reads the turn's client tool snapshot | **yes** — returns the definitions | [Client tools](./client-tools.md) |
 | `mekik.callClientTool(ctx, name, params?)` | `Shuttle.CallClientToolAsync<T>(ctx, name, params?)` | a `tool_call` trace + an `interrupt` (or a notify chunk) | **yes** — returns the client's result | [Client tools](./client-tools.md#calling) |
 | `mekik.skills(ctx, filter?)` / `mekik.skillsPrompt(ctx, filter?)` | `Shuttle.Skills(ctx, tags?, source?)` / `Shuttle.SkillsPrompt(…)` | nothing — reads the turn's skill catalog (level 1) | no | [Skills](./skills.md) |
+| `mekik.skillTools(ctx, filter?)` | `Shuttle.SkillTools<TTool>(ctx, tags?, source?)` | nothing — the tools each visible server skill owns (`SkillEntry.tools`), keyed by skill name | no | [Skills](./skills.md#tools-under-a-skill) |
 | `mekik.loadSkill(ctx, name)` | `Shuttle.LoadSkill(ctx, name)` | a `skill` trace; returns the instructions (level 2) | no | [Skills](./skills.md#loading-a-skill--and-the-skill-frame) |
 | `mekik.skillResource(ctx, name, path)` | `Shuttle.SkillResourceAsync(ctx, name, path)` | nothing — reads one bundled file (level 3) | **yes** — returns the file text | [Skills](./skills.md#loading-a-skill--and-the-skill-frame) |
 

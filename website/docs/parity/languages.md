@@ -27,6 +27,7 @@ mekik ships two implementations that speak the identical `mekik/1` wire: **TypeS
 | skill source port | `SkillSource` / `StaticSkillSource` | `ISkillSource` / `SkillSources.Inline` |
 | client skills accept | `MekikOptions.clientSkills: true \| fn` | `MekikOptions.ClientSkills` (`ClientSkills.AcceptAll` / `ClientSkillsPolicy`) |
 | skill model wrap | `withSkills` (`@mekik/langchain`) | `SkillFunctions.Wrap` (`Mekik.Agents`) |
+| skill-owned tools (§12.6) | `SkillEntry<StructuredToolInterface>.tools` / `mekik.skillTools` / `runAgent({ skillTools })` | `SkillEntry<AIFunction>.Tools` / `Shuttle.SkillTools<TTool>` / `AgentRunOptions.SkillTools` |
 | MCP server (§13) | `MekikMcpServer` / `serveMcp` (`@mekik/mcp`) | `MekikMcpServer` / `MapMekikMcp` (`Mekik.AspNetCore`) |
 | MCP tools wrap (§13) | `withMcpTools` (`@mekik/langchain`) | `McpFunctions.Wrap` (`Mekik.Agents`) |
 | A2A agent (§14) | `MekikA2aServer` / `serveA2a` (`@mekik/a2a`) | `MekikA2aServer` / `MapMekikA2a` (`Mekik.AspNetCore`) |

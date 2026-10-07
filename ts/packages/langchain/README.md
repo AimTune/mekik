@@ -36,9 +36,18 @@ into a `load_skill` tool (plus `read_skill_resource` when the catalog has files)
 and `runAgent({ skills: true })` appends the `<available_skills>` block to the
 system prompt and adds the tools in one switch. Each load emits a persistent
 `skill` frame so the UI shows which skill the agent is following.
-`runAgent({ skillTools: { skill: [tools] } })` holds tools under a skill: they are
-offered to the model only after it loads that skill, which keeps the per-call tool
-list small.
+A skill owns its tools: give a `SkillEntry<StructuredToolInterface>` in the
+catalog a `tools` list and `runAgent` offers them to the model only after it
+loads that skill, which keeps the per-call tool list small. The tools stay on the
+server — the catalog frame and hash never see them.
+`runAgent({ skillTools: { skill: [tools] } })` adds tools that must be built per
+request; they merge with the entry's own.
+
+```ts
+const catalog: SkillEntry<StructuredToolInterface>[] = [
+    { name: "refunds", description: "Refund a paid order.", instructions: "Check the order first.", tools: [getOrder, refund] },
+];
+```
 
 ## MCP servers as tools
 

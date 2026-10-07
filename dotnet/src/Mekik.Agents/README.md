@@ -31,8 +31,19 @@ into a `load_skill` function (plus `read_skill_resource` when the catalog has
 files), and `AgentRunOptions.Skills = true` appends the `<available_skills>`
 block to the system prompt and adds the functions in one switch. Each load emits
 a persistent `skill` frame so the UI shows which skill the agent is following.
-`AgentRunOptions.SkillTools` holds tools under a skill: they are offered to the
-model only after it loads that skill, which keeps the per-call tool list small.
+A skill owns its tools: a `SkillEntry<AIFunction>` in the catalog carries
+`Tools`, and `Agent.RunAsync` offers them to the model only after it loads that
+skill, which keeps the per-call tool list small. The tools stay on the server —
+the catalog frame and hash never see them. `AgentRunOptions.SkillTools` adds
+functions that must be built per request; they merge with the entry's own.
+
+```csharp
+Skills = SkillSources.Inline(new SkillEntry<AIFunction>
+{
+    Name = "refunds", Description = "Refund a paid order.", Instructions = "Check the order first.",
+    Tools = [getOrder, refund],
+}),
+```
 
 ## MCP servers as tools
 

@@ -867,8 +867,8 @@ interface SkillSummary {
   source?: "server" | "client";
 }
 
-/** Level 2 — as a source hands it back. */
-interface SkillEntry extends SkillSummary { instructions: string }
+/** Level 2 — as a source hands it back. `tools` is server-side only (§12.6). */
+interface SkillEntry<TTool = unknown> extends SkillSummary { instructions: string; tools?: readonly TTool[] }
 
 /** A client's inline declaration (§12.4). */
 interface ClientSkillDefinition { name: string; description: string; instructions: string; tags?: string[] }
@@ -1003,17 +1003,34 @@ Both refuse a name their filter hides, so the prompt and the tool agree on the
 toolbox, and both return errors as observations. The skill tools are not
 wrapped with the tool-policy machinery: a load emits its own trace.
 
-**Tools held under a skill (agent-side, no wire change).** `runAgent({ skillTools })`
-/ `AgentRunOptions.SkillTools` map a skill name to tools that are *not offered*
-to the model until it loads that skill; from the next model round they join the
-toolbox for the rest of the run, and the `load_skill` observation appends
-`Tools now available from skill <name>: a, b.` A call to such a tool before its
-skill is loaded is answered with an observation naming the skill to load, and
-the tool does not run. Entries for skills the node's filter hides are ignored.
-The tools themselves are ordinary server tools — wrapped with the tool policy,
-traced as `tool_call`, journaled — and the active set is derived from the
-journaled calls, so a resume pass offers each round exactly the tools it had
-the first time. No frame changes: the loads still surface as `skill` frames.
+**A skill owns its tools (agent-side, no wire change).** A server catalog
+entry may carry the tools its instructions use: `SkillEntry<TTool>.tools`
+(TS, `TTool` = `StructuredToolInterface` for `@mekik/langchain`) /
+`SkillEntry<TTool>.Tools` (.NET, `TTool` = `AIFunction` for `Mekik.Agents`).
+The field is **server-side only**: it is never serialized — not on the
+`skills` frame (§12.2), not in the catalog hash, not on a `skill` frame
+(§12.5) — and a client declaration (§12.4) can never carry it (sanitization
+keeps only the known fields). `mekik.skillTools(ctx, filter)` /
+`Shuttle.SkillTools<TTool>(ctx, tags, source)` read the visible server skills'
+tools without emitting a trace.
+
+`runAgent({ skills })` / `AgentRunOptions.Skills` hold each visible entry's
+tools back: they are *not offered* to the model until it loads that skill
+successfully; from the next model round they join the toolbox for the rest of
+the run, and the `load_skill` observation appends `Tools now available from
+skill <name>: a, b.` `runAgent({ skillTools })` / `AgentRunOptions.SkillTools`
+add tools keyed by skill name (for tools built per request), merged after the
+entry's own. A call to such a tool before its skill is loaded is answered with
+an observation naming the skill to load, and the tool does not run. A skill the
+node's filter hides never unlocks; a failed load (`status:"error"`) unlocks
+nothing. A name both always-on and skill-held, or two different tools sharing a
+name, fails the run. The tools themselves are ordinary server tools — wrapped
+with the tool policy, traced as `tool_call`, journaled — and `load_skill`
+re-runs on a replay pass, so a resume offers each round exactly the tools it
+had the first time. Hand-wired loops: `withSkills(ctx, filter, { toolNames,
+onLoaded })` / `SkillFunctions.Wrap(ctx, tags, source, toolNames, onLoaded)`
+name the entries' tools in the observation and report each successful load.
+No frame changes: the loads still surface as `skill` frames.
 
 ### 12.7 Security model
 
