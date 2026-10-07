@@ -33,11 +33,13 @@ public class AgentTests
 
         /// <summary>The options the last call passed — null when the caller sent none.</summary>
         public ChatOptions? LastOptions { get; private set; }
+        public List<ChatMessage> FirstMessages { get; } = new();
 
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
         {
             LastOptions = options;
+            if (FirstMessages.Count == 0) FirstMessages.AddRange(messages);
             return Task.FromResult(_turns.Dequeue().ToChatResponse());
         }
 
@@ -46,6 +48,7 @@ public class AgentTests
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             LastOptions = options;
+            if (FirstMessages.Count == 0) FirstMessages.AddRange(messages);
             foreach (var update in _turns.Dequeue())
             {
                 await Task.Yield();
@@ -323,5 +326,48 @@ public class AgentTests
     public async Task Route_falls_back_to_the_last_route_when_nothing_matches()
     {
         Assert.Equal("general", await RouteOf("banana", "shipping", "billing", "general"));
+    }
+
+    // ── skills (§12.6) ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task With_skills_on_the_prompt_lists_them_and_the_model_can_load_one()
+    {
+        var chat = new ScriptedChat(
+            [CallUpdate("call-1", "load_skill", new Dictionary<string, object?> { ["name"] = "pdf" })],
+            [TextUpdate("done")]);
+        var g = Graph.Create("skilled")
+            .Channel("input", Channels.LastWrite(""))
+            .Channel("reply", Channels.LastWrite(""))
+            .Node("agent", async (State state, IContext ctx) =>
+                Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
+                {
+                    System = "Base.",
+                    Input = state.Get<string>("input") ?? string.Empty,
+                    Stream = false,
+                    Skills = true,
+                })))
+            .Edge(Graph.Start, "agent")
+            .Edge("agent", Graph.End)
+            .Compile();
+        var app = new MekikApp(new MekikOptions
+        {
+            Graph = g,
+            Checkpointer = new InMemoryCheckpointer(),
+            Reply = s => s.GetValueOrDefault("reply") as string,
+            Skills = SkillSources.Inline(new SkillEntry { Name = "pdf", Description = "Fill PDF forms.", Instructions = "Use fill.py." }),
+        });
+        var conn = new FakeConn();
+        await app.ConnectAsync(conn);
+
+        await app.ReceiveAsync(conn, TextFrame("fill my form"));
+
+        var system = chat.FirstMessages.First(m => m.Role == ChatRole.System).Text;
+        Assert.StartsWith("Base.\n\n", system);
+        Assert.Contains("<name>pdf</name>", system);
+        Assert.Contains(chat.LastOptions!.Tools!, t => t.Name == "load_skill");
+        var skill = conn.Sent.Single(f => Type(f) == "skill");
+        Assert.Equal("loaded", Data(skill)["status"]);
+        Assert.Equal("done", Reply(conn));
     }
 }
