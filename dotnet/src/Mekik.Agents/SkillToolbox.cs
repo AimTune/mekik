@@ -33,11 +33,17 @@ internal sealed class SkillToolbox
         skills.Where(_bySkill.ContainsKey).SelectMany(s => _bySkill[s]).DistinctBy(f => f.Name);
 
     /// <summary>
-    /// When <paramref name="tool"/> is skill-held and none of its skills is active, the skill
-    /// the model should load (the first that holds it); otherwise null.
+    /// When <paramref name="tool"/> is skill-held and none of its skills is active, the skills
+    /// that hold it (any one of them unlocks it); otherwise null.
     /// </summary>
-    public string? LockedSkillOf(string tool, IReadOnlySet<string> active) =>
-        _skillsOf.TryGetValue(tool, out var owners) && !owners.Any(active.Contains) ? owners[0] : null;
+    public IReadOnlyList<string>? LockedSkillsOf(string tool, IReadOnlySet<string> active) =>
+        _skillsOf.TryGetValue(tool, out var owners) && !owners.Any(active.Contains) ? owners : null;
+
+    /// <summary>The observation for a call to a skill's tool before any skill holding it is loaded.</summary>
+    public static string LockedObservation(string tool, IReadOnlyList<string> owners) =>
+        owners.Count == 1
+            ? $"Tool {tool} belongs to skill \"{owners[0]}\". Call {SkillFunctions.LoadSkillTool} with name \"{owners[0]}\" first."
+            : $"Tool {tool} belongs to skills {string.Join(", ", owners.Select(o => $"\"{o}\""))}. Call {SkillFunctions.LoadSkillTool} with the one that fits the task first.";
 
     /// <summary>
     /// Collect the tools each visible skill owns (<see cref="SkillEntry{TTool}"/> with

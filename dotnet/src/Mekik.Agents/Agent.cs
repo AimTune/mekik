@@ -237,11 +237,11 @@ public static class Agent
                 var name = (string)call["name"]!;
                 var args = ToArgs(call.GetValueOrDefault("args"));
                 object? result;
-                if (skillToolbox.LockedSkillOf(name, activeSkills) is { } lockedSkill)
+                if (skillToolbox.LockedSkillsOf(name, activeSkills) is { } lockedSkills)
                 {
                     // Offered only once its skill is loaded — never run it before, or the
                     // model would act without the skill's instructions.
-                    result = $"Tool {name} belongs to skill \"{lockedSkill}\". Call {SkillFunctions.LoadSkillTool} with name \"{lockedSkill}\" first.";
+                    result = SkillToolbox.LockedObservation(name, lockedSkills);
                 }
                 else
                 {

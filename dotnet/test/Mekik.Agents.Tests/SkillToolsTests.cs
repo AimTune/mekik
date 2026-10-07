@@ -350,9 +350,11 @@ public class SkillToolsTests
         Assert.True(RunErrored(failed));
         Assert.Empty(bad.Offered);
 
-        var ok = new ScriptedChat([Call("1", "load_skill", new() { ["name"] = "docs" })], [Text("ok")]);
+        var ok = new ScriptedChat([Call("0", "get_sprint")], [Call("1", "load_skill", new() { ["name"] = "docs" })], [Text("ok")]);
         await Run(CatalogApp(ok, SkillSources.Inline(Owning(Reporting, sprint), Owning(docsUntagged, sprint))));
-        Assert.Equal(["load_skill", "get_sprint"], ok.Offered[1]);
+        Assert.Equal(["load_skill", "get_sprint"], ok.Offered[2]);
+        // A premature call names every skill that holds the tool, in catalog order.
+        Assert.Contains(ok.Observations, o => o.StartsWith("Tool get_sprint belongs to skills \"docs\", \"reporting\"."));
     }
 
     [Fact]

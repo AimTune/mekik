@@ -1022,7 +1022,8 @@ the run, and the `load_skill` observation appends `Tools now available from
 skill <name>: a, b.` `runAgent({ skillTools })` / `AgentRunOptions.SkillTools`
 add tools keyed by skill name (for tools built per request), merged after the
 entry's own. A call to such a tool before its skill is loaded is answered with
-an observation naming the skill to load, and the tool does not run. A skill the
+an observation naming the skill to load (every skill holding it, in catalog
+order, when there are several), and the tool does not run. A skill the
 node's filter hides never unlocks; a failed load (`status:"error"`) unlocks
 nothing. A name both always-on and skill-held, or two different tools sharing a
 name, fails the run. The tools themselves are ordinary server tools — wrapped

@@ -558,6 +558,13 @@ function buildSkillToolbox(
     return box;
 }
 
+/** The observation for a call to a skill's tool before any skill holding it is loaded. */
+function lockedToolObservation(tool: string, owners: readonly string[]): string {
+    return owners.length === 1
+        ? `Tool ${tool} belongs to skill "${owners[0]}". Call ${LOAD_SKILL_TOOL} with name "${owners[0]}" first.`
+        : `Tool ${tool} belongs to skills ${owners.map((o) => `"${o}"`).join(", ")}. Call ${LOAD_SKILL_TOOL} with the one that fits the task first.`;
+}
+
 /** The tools of the given skills, deduplicated by name. */
 function toolsOf(box: SkillToolbox, active: ReadonlySet<string>): StructuredToolInterface[] {
     const out = new Map<string, StructuredToolInterface>();
@@ -697,12 +704,12 @@ export async function runAgent(
         activated = false;
         for (const call of decision.toolCalls) {
             const owners = box.skillsOf.get(call.name);
-            const locked = owners && !owners.some((s) => activeSkills.has(s)) ? owners[0] : undefined;
+            const locked = owners && !owners.some((s) => activeSkills.has(s)) ? owners : undefined;
             let result: unknown;
             if (locked !== undefined) {
                 // Offered only once its skill is loaded — never run it before, or the model
                 // would act without the skill's instructions.
-                result = `Tool ${call.name} belongs to skill "${locked}". Call ${LOAD_SKILL_TOOL} with name "${locked}" first.`;
+                result = lockedToolObservation(call.name, locked);
             } else {
                 const t = byName.get(call.name);
                 try {

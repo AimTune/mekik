@@ -280,9 +280,15 @@ describe("runAgent with tools owned by the skill entry", () => {
         assert.ok(failed.sent.some((f) => f.type === "run" && dataOf(f).status === "error"));
         assert.equal(bad.offered.length, 0);
 
-        const ok = scriptedModel([{ toolCalls: [{ id: "1", name: "load_skill", args: { name: "docs" } }] }, { text: "ok" }]);
+        const ok = scriptedModel([
+            { toolCalls: [{ id: "0", name: "get_sprint", args: {} }] },
+            { toolCalls: [{ id: "1", name: "load_skill", args: { name: "docs" } }] },
+            { text: "ok" },
+        ]);
         await run(makeCatalogApp(ok.model, [{ ...REPORTING, tools: [sprint] }, { ...DOCS_UNTAGGED, tools: [sprint] }]));
-        assert.deepEqual(ok.offered[1], ["load_skill", "get_sprint"]);
+        assert.deepEqual(ok.offered[2], ["load_skill", "get_sprint"]);
+        // A premature call names every skill that holds the tool, in catalog order.
+        assert.ok(ok.observations().some((o) => o.startsWith('Tool get_sprint belongs to skills "docs", "reporting".')));
     });
 
     test("an entry hidden by the node's tag filter never unlocks its tools", async () => {
