@@ -76,7 +76,7 @@ That last split has a consequence you can see on the wire: resuming replays **on
 
 ```bash
 node ts/examples/storefront.ts            # self-test: asserts all 13 components + 8 message types on the wire
-node ts/examples/storefront.ts --serve    # ws://localhost:8802 — then type "components" or "messages"
+node ts/examples/storefront.ts --serve    # ws://localhost:8808 — then type "components" or "messages"
 ```
 
 Its self-test is the executable version of the two authoring guides — [Typed components](./authoring/components.md) and [Rich messages](./authoring/messages.md) — right down to asserting that the three progress-bar emissions share **one** chunk id (an in-place update, not three bars) and that messages replay from the transcript on reconnect.

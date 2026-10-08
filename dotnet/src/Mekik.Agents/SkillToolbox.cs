@@ -64,9 +64,8 @@ internal sealed class SkillToolbox
         foreach (var (skill, owned) in Shuttle.SkillTools<AIFunction>(ctx, options.SkillTags, options.SkillSource))
             held[skill] = [.. owned];
 
-        var visible = Shuttle.Skills(ctx, options.SkillTags, options.SkillSource)
-            .Select(s => s.Name)
-            .ToHashSet(StringComparer.Ordinal);
+        var catalog = Shuttle.Skills(ctx, options.SkillTags, options.SkillSource).Select(s => s.Name).ToList();
+        var visible = catalog.ToHashSet(StringComparer.Ordinal);
         foreach (var (skill, extra) in options.SkillTools ?? new Dictionary<string, IReadOnlyList<AIFunction>>())
         {
             if (!visible.Contains(skill) || extra is null || extra.Count == 0) continue;
@@ -94,6 +93,13 @@ internal sealed class SkillToolbox
 
             box._bySkill[skill] = MekikTools.Wrap(ctx, functions, options.Policies, options.DefaultPolicy).ToList();
         }
+
+        // Owners in catalog order, however they were declared (entry tools first, then
+        // SkillTools), so a premature call's refusal lists them the way the prompt does.
+        var rank = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < catalog.Count; i++) rank.TryAdd(catalog[i], i);
+        foreach (var owners in box._skillsOf.Values)
+            owners.Sort((a, b) => rank.GetValueOrDefault(a).CompareTo(rank.GetValueOrDefault(b)));
 
         return box;
     }

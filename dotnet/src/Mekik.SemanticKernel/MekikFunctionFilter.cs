@@ -18,7 +18,7 @@ namespace Mekik.SemanticKernel;
 /// <code>
 /// .Node("agent", async (State state, IContext ctx) =>
 /// {
-///     using var _ = kernel.UseMekik(ctx, new()
+///     using var _ = kernel.UseMekik(ctx, new Dictionary&lt;string, ToolPolicy&gt;
 ///     {
 ///         ["get_order"]       = new ToolPolicy(),                              // shown
 ///         ["refund_payment"]  = new ToolPolicy { Approve = new ApproveSpec() }, // ask first

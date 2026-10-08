@@ -130,9 +130,12 @@ so single-node runs need no Redis and the fleet swaps implementations in.
      fans out to local sockets **only** (no re-record, no re-publish — the
      producing node already recorded it once), and a node skips messages whose
      `originId` is its own.
-   - The TypeScript and .NET payloads differ in property casing (`originId` /
-     `frame` vs `OriginId` / `Frame`), so one backplane channel serves nodes of
-     one language.
+   - One wire shape for both languages (PROTOCOL.md §5.1): canonical JSON of
+     `{"frame", "originId"}`, camelCase, so TypeScript and .NET nodes share a
+     channel. A malformed envelope is dropped, never fanned out; for one release
+     receivers also read the PascalCase `{"OriginId", "Frame"}` that
+     `Mekik.Redis` 0.9 wrote, so a fleet can be upgraded node by node. Pinned by
+     `conformance/redis/envelope.json`.
 
 ## The correctness heart: safe re-home
 

@@ -16,7 +16,9 @@ web.Run();
 ```
 
 Identity may arrive in the URL query string or the first `hello` frame; both are
-merged at connect. With an authenticator configured, a rejected socket gets
+merged at connect, and an empty string counts as absent. A handler that throws
+surfaces as an `error{code:"internal"}` frame; the socket stays open. With an
+authenticator configured, a rejected socket gets
 `error{unauthorized}` and is closed with code 4401.
 
 The same package serves the graph to *agents*: `web.MapMekikMcp("/mcp", new
@@ -26,5 +28,7 @@ turn, and a resume for its human-in-the-loop pauses. `web.MapMekikA2a("/a2a",
 new MekikA2aServer(app, new A2aServerOptions { Name = "Support desk", Url = "…" }))`
 serves it as an Agent2Agent peer instead (PROTOCOL.md §14): an Agent Card at
 `/.well-known/agent-card.json`, one turn per task, pauses as `input-required`.
+Both take an optional `maxBodyBytes` (default 1 MiB, counted in bytes) that caps
+the request body with a `413`.
 
 MIT

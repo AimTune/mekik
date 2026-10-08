@@ -995,6 +995,27 @@ describe("scaling ports", () => {
         assert.deepEqual(transcript.map((f) => f.seq), [1, 2], "recorded once, by the producing node");
     });
 
+    test("a backplane message without a frame object is dropped, never fanned out as undefined", async () => {
+        const bus = new MemoryBus();
+        const app = mekik({ graph: echo, reply: replyOf, backplane: bus });
+        const c = conn();
+        await app.connect(c);
+        const convId = welcomeOf(c).conversationId;
+        const before = c.sent.length;
+
+        for (const bad of [
+            { originId: "other-node" },
+            { originId: "other-node", frame: null },
+            { originId: "other-node", frame: "text" },
+            null,
+        ]) {
+            await bus.publish(convId, bad as unknown as BackplaneMessage);
+        }
+
+        assert.equal(c.sent.length, before, "nothing reached the socket");
+        assert.ok(c.sent.every((f) => f !== undefined && f !== null));
+    });
+
     test("a turn lock that refuses answers busy and starts no run", async () => {
         const lock: TurnLock = { acquire: async () => null };
         const app = mekik({ graph: echo, reply: replyOf, turnLock: lock });

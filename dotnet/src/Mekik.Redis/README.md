@@ -60,11 +60,14 @@ so the conversation never answers `busy` forever.
 new RedisBackplane(redis, new RedisBackplaneOptions { KeyPrefix = "mekik" });
 ```
 
-The channel is `{KeyPrefix}:bp:{conversationId}`, and each message is the JSON
-`{ "OriginId", "Frame" }` — the engine skips its own by `OriginId`, and a relayed
-frame reaches the engine in the same shape as a locally produced one. The
-TypeScript `@mekik/redis` backplane uses camelCase keys, so don't mix TypeScript
-and .NET nodes on one backplane prefix. The returned subscription unsubscribes on
+The channel is `{KeyPrefix}:bp:{conversationId}`, and each message is the
+canonical-JSON envelope `{"frame", "originId"}` (camelCase, `BackplaneEnvelope.Encode`)
+— the engine skips its own by `OriginId`, and a relayed frame reaches the engine
+in the same shape as a locally produced one. The TypeScript `@mekik/redis`
+backplane writes the same bytes, so TypeScript and .NET nodes can share one prefix
+(PROTOCOL.md §5.1). A malformed payload is dropped, never fanned out; for one
+release `BackplaneEnvelope.Decode` also reads the PascalCase `{"OriginId", "Frame"}`
+that 0.9 wrote, so a running fleet can be upgraded node by node. The returned subscription unsubscribes on
 `DisposeAsync`.
 
 ## Routing

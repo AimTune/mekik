@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading.Channels;
@@ -41,15 +42,28 @@ public static class MekikAspNetCore
             {
                 await foreach (var text in ReadFramesAsync(ws, context.RequestAborted))
                 {
-                    if (!connected)
+                    try
                     {
-                        connected = true;
-                        await app.ConnectAsync(conn, MergeConnectParams(context, text));
-                        // A non-hello first frame (identity came via query) still needs processing.
-                        if (!IsHelloFrame(text)) await app.ReceiveAsync(conn, text);
-                        continue;
+                        if (!connected)
+                        {
+                            connected = true;
+                            await app.ConnectAsync(conn, MergeConnectParams(context, text));
+                            // A non-hello first frame (identity came via query) still needs processing.
+                            if (!IsHelloFrame(text)) await app.ReceiveAsync(conn, text);
+                            continue;
+                        }
+                        await app.ReceiveAsync(conn, text);
                     }
-                    await app.ReceiveAsync(conn, text);
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        // A handler that throws must not take the socket down silently:
+                        // surface it as an error frame and keep reading, as @mekik/ws does.
+                        conn.Send(new Dictionary<string, object?>
+                        {
+                            ["type"] = "error",
+                            ["data"] = new Dictionary<string, object?> { ["code"] = "internal", ["message"] = ex.Message },
+                        });
+                    }
                 }
             }
             finally
@@ -85,23 +99,25 @@ public static class MekikAspNetCore
     /// <summary>Identity may travel in the URL query string OR the first `hello` frame; merge, frame wins.</summary>
     private static ConnectParams MergeConnectParams(HttpContext context, string firstFrame)
     {
+        // An empty string is a missing value, as in @mekik/ws: "" never becomes the
+        // user id, the conversation id or the token, and never overrides another source.
         var q = context.Request.Query;
         var hello = new HelloInfo
         {
-            UserId = q["userId"].FirstOrDefault(),
-            ConversationId = q["conversationId"].FirstOrDefault(),
-            Watermark = long.TryParse(q["watermark"].FirstOrDefault(), out var wm) ? wm : null,
-            Token = q["token"].FirstOrDefault() ?? Bearer(context),
+            UserId = NonEmpty(q["userId"].FirstOrDefault()),
+            ConversationId = NonEmpty(q["conversationId"].FirstOrDefault()),
+            Watermark = long.TryParse(q["watermark"].FirstOrDefault(), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var wm) ? wm : null,
+            Token = NonEmpty(q["token"].FirstOrDefault()),
         };
 
         if (IsHelloFrame(firstFrame) && Json.Parse(firstFrame) is IReadOnlyDictionary<string, object?> h)
         {
             hello = hello with
             {
-                UserId = h.GetValueOrDefault("userId") as string ?? hello.UserId,
-                ConversationId = h.GetValueOrDefault("conversationId") as string ?? hello.ConversationId,
+                UserId = NonEmpty(h.GetValueOrDefault("userId") as string) ?? hello.UserId,
+                ConversationId = NonEmpty(h.GetValueOrDefault("conversationId") as string) ?? hello.ConversationId,
                 Watermark = h.GetValueOrDefault("watermark") is long w ? w : hello.Watermark,
-                Token = h.GetValueOrDefault("token") as string ?? hello.Token,
+                Token = NonEmpty(h.GetValueOrDefault("token") as string) ?? hello.Token,
                 Meta = h.GetValueOrDefault("meta") as IReadOnlyDictionary<string, object?>,
                 ComponentsHash = h.GetValueOrDefault("componentsHash") as string ?? hello.ComponentsHash,
                 Tools = h.GetValueOrDefault("tools") as IReadOnlyList<object?>,
@@ -109,6 +125,9 @@ public static class MekikAspNetCore
                 Skills = h.GetValueOrDefault("skills") as IReadOnlyList<object?>,
             };
         }
+
+        // The bearer header is the last resort, after the hello and the query.
+        hello = hello with { Token = hello.Token ?? Bearer(context) };
 
         var headers = context.Request.Headers.ToDictionary(h => h.Key, h => (string?)h.Value.ToString());
         return new ConnectParams
@@ -126,8 +145,10 @@ public static class MekikAspNetCore
     private static string? Bearer(HttpContext context)
     {
         var auth = context.Request.Headers.Authorization.ToString();
-        return auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? auth["Bearer ".Length..] : null;
+        return auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? NonEmpty(auth["Bearer ".Length..].Trim()) : null;
     }
+
+    private static string? NonEmpty(string? value) => string.IsNullOrEmpty(value) ? null : value;
 
     private static bool IsHelloFrame(string text)
     {

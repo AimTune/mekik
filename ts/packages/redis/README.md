@@ -69,9 +69,12 @@ new RedisBackplane(redis, {
 One subscriber connection is multiplexed across every conversation — channels are
 reference-counted, so the Nth `subscribe` shares one Redis `SUBSCRIBE` and the last
 `unsubscribe` tears it down. The channel is `${keyPrefix}:bp:${conversationId}`,
-and each message is the JSON `{ originId, frame }` — the engine skips its own by
-`originId`. The .NET `Mekik.Redis` backplane serializes the same message with
-PascalCase keys, so don't mix TypeScript and .NET nodes on one backplane prefix.
+and each message is the canonical-JSON envelope `{"frame", "originId"}` — the
+engine skips its own by `originId`. The .NET `Mekik.Redis` backplane writes the
+same bytes, so TypeScript and .NET nodes can share one prefix (PROTOCOL.md §5.1;
+`encodeBackplaneMessage` / `decodeBackplaneMessage` are exported). A malformed
+payload is dropped, never fanned out; for one release the decoder also reads the
+PascalCase `{"OriginId", "Frame"}` that `Mekik.Redis` 0.9 wrote.
 Call `backplane.close()` on shutdown to close the connection it opened.
 
 ## Routing

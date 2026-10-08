@@ -309,6 +309,20 @@ public class EngineEdgeTests
     }
 
     [Fact]
+    public async Task A_backplane_message_without_a_frame_is_dropped_never_fanned_out()
+    {
+        var (nodeA, _, bus) = TwoNodes(Graphs.Greeter);
+        var a = await Connect(nodeA);
+        var before = a.Sent.Count;
+
+        // A custom IBackplane may hand over anything; a null frame must not reach a socket.
+        await bus.PublishAsync((string)a.Welcome()["conversationId"]!, new BackplaneMessage("other-node", null!));
+        await bus.PublishAsync((string)a.Welcome()["conversationId"]!, null!);
+
+        Assert.Equal(before, a.Sent.Count);
+    }
+
+    [Fact]
     public async Task A_node_skips_its_own_frames_echoed_back_by_the_backplane()
     {
         var (nodeA, _, bus) = TwoNodes(Graphs.Greeter);

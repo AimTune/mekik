@@ -23,7 +23,7 @@ const github = await McpToolbox.connect(client, { name: "github" });   // any SD
 .node("agent", async (state, ctx) => {
   const tools = [
     ...serverTools,                                                              // runAgent wraps these with `policy`
-    ...withMcpTools(ctx, github, { github__create_issue: { approve: true } }),   // destructive → ask first
+    ...withMcpTools(ctx, github, { github__create_issue: { approve: true } }),   // destructive → ask first; passed through as-is
   ];
   return { reply: await runAgent(ctx, model(), { system: SYSTEM, input: state.input, tools, policy }) };
 })
@@ -40,7 +40,7 @@ function withMcpTools(
 ): StructuredToolInterface[];
 ```
 
-Each tool keeps the server's name, description and JSON Schema. The observation the model reads is the result's `text` (or its `structuredContent`, serialized, when there is no text); a result the server flagged `isError` comes back as `Error from <tool>: …` — an observation the loop can route around, not a crash. `withMcpTools` calls the toolbox's raw `invoke`, not its journaled `call`, because [`withMekikTools`](./langchain.md#withmekiktools) already journals every wrapped tool under `lc:<name>`.
+Each tool keeps the server's name, description and JSON Schema. The observation the model reads is the result's `text` (or its `structuredContent`, serialized, when there is no text); a result the server flagged `isError` comes back as `Error from <tool>: …` — an observation the loop can route around, not a crash. `withMcpTools` calls the toolbox's raw `invoke`, not its journaled `call`, because [`withMekikTools`](./langchain.md#withmekiktools) already journals every wrapped tool under `lc:<name>`. Hand the result straight to `runAgent`: tools mekik already wrapped pass through untouched (with the policy given here), so each call is traced and journaled exactly once.
 
 ## .NET — two ways in
 
@@ -63,8 +63,8 @@ using Mekik.Agents;
 // SdkClient: the two-method IMcpClient adapter over the official client, from ilmek's MCP page
 var github = await McpToolbox.ConnectAsync(new SdkClient(client), new() { Name = "github" });
 
-var tools = MekikTools.Wrap(ctx, serverFunctions, policies)
-    .Concat(McpFunctions.Wrap(ctx,
+var tools = serverFunctions                                  // raw — Agent.RunAsync wraps them with Policies
+    .Concat(McpFunctions.Wrap(ctx,                            // already wrapped — passed through as-is
         github.Tools().Select(t => new RemoteToolInfo { Name = t.Name, Description = t.Description, InputSchema = t.InputSchema }),
         async (name, args, ct) =>
         {

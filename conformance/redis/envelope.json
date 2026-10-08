@@ -1,0 +1,184 @@
+{
+  "description": "The Redis backplane envelope (PROTOCOL.md §5.1, docs/SCALING.md). Both RedisBackplane implementations must encode `encode[].message` to exactly `encode[].wire`, decode every `encode[].wire` back to its message, and decode every `decode[].payload` to `expect` (null = the payload is dropped, never fanned out).",
+  "encode": [
+    {
+      "name": "TypeScript node",
+      "message": {
+        "originId": "node-ts",
+        "frame": {
+          "type": "text",
+          "id": "msg-1",
+          "seq": 7,
+          "from": "bot",
+          "data": {
+            "text": "merhaba İstanbul 🚀   \"quoted\"",
+            "price": 249.9
+          },
+          "timestamp": 1750000000000
+        }
+      },
+      "wire": "{\"frame\":{\"data\":{\"price\":249.9,\"text\":\"merhaba İstanbul 🚀   \\\"quoted\\\"\"},\"from\":\"bot\",\"id\":\"msg-1\",\"seq\":7,\"timestamp\":1750000000000,\"type\":\"text\"},\"originId\":\"node-ts\"}"
+    },
+    {
+      "name": ".NET node",
+      "message": {
+        "originId": "node-net",
+        "frame": {
+          "type": "text",
+          "id": "msg-1",
+          "seq": 7,
+          "from": "bot",
+          "data": {
+            "text": "merhaba İstanbul 🚀   \"quoted\"",
+            "price": 249.9
+          },
+          "timestamp": 1750000000000
+        }
+      },
+      "wire": "{\"frame\":{\"data\":{\"price\":249.9,\"text\":\"merhaba İstanbul 🚀   \\\"quoted\\\"\"},\"from\":\"bot\",\"id\":\"msg-1\",\"seq\":7,\"timestamp\":1750000000000,\"type\":\"text\"},\"originId\":\"node-net\"}"
+    }
+  ],
+  "decode": [
+    {
+      "name": "camelCase, insertion-ordered (TypeScript <= 0.9)",
+      "payload": "{\"originId\":\"node-ts\",\"frame\":{\"type\":\"text\",\"id\":\"msg-1\",\"seq\":7,\"from\":\"bot\",\"data\":{\"text\":\"merhaba İstanbul 🚀   \\\"quoted\\\"\",\"price\":249.9},\"timestamp\":1750000000000}}",
+      "expect": {
+        "originId": "node-ts",
+        "frame": {
+          "type": "text",
+          "id": "msg-1",
+          "seq": 7,
+          "from": "bot",
+          "data": {
+            "text": "merhaba İstanbul 🚀   \"quoted\"",
+            "price": 249.9
+          },
+          "timestamp": 1750000000000
+        }
+      }
+    },
+    {
+      "name": "PascalCase, escaped (.NET <= 0.9, read for one release)",
+      "payload": "{\"OriginId\":\"node-net\",\"Frame\":{\"type\":\"text\",\"id\":\"msg-1\",\"seq\":7,\"from\":\"bot\",\"data\":{\"text\":\"merhaba \\u0130stanbul \\uD83D\\uDE80 \\u2028 \\u0022quoted\\u0022\",\"price\":249.9},\"timestamp\":1750000000000}}",
+      "expect": {
+        "originId": "node-net",
+        "frame": {
+          "type": "text",
+          "id": "msg-1",
+          "seq": 7,
+          "from": "bot",
+          "data": {
+            "text": "merhaba İstanbul 🚀   \"quoted\"",
+            "price": 249.9
+          },
+          "timestamp": 1750000000000
+        }
+      }
+    },
+    {
+      "name": "camelCase wins when both casings are present",
+      "payload": "{\"OriginId\":\"old\",\"originId\":\"new\",\"Frame\":{\"type\":\"old\"},\"frame\":{\"type\":\"new\"}}",
+      "expect": {
+        "originId": "new",
+        "frame": {
+          "type": "new"
+        }
+      }
+    },
+    {
+      "name": "casings may be mixed per field",
+      "payload": "{\"OriginId\":\"n\",\"frame\":{\"type\":\"run\"}}",
+      "expect": {
+        "originId": "n",
+        "frame": {
+          "type": "run"
+        }
+      }
+    },
+    {
+      "name": "extra envelope fields are ignored",
+      "payload": "{\"originId\":\"n\",\"frame\":{\"type\":\"run\"},\"v\":2}",
+      "expect": {
+        "originId": "n",
+        "frame": {
+          "type": "run"
+        }
+      }
+    },
+    {
+      "name": "empty payload",
+      "payload": "",
+      "expect": null
+    },
+    {
+      "name": "not JSON",
+      "payload": "not json",
+      "expect": null
+    },
+    {
+      "name": "JSON null",
+      "payload": "null",
+      "expect": null
+    },
+    {
+      "name": "JSON array",
+      "payload": "[1,2]",
+      "expect": null
+    },
+    {
+      "name": "JSON string",
+      "payload": "\"hello\"",
+      "expect": null
+    },
+    {
+      "name": "missing originId",
+      "payload": "{\"frame\":{\"type\":\"text\"}}",
+      "expect": null
+    },
+    {
+      "name": "empty originId",
+      "payload": "{\"originId\":\"\",\"frame\":{\"type\":\"text\"}}",
+      "expect": null
+    },
+    {
+      "name": "non-string originId",
+      "payload": "{\"originId\":7,\"frame\":{\"type\":\"text\"}}",
+      "expect": null
+    },
+    {
+      "name": "missing frame",
+      "payload": "{\"originId\":\"n\"}",
+      "expect": null
+    },
+    {
+      "name": "missing frame (legacy casing)",
+      "payload": "{\"OriginId\":\"node-x\"}",
+      "expect": null
+    },
+    {
+      "name": "null frame",
+      "payload": "{\"originId\":\"n\",\"frame\":null}",
+      "expect": null
+    },
+    {
+      "name": "array frame",
+      "payload": "{\"originId\":\"n\",\"frame\":[{\"type\":\"text\"}]}",
+      "expect": null
+    },
+    {
+      "name": "string frame",
+      "payload": "{\"originId\":\"n\",\"frame\":\"text\"}",
+      "expect": null
+    },
+    {
+      "name": "frame without a type",
+      "payload": "{\"originId\":\"n\",\"frame\":{\"seq\":1}}",
+      "expect": null
+    },
+    {
+      "name": "frame with a non-string type",
+      "payload": "{\"originId\":\"n\",\"frame\":{\"type\":1}}",
+      "expect": null
+    }
+  ]
+}

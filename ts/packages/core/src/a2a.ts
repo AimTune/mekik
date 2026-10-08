@@ -309,7 +309,9 @@ export class MekikA2aServer {
     private toTask(id: string, result: McpTurnResult, history: A2aMessage[], previous: A2aTask | undefined): A2aTask {
         const state = stateOf(result.status);
         const artifacts: A2aArtifact[] = [...(previous?.artifacts ?? [])];
-        if (result.reply.length > 0) {
+        // A failed or rejected turn's reply is the error text: it belongs to the status
+        // message, not the task's output (PROTOCOL.md §14.2).
+        if (result.reply.length > 0 && result.status !== "error" && result.status !== "refused") {
             artifacts.push({ artifactId: this.mint("artifact"), name: "reply", parts: [{ kind: "text", text: result.reply }] });
         }
         const statusMessage = this.statusMessage(id, result);

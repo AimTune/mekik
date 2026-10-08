@@ -471,9 +471,10 @@ async function selftest(): Promise<number> {
 // ── entry point ───────────────────────────────────────────────────────────────
 
 if (process.argv.includes("--serve")) {
-    const handle = serveWs(makeApp(), { port: 8806 });
+    const port = 8806;
+    serveWs(makeApp(), { port });
     console.log(
-        `server-components listening on ws://localhost:${handle.port} — connect chativa and say "track ORD-42".\n` +
+        `server-components listening on ws://localhost:${port} — connect chativa and say "track ORD-42".\n` +
             "The widgets are defined here, not in the page: edit a template above, restart, and the client picks up\n" +
             "the new markup on its next connect (the hash changed).",
     );

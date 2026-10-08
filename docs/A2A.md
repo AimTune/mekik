@@ -19,7 +19,7 @@ this file is the short version plus the design notes.
 | task | one turn: `message/send` without `taskId` → connect, `text` frame, collect, disconnect |
 | `input-required` task | the turn paused; `status.message` carries the pending interrupts in prose + a data part; `metadata.pending` too |
 | `message/send` with `taskId` | the resume: text → the single open interrupt (action label → value); data `{answers}` → several |
-| artifact `reply` | the turn's reply text |
+| artifact `reply` | the turn's reply text (never on a `failed` or `rejected` task — the error is the status message) |
 | `completed` / `failed` / `rejected` / `canceled` | run finished / graph error / engine refused (`busy`, `interrupted`, `not_interrupted`) / `tasks/cancel` or an aborted run |
 | `metadata.mekik` | `{ conversationId, status, toolCalls, skills }` — the MCP summary, reused |
 

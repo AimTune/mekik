@@ -204,3 +204,15 @@ describe("mekik.authClaims / claimStrings", () => {
         assert.deepEqual(claimStrings({}, "roles"), []);
     });
 });
+
+describe("the mekik helper object mirrors Shuttle", () => {
+    test("the skill and trace primitives Shuttle exposes are attached to `mekik` too", async () => {
+        const index = await import("../src/index.ts");
+        const helpers = await import("../src/helpers.ts");
+        // Shuttle.SkillResourcesAvailable / SkillTrace / ToolTrace / NextToolCallId
+        for (const name of ["skillResourcesAvailable", "skillTrace", "toolTrace", "nextToolCallId"] as const) {
+            assert.equal((index.mekik as unknown as Record<string, unknown>)[name], helpers[name], `mekik.${name}`);
+            assert.equal(index[name], helpers[name], `named export ${name}`);
+        }
+    });
+});

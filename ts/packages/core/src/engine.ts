@@ -747,6 +747,10 @@ export class ConversationEngine {
             // (originId) to avoid the pub/sub self-delivery echo. NoopBackplane never
             // delivers, so single-node behaviour is unchanged.
             live.sub = await this.cfg.backplane.subscribe(convId, (msg) => {
+                // A custom backplane may hand over anything; never fan out a
+                // missing or non-object frame.
+                if (msg === null || typeof msg !== "object") return;
+                if (typeof msg.frame !== "object" || msg.frame === null) return;
                 if (msg.originId === this.nodeId) return;
                 this.fanOutLocal(convId, msg.frame);
             });

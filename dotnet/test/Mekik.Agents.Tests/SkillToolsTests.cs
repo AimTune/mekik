@@ -358,6 +358,22 @@ public class SkillToolsTests
     }
 
     [Fact]
+    public async Task A_premature_call_lists_the_owning_skills_in_catalog_order_however_they_were_declared()
+    {
+        var c = new Counters();
+        var (_, sprint, _) = Tools(c);
+        var docsUntagged = new SkillEntry { Name = "docs", Description = "Docs.", Instructions = "Read docs." };
+        // "reporting" owns the tool through its entry; "docs" only through SkillTools,
+        // which used to append it after the entries.
+        var chat = new ScriptedChat([Call("0", "get_sprint")], [Text("ok")]);
+
+        await Run(CatalogApp(chat, SkillSources.Inline(Owning(Reporting, sprint), docsUntagged), skillTools: new() { ["docs"] = [sprint] }));
+
+        Assert.Contains(chat.Observations, o => o.StartsWith("Tool get_sprint belongs to skills \"docs\", \"reporting\".", StringComparison.Ordinal));
+        Assert.Equal(0, c.Sprint);
+    }
+
+    [Fact]
     public async Task An_entry_hidden_by_the_nodes_tag_filter_never_unlocks_its_tools()
     {
         var c = new Counters();

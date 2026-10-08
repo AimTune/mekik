@@ -138,11 +138,14 @@ local sockets — it never re-records them. The default prefix is `mekik`; the
 options are listed in the [`@mekik/redis`](https://github.com/AimTune/mekik/tree/main/ts/packages/redis#readme)
 and [`Mekik.Redis`](https://github.com/AimTune/mekik/tree/main/dotnet/src/Mekik.Redis#readme) READMEs.
 
-:::caution Keep a fleet to one language
-The lock keys are compatible, but the backplane payload is not: the TypeScript
-backplane publishes `{"originId", "frame"}` while the .NET one publishes
-`{"OriginId", "Frame"}`. Run TypeScript and .NET nodes against separate key
-prefixes rather than one shared fleet.
+:::tip Mixed-language fleets
+TypeScript and .NET nodes can share one Redis. The lock keys are the same, and
+both backplanes publish one envelope — canonical JSON of `{"frame", "originId"}`
+with camelCase keys ([PROTOCOL.md §5.1](https://github.com/AimTune/mekik/blob/main/PROTOCOL.md#51-the-backplane-envelope)),
+pinned for both by [`conformance/redis/envelope.json`](https://github.com/AimTune/mekik/blob/main/conformance/redis/envelope.json).
+A malformed payload on the channel is dropped, never fanned out. For one release
+a node also reads the PascalCase `{"OriginId", "Frame"}` that `Mekik.Redis`
+0.9 published, so a running .NET fleet can be upgraded node by node.
 :::
 
 :::note What ships today

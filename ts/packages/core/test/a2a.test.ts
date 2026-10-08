@@ -18,6 +18,7 @@ import { canonicalize } from "../src/protocol.ts";
 const fixture = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../../../conformance/a2a/rpc.json"), "utf8")) as {
     options: A2aServerOptions;
     agentCard: unknown;
+    replyArtifact: Record<string, boolean>;
     cases: Array<{ name: string; request: unknown; response: unknown }>;
 };
 
@@ -156,6 +157,21 @@ describe("message/send (§14.2)", () => {
         const rejected = await a.sendMessage({ message: userMessage("hello?", { contextId: paused.contextId }) });
         assert.equal(rejected.status.state, "rejected");
         assert.match((rejected.status.message!.parts[0] as { text: string }).text, /^interrupted: answer the open interrupt/);
+    });
+
+    test("only the states the fixture's replyArtifact allows attach the reply artifact", async () => {
+        const a = agent();
+        const completed = await a.sendMessage({ message: userMessage("hi") });
+        const failed = await a.sendMessage({ message: userMessage("boom") });
+        const paused = await a.sendMessage({ message: userMessage("refund please") });
+        const rejected = await a.sendMessage({ message: userMessage("hello?", { contextId: paused.contextId }) });
+
+        for (const task of [completed, failed, rejected]) {
+            const replies = (task.artifacts ?? []).filter((x) => x.name === "reply");
+            assert.equal(replies.length > 0, fixture.replyArtifact[task.status.state], `${task.status.state} task`);
+        }
+        assert.deepEqual(failed.artifacts, [], "the error text is the status message, not an artifact");
+        assert.deepEqual(rejected.artifacts, []);
     });
 });
 

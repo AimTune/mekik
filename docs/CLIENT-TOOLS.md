@@ -252,7 +252,7 @@ import { withClientTools, runAgent } from "@mekik/langchain";
 .node("agent", async (s, ctx) => {
     const tools = [
         ...serverTools,                                 // the server's own tools, raw — runAgent wraps them
-        ...withClientTools(ctx, { tags: ["billing"] }), // the frontend's, scoped by tag
+        ...withClientTools(ctx, { tags: ["billing"] }), // the frontend's, scoped by tag — passed through as-is
     ];
     return { reply: await runAgent(ctx, model(), { system, input: s.input, tools, policy }) };
 })

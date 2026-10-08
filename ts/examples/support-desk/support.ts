@@ -23,7 +23,7 @@
 // Skills (§12), tag-scoped per route, each OWNING its tool: `refund-policy`
 // (billing) lists issue_credit, `incident-runbook` (tech) lists
 // escalate_to_specialist. The billing node is runAgent; the tech loop is
-// hand-wired (its MCP tools come pre-wrapped by withMcpTools), so it uses the
+// hand-wired on purpose (its withMcpTools tools could go to runAgent as-is), so it uses the
 // probe kit's runTools with `skills`: withSkills(ctx, filter, { onLoaded })
 // supplies load_skill — naming the entry's tools in its observation — and the
 // loop holds each skill's own tools until a successful load. Each node's

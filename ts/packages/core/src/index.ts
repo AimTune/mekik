@@ -40,14 +40,18 @@ import {
     event,
     loadSkill,
     mount,
+    nextToolCallId,
     onEvent,
     skillResource,
+    skillResourcesAvailable,
     skills,
     skillsPrompt,
     skillTools,
+    skillTrace,
     streamText,
     text,
     tool,
+    toolTrace,
     ui,
 } from "./helpers.ts";
 
@@ -70,6 +74,12 @@ export const mekik = Object.assign(createMekikApp, {
     skillTools,
     loadSkill,
     skillResource,
+    skillResourcesAvailable,
+    // The low-level trace primitives, as on .NET's Shuttle — for integrations that
+    // run tools or resolve skills themselves.
+    toolTrace,
+    nextToolCallId,
+    skillTrace,
     component,
     genui,
     message,

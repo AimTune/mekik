@@ -7,8 +7,11 @@
 // one as a custom element, and from then on a plain `ui` chunk mounts it. Adding
 // a widget is a server deploy — no client build, no chativa release.
 //
-//   dotnet run --project dotnet/examples/Mekik.ServerComponents            # self-test, exit 0/1
-//   dotnet run --project dotnet/examples/Mekik.ServerComponents -- --serve # ws://localhost:8816/ws
+//   dotnet run --project dotnet/examples/Mekik.ServerComponents --no-launch-profile # self-test, exit 0/1
+//   dotnet run --project dotnet/examples/Mekik.ServerComponents -- --serve          # ws://localhost:8816/ws
+//
+// A plain `dotnet run` (no flags) uses Properties/launchSettings.json, whose profile
+// passes --serve: it starts the server. Pass --no-launch-profile for the self-test.
 //
 // The turn is paced on purpose: the card is re-rendered through Preparing → In
 // transit at the same chunk id, then the run PAUSES on three chips, and the answer

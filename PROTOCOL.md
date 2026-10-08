@@ -366,6 +366,22 @@ the `Backplane` / `IBackplane` port (default `NoopBackplane`). `@mekik/redis` /
 local lock is always freed when the run ends, even when releasing the lease
 fails.
 
+### 5.1 The backplane envelope
+
+A backplane carries `{originId, frame}`: the producing node's id (a node skips
+its own messages) and the already-recorded frame (a receiving node only fans it
+out to its local sockets; it never re-records or re-publishes it). The Redis
+backplanes publish it on `{prefix}:bp:{conversationId}` as **canonical JSON
+(§9) with camelCase keys** — `{"frame":{…},"originId":"…"}` — byte-identical
+from either language, so TypeScript and .NET nodes can share one channel.
+
+A receiver accepts an envelope only when `originId` is a non-empty string and
+`frame` is a JSON object with a string `type`; anything else (not JSON, a
+missing or non-object frame, …) is dropped, never fanned out. For one release a
+receiver also reads the PascalCase `{"OriginId", "Frame"}` that `Mekik.Redis`
+0.9 wrote, so a mixed fleet can be upgraded node by node; camelCase wins when
+both casings are present. Pinned by `conformance/redis/envelope.json`.
+
 ---
 
 ## 6. Graph context as a parameter (§6)
@@ -1041,7 +1057,7 @@ skills the agent followed.
 3: the text of one bundled file, when the source has files behind it. Only
 server skills can — client skills travel inline — and a folder-backed source
 confines `path` to the skill folder (`..` and absolute paths are refused).
-`skillResourcesAvailable(ctx)` / `Shuttle.SkillResourcesAvailable` says
+`mekik.skillResourcesAvailable(ctx)` / `Shuttle.SkillResourcesAvailable` says
 whether the turn's source supports it, so an agent wrapper can offer the tool
 only when it works.
 
@@ -1197,7 +1213,8 @@ ran, the agent failed. The exact exchanges are pinned by
 **Transport.** `@mekik/mcp`'s `serveMcp` and `Mekik.AspNetCore`'s
 `MapMekikMcp` implement the stateless half of Streamable HTTP: one JSON-RPC
 message per `POST` → `200` with the response, `202` for a notification, `400`
-for unparseable JSON (`-32700`), `413` over 1 MiB; `GET` → `405` (no
+for unparseable JSON (`-32700`), `413` (`-32600`) over the `maxBodyBytes` cap
+(1 MiB by default, counted in bytes); `GET` → `405` (no
 server-to-client stream); `DELETE` → `200`. Sessions are not tracked — a
 conversation is addressed by `conversationId` in the tool arguments.
 
@@ -1311,7 +1328,8 @@ is `-32601`. A non-object request, or one without `jsonrpc: "2.0"` and a
 
 **Transport.** `GET` on the card path returns the card; `POST` on the endpoint
 carries one JSON-RPC message → `200` with the response, `202` for a
-notification, `400` for unparseable JSON (`-32700`), `413` over 1 MiB;
+notification, `400` for unparseable JSON (`-32700`), `413` (`-32600`) over the
+`maxBodyBytes` cap (1 MiB by default, counted in bytes);
 `GET` on the endpoint and `POST` on the card path are `405`.
 
 ### 14.5 Security model

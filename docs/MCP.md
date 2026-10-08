@@ -43,6 +43,10 @@ graph failures are results with `isError` (the tool ran; the agent failed).
 - **Why `withMcpTools` uses the toolbox's raw `invoke`.** `withMekikTools`
   already journals under `lc:<name>`; using the toolbox's journaled `call` too
   would only add journal entries.
+- **Why MCP tools go to `runAgent` / `Agent.RunAsync` directly.** Every tool mekik
+  builds is branded (`isMekikTool` / `MekikTools.IsMekikFunction`), and the wrappers
+  pass a branded tool through untouched — so `withMcpTools` / `McpFunctions.Wrap`
+  output (and client tools) can join raw tools in `tools`, traced and journaled once.
 - **Why the MCP endpoint has no auth of its own.** The protocol subset served
   has no authorization story; the endpoint is meant to sit behind a gateway,
   like any internal tool endpoint. The graph's approvals still gate what a

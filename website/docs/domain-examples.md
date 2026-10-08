@@ -82,8 +82,9 @@ conversation's booking in graph state, so the `cancel` node holds it under
 `cancellation-policy` with `runAgent({ skillTools })`, and says why in a
 comment.
 
-Most agents use `runAgent({ skills })`. The support desk's tech node shows the
-hand-wired form, because its MCP tools come pre-wrapped by `withMcpTools`:
+Most agents use `runAgent({ skills })` (MCP and client tools can go to it directly —
+anything mekik already wrapped passes through). The support desk's tech node shows
+the hand-wired form on purpose:
 `withSkills(ctx, filter, { onLoaded })` names each entry's tools in the
 `load_skill` observation and reports each successful load, and the loop offers
 that skill's tools (`mekik.skillTools`) from the next round.

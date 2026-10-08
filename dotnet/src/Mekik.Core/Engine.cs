@@ -836,6 +836,8 @@ public sealed class ConversationEngine
             // delivers, so single-node behaviour is unchanged.
             live.Sub = await _cfg.Backplane.SubscribeAsync(convId, msg =>
             {
+                // A custom backplane may hand over anything; never fan out a missing frame.
+                if (msg?.Frame is null) return;
                 if (msg.OriginId == _nodeId) return;
                 FanOutLocal(convId, msg.Frame);
             }).ConfigureAwait(false);

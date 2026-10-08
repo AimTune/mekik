@@ -1,4 +1,3 @@
-using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -20,12 +19,22 @@ namespace Mekik;
 /// </summary>
 public static class MekikMcpAspNetCore
 {
-    /// <summary>Largest request body accepted, in bytes.</summary>
+    /// <summary>The default for <c>maxBodyBytes</c>: the largest request body accepted, 1 MiB.</summary>
     public const int MaxBodyBytes = 1024 * 1024;
 
-    public static void MapMekikMcp(this IEndpointRouteBuilder endpoints, string path, MekikMcpServer mcp)
+    /// <summary>Map the MCP endpoint at <paramref name="path"/>.</summary>
+    /// <param name="endpoints">The route builder.</param>
+    /// <param name="path">The endpoint path, e.g. <c>/mcp</c>.</param>
+    /// <param name="mcp">The server that answers each JSON-RPC message.</param>
+    /// <param name="maxBodyBytes">
+    /// Largest request body accepted, in UTF-8 bytes (default <see cref="MaxBodyBytes"/>, 1 MiB) —
+    /// TypeScript's <c>maxBodyBytes</c>. Reading stops as soon as a body passes it, and the
+    /// request is answered <c>413</c> with JSON-RPC error <c>-32600</c>.
+    /// </param>
+    public static void MapMekikMcp(this IEndpointRouteBuilder endpoints, string path, MekikMcpServer mcp, int maxBodyBytes = MaxBodyBytes)
     {
         ArgumentNullException.ThrowIfNull(mcp);
+        RequestBody.ValidateMax(maxBodyBytes);
         endpoints.Map(path, async (HttpContext context) =>
         {
             var response = context.Response;
@@ -42,14 +51,10 @@ public static class MekikMcpAspNetCore
                     return;
             }
 
-            string body;
-            using (var reader = new StreamReader(context.Request.Body, Encoding.UTF8))
+            var body = await RequestBody.ReadAsync(context.Request, maxBodyBytes, context.RequestAborted);
+            if (body is null)
             {
-                body = await reader.ReadToEndAsync(context.RequestAborted);
-            }
-            if (body.Length > MaxBodyBytes)
-            {
-                await WriteAsync(response, StatusCodes.Status413PayloadTooLarge, RpcError(MekikMcpServer.InvalidRequest, "request body too large"), context.RequestAborted);
+                await WriteAsync(response, StatusCodes.Status413PayloadTooLarge, RequestBody.TooLarge(), context.RequestAborted);
                 return;
             }
 

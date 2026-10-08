@@ -7,7 +7,7 @@
 // the same JSON either way. Nothing here writes a frame by hand.
 //
 //   node examples/storefront.ts            # self-test (no socket)
-//   node examples/storefront.ts --serve    # ws://localhost:8802 for chativa
+//   node examples/storefront.ts --serve    # ws://localhost:8808 for chativa
 //
 // Turns:
 //   "components"  → all 13 chativa GenUI components, plus a progress bar and a
@@ -323,8 +323,9 @@ async function selftest(): Promise<number> {
 // ── entry point ───────────────────────────────────────────────────────────────
 
 if (process.argv.includes("--serve")) {
-    const handle = serveWs(makeApp(), { port: 8802 });
-    console.log(`storefront listening on ws://localhost:${handle.port} — try "components" or "messages"`);
+    const port = 8808;
+    serveWs(makeApp(), { port });
+    console.log(`storefront listening on ws://localhost:${port} — try "components" or "messages"`);
 } else {
     selftest().then(
         (code) => process.exit(code),

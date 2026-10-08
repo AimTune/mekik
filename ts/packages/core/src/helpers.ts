@@ -71,10 +71,12 @@ export interface ChunkOptions {
  * Stream one prose delta to the client as a generative-UI text chunk.
  *
  * @remarks
- * Text chunks are **transient** — they render live as the run streams, but they
- * are not the conversation's durable reply. The durable reply is the single `text`
- * frame the mapper emits at run end from your reply selector. Use this for
- * token-by-token model output, and return the full string as the reply.
+ * Each chunk is a `genui` frame: it renders live as the run streams and is
+ * **persisted and replayed** like every `genui` frame (PROTOCOL.md §4.3), so the
+ * streamed text is already part of the transcript. It is not the reply, though:
+ * the reply is a separate `text` frame the mapper emits at run end from your reply
+ * selector. A node that streams its whole answer should therefore return **no**
+ * reply (`""`) — returning the same text again shows the answer twice.
  *
  * @param ctx - The ilmek node context (threaded into every node).
  * @param content - The prose fragment to append to the current turn's stream.
@@ -98,9 +100,10 @@ export function text(ctx: Context<any>, content: string, opts: ChunkOptions = {}
  * @remarks
  * Each delta is emitted with {@link text}, so consecutive deltas share one stream
  * text-run and a client renders a **single growing bubble**, not one bubble per
- * token (PROTOCOL.md §4.1). Streamed text is **transient**: the returned string is
- * every delta concatenated — return it from your node as the durable `reply`, and
- * the mapper emits that as the one persistent `text` frame at run end. Empty or
+ * token (PROTOCOL.md §4.1). The chunks are persisted and replayed like any `genui`
+ * frame, so the bubble is already the answer: keep the returned string (every delta
+ * concatenated) for your own use — the model's memory, a summary — and return no
+ * `reply`, or the client shows the answer twice (PROTOCOL.md §4.3). Empty or
  * `undefined` deltas are skipped.
  *
  * @typeParam T - The element type of the source stream (e.g. a model's streaming chunk).
@@ -112,7 +115,7 @@ export function text(ctx: Context<any>, content: string, opts: ChunkOptions = {}
  * @example
  * ```ts
  * const full = await mekik.streamText(ctx, model.stream(state.input), (u) => u.text);
- * return { reply: full };
+ * return { reply: "", history: [...state.history, full] }; // the bubble is the answer
  * ```
  *
  * @see {@link text} to emit one delta yourself.
