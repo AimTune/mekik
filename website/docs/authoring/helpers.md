@@ -63,7 +63,7 @@ using Ilmek;
 
 ## The one name, two ways
 
-In TypeScript the single `mekik` export is both the **app factory** and the **helpers** — `index.ts` folds the helper functions onto the callable factory, so both read naturally. In .NET they split: the app is `MekikApp`, and the helpers live on a static `Shuttle` class (a static class named `Mekik` would clash with the namespace — see [Parity](../parity/languages.md#the-five-deliberate-divergences)).
+In TypeScript the single `mekik` export is both the **app factory** and the **helpers** — `index.ts` folds the helper functions onto the callable factory, so both read naturally. In .NET they split: the app is `MekikApp`, and the helpers live on a static `Shuttle` class (a static class named `Mekik` would clash with the namespace — see [Parity](../parity/languages.md#the-six-deliberate-divergences)).
 
 <Tabs groupId="lang">
 <TabItem value="ts" label="TypeScript">
@@ -104,14 +104,19 @@ Shuttle.Ui(ctx, "card", new Dictionary<string, object?>()); // helper — called
 | `mekik.tool(ctx, name, params, fn)` | `Shuttle.Tool(ctx, name, params, fn)` | a `tool_call` trace + runs `fn` once | **yes** — returns the result | [Tools](./tools.md) |
 | `mekik.approve(ctx, payload, opts?)` | `Shuttle.Approve(ctx, payload, …)` | an `interrupt` frame; the run pauses | **yes** — returns the answer | [Human-in-the-loop](./human-in-the-loop.md) |
 | `mekik.choose(ctx, payload, options)` | `Shuttle.Choose<T>(ctx, payload, options)` | an `interrupt` frame whose `actions` are the options | **yes** — returns the pick | [HITL → Buttons](./human-in-the-loop.md#buttons-typed-no-hand-written-json) |
-| `mekik.clientTools(ctx, filter?)` | `Shuttle.ClientTools(ctx, tags?, mode?)` | nothing — reads the turn's client tool snapshot | **yes** — returns the definitions | [Client tools](./client-tools.md) |
+| `mekik.action(label, value?)` | `Shuttle.Action(label, value?)` | nothing — builds one chip (`MessageAction`) for `choose` / `approve` | no | [HITL → Buttons](./human-in-the-loop.md#buttons-typed-no-hand-written-json) |
+| `mekik.onEvent(ctx, eventType, opts?)` | `Shuttle.OnEvent<T>(ctx, eventType, …)` | an `interrupt` frame carrying `data.event`; the run pauses until a mounted component fires that event | **yes** — returns the event's payload | [Generative UI → `component-event`](./generative-ui.md#component-event--a-node-waiting-on-its-own-widget) |
+| `mekik.clientTools(ctx, filter?)` | `Shuttle.ClientTools(ctx, tags?, mode?)` | nothing — reads the turn's client tool snapshot | no — returns the definitions | [Client tools](./client-tools.md) |
 | `mekik.callClientTool(ctx, name, params?)` | `Shuttle.CallClientToolAsync<T>(ctx, name, params?)` | a `tool_call` trace + an `interrupt` (or a notify chunk) | **yes** — returns the client's result | [Client tools](./client-tools.md#calling) |
 | `mekik.skills(ctx, filter?)` / `mekik.skillsPrompt(ctx, filter?)` | `Shuttle.Skills(ctx, tags?, source?)` / `Shuttle.SkillsPrompt(…)` | nothing — reads the turn's skill catalog (level 1) | no | [Skills](./skills.md) |
 | `mekik.skillTools(ctx, filter?)` | `Shuttle.SkillTools<TTool>(ctx, tags?, source?)` | nothing — the tools each visible server skill owns (`SkillEntry.tools`), keyed by skill name | no | [Skills](./skills.md#tools-under-a-skill) |
 | `mekik.loadSkill(ctx, name)` | `Shuttle.LoadSkill(ctx, name)` | a `skill` trace; returns the instructions (level 2) | no | [Skills](./skills.md#loading-a-skill--and-the-skill-frame) |
 | `mekik.skillResource(ctx, name, path)` | `Shuttle.SkillResourceAsync(ctx, name, path)` | nothing — reads one bundled file (level 3) | **yes** — returns the file text | [Skills](./skills.md#loading-a-skill--and-the-skill-frame) |
+| `mekik.authClaims(ctx)` / `mekik.claimStrings(claims, key)` | `Shuttle.AuthClaims(ctx)` / `Shuttle.ClaimStrings(claims, key)` | nothing — reads the turn's verified auth claims (`{}` when anonymous) | no | [Reading per-conversation context](#reading-per-conversation-context) |
 
-`text`, `ui`, `event` and `message` are fire-and-forget: they emit and return. `streamText` is the token-by-token convenience — it drives an async delta source through `text` and returns the joined string to hand back as the reply. `tool`, `approve` and `choose` `await` because they wrap ilmek machinery (`ctx.step` / `ctx.StepAsync` for `tool`, `ctx.interrupt` / `ctx.InterruptAsync` for the other two).
+`skillResourcesAvailable(ctx)` / `Shuttle.SkillResourcesAvailable(ctx)` reports whether the turn's skill source can serve level-3 files at all; in TypeScript it is a named export only, not attached to `mekik`.
+
+`text`, `ui`, `event` and `message` are fire-and-forget: they emit and return. `streamText` is the token-by-token convenience — it drives an async delta source through `text` and returns the joined string (while streaming, the streamed bubble is the durable message — don't also return it as the reply; see [Generative UI](./generative-ui.md#stream-the-answer-or-return-it--not-both)). `tool`, `approve`, `choose`, `onEvent` and `callClientTool` `await` because they wrap ilmek machinery (`ctx.step` / `ctx.StepAsync` for `tool`, `ctx.interrupt` / `ctx.InterruptAsync` for the others).
 
 On top of these sit the **typed catalogs**, which bind a component or message name once so the payload is compiler-checked: `mekik.component` / `mekik.genui` for [components](./components.md), `mekik.messageKind` / `mekik.messages` for [messages](./messages.md), and `mekik.action` for chips. They add nothing to the wire — same frames, fewer hand-written object literals.
 
@@ -142,7 +147,7 @@ Shuttle.Event(ctx, "highlight", new Dictionary<string, object?> { ["rowId"] = 3 
 </TabItem>
 </Tabs>
 
-All three carry the same `AIChunk` shape chativa renders. Chunks under one turn share a `streamId`; the mapper assigns each an incrementing `id` and closes the stream at run end. Details and the component contract: [Generative UI](./generative-ui.md).
+All three carry the same `AIChunk` shape chativa renders. Chunks under one turn share a `streamId`; the mapper assigns each chunk an `id` (consecutive `text` deltas share one, so they grow a single bubble) and closes the stream when the run finishes. Details and the component contract: [Generative UI](./generative-ui.md).
 
 ### tool
 
@@ -167,7 +172,7 @@ var order = (Order)(await Shuttle.Tool(ctx, "get_order",
 </TabItem>
 </Tabs>
 
-It emits `tool_call{running}`, runs `fn` inside ilmek's `ctx.step` (which journals the result), then emits `tool_call{completed, result}` — or `tool_call{error}` if `fn` throws. The journaling is the point: on a resume pass the node re-runs, but `fn` returns its recorded value instead of executing again. This is what stops a refund from charging twice. Full story: [Tools](./tools.md).
+It emits `tool_call{running}`, runs `fn` inside ilmek's `ctx.step` (which journals the result), then emits `tool_call{completed, result}` — or `tool_call{error}` if `fn` throws, and rethrows the error, so the node fails unless you catch it. (Inside an agent loop — `runAgent` / `Agent.RunAsync` — a throwing tool becomes an `Error from <tool>: …` observation the model reads instead.) An interrupt thrown by `fn` is rethrown untouched: a pause is not a failure. The journaling is the point: on a resume pass the node re-runs, but `fn` returns its recorded value instead of executing again. This is what stops a refund from charging twice. Full story: [Tools](./tools.md).
 
 ### approve
 
@@ -273,7 +278,7 @@ Shuttle.ToolTrace(ctx, new Dictionary<string, object?> { ["id"] = id, ["name"] =
 </TabItem>
 </Tabs>
 
-`toolTrace` / `Shuttle.ToolTrace` emits one `tool_call` frame (upsert by `id`); `nextToolCallId` / `Shuttle.NextToolCallId` mints a replay-stable id. You rarely call these directly — the [agent integrations](../integrations/overview.md) use them internally. Reach for them only when wrapping a tool runner mekik doesn't already integrate.
+`toolTrace` / `Shuttle.ToolTrace` emits one `tool_call` frame (upsert by `id`); `nextToolCallId` / `Shuttle.NextToolCallId` mints a replay-stable id. `skillTrace` / `Shuttle.SkillTrace` is the same primitive for the `skill` frame behind `loadSkill`. You rarely call these directly — the [agent integrations](../integrations/overview.md) use them internally. Reach for them only when wrapping a tool runner mekik doesn't already integrate.
 
 ## Reading per-conversation context
 
@@ -306,7 +311,7 @@ Helpers *emit*; to *read* per-conversation data (a user id, a locale, auth claim
 </TabItem>
 </Tabs>
 
-`meta.mekik` is your context selector's output; `meta.client` is the allowlisted client meta; `meta.auth` is the auth verdict's claims. See [Concepts → Graph context](../concepts.md#7-graph-context-as-a-parameter).
+`meta.mekik` is your context selector's output; `meta.client` is the client meta your `acceptClientMeta` allowlist kept — the connection's `hello.meta` with the turn frame's own `meta` laid over it per key; `meta.auth` is the auth verdict's claims (read them with `mekik.authClaims(ctx)` / `Shuttle.AuthClaims(ctx)`). `meta.clientTools` and `meta.skills` are there only when those features are on — read them through the [client tool](./client-tools.md) and [skill](./skills.md) helpers. See [Concepts → Graph context](../concepts.md#7-graph-context-as-a-parameter).
 
 ## Where to go next
 

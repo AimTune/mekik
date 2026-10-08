@@ -52,7 +52,10 @@ Anonymous connect is allowed: if the client asserts no `userId`/`conversationId`
 the server mints them and returns them in `welcome`. A client that asserts ids
 adopts whatever the server returns - if the server hands back a _different_
 `conversationId` than requested, the client MUST reset its watermark to 0 (the
-asserted conversation did not exist / was not resumable).
+asserted conversation did not exist / was not resumable). The server adopts an
+asserted `conversationId` only when it exists **and** belongs to the connecting
+`userId`; anything else gets a freshly minted conversation, so one user can
+never join another's.
 
 When an `Authenticator` is configured, connect requires a valid credential and a
 **verified `userId` overrides any client-asserted one** (anti-spoofing). See §7.
@@ -72,13 +75,19 @@ gaps, plus a `timestamp` (ms since epoch) where noted. Transient frames carry
 neither.
 
 ```
-PERSISTENT_FRAME_TYPES = ["text", "tool_call", "genui", "interrupt", "interrupt_resolved"]
+PERSISTENT_FRAME_TYPES = ["text", "tool_call", "skill", "genui", "interrupt", "interrupt_resolved"]
 ```
 
 Persistent frames are appended to the transcript and are what reconnect replays.
-Transient frames (`welcome`, `run`, `error`) are live-only: never stored, never
-replayed. On (re)connect the server sends `welcome`, then replays every persistent
+Transient frames (`welcome`, `genui_components`, `skills`, `run`, `error`) are
+live-only: never stored, never replayed. On (re)connect the server sends
+`welcome` (then the catalog frames, §10.2 / §12.2), then replays every persistent
 frame with `seq > watermark` in order, then resumes live delivery.
+
+A connection that joins while a run is streaming still receives every persistent
+frame **exactly once and in `seq` order**: live frames dispatched while its
+replay tail is being read are held back until the tail is sent, and any the tail
+already carried are dropped.
 
 `PERSISTENT_FRAME_TYPES` is the closed list; **rich message frames** (§4.5) are
 the one open extension to it: a frame whose `type` is a client message-renderer
@@ -100,16 +109,25 @@ envelope is persistent under the same rules.
 | `type`        | shape                                                         | meaning                                                                                                                                                                                                        |
 | ------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `hello`       | `{type, userId?, conversationId?, watermark?, token?, meta?, componentsHash?, tools?, skillsHash?, skills?}` | handshake; may also travel as WS query string. `meta` is a client-supplied context map (see §6); `tools` declares this client's callable tools (§11.1); `skillsHash` is the server skill catalog the client has cached and `skills` declares the client's own skills (§12). |
-| `text`        | `{type, data:{text}, meta?}`                                  | one user turn → starts a run (or is refused `busy`, §5).                                                                                                                                                       |
+| `text`        | `{type, data:{text}, meta?}`                                  | one user turn → starts a run (or is refused `busy` / `interrupted`, §5). `meta` is laid over `hello.meta` per key for this turn (§6).                                                                       |
 | `resume`      | `{type, answers:{[interruptId]: any}}`                        | answer the open interrupts, keyed by thread-scoped interrupt `id`. Must cover **every** open interrupt (ilmek's `resumeKeyed` requires it); a resume that omits one draws `error{incomplete_resume}`.          |
-| `genui_event` | `{type, streamId, eventType, scope?, component?, payload}`     | an interaction from a mounted GenUI component. `scope` is `"component"` (from `component-event`), `"graph"` (from `mekik-event`), or absent (from `data-event`) and decides who receives it — the node parked on `onEvent`, the app's handler, or whichever answers first (§10.4). A `submit` naming an open interrupt is coerced to a `resume` regardless (§4.4). |
+| `genui_event` | `{type, streamId, eventType, scope?, component?, payload?}`    | an interaction from a mounted GenUI component. `scope` is `"component"` (from `component-event`), `"graph"` (from `mekik-event`), or absent (from `data-event`) and decides who receives it — the node parked on `onEvent`, the app's handler, or whichever answers first (§10.4). A `submit` naming an open interrupt is coerced to a `resume` regardless (§4.4). |
 | `client_tools` | `{type, tools: ClientToolDefinition[]}`                      | replace this connection's declared client tools (§11.1). The list is the connection's whole new set; `[]` withdraws every tool. Inert unless the server opted in.                                              |
 | `client_skills` | `{type, skills: ClientSkillDefinition[]}`                   | replace this connection's declared client skills (§12.4). The list is the connection's whole new set; `[]` withdraws every skill. Inert unless the server opted in.                                          |
 | `abort`       | `{type}`                                                      | cancel the in-flight run. The graph stops at the next superstep boundary; the last checkpoint stands, so the thread stays resumable.                                                                           |
 
-Malformed frames (bad JSON, missing `type`, unknown required fields) draw an
-`error` frame `{code:"bad_request"}` and are otherwise ignored (the connection
-stays open).
+Malformed frames (bad JSON, a non-object, a missing or unknown `type`, a known
+`type` whose required field is missing or of the wrong type) draw an `error`
+frame `{code:"bad_request"}` and are otherwise ignored (the connection stays
+open). An unknown client frame `type` is therefore ignored as the preamble
+requires, but not silently: the server says so with `bad_request`. A frame on a
+connection that never completed its handshake, or already disconnected, draws
+`error{no_session}`. A second `hello` mid-session is ignored.
+
+The `hello` is client input like any other: a field of the wrong type (a numeric
+`userId`, an object `conversationId`, a non-numeric `watermark`, a non-object
+`meta`) is ignored as if absent, whether it came in the frame or the query
+string — a bad watermark never silently suppresses the replay.
 
 ### 3.2 Server → client
 
@@ -129,8 +147,16 @@ stays open).
 | `error`              | no         | `{type, data:{code, message}}`                                                                                         |
 
 `PendingView` (re-announced in `welcome.data.pending` so a reconnecting UI can
-re-render open approval forms) = `{id, data:{payload, ui?, actions?}}` - the same
-shape as an `interrupt` frame's `id` + `data`, minus `seq`/`timestamp`.
+re-render open approval forms) = `{id, data:{payload, ui?, actions?, event?, tool?}}` -
+the same shape as an `interrupt` frame's `id` + `data`, minus `seq`.
+
+**Error codes.** An `error` frame goes to the one connection that caused it.
+`bad_request` and `no_session` (§3.1); `busy` — a run is already in flight, or
+another node holds the turn (§5); `interrupted` — a new turn while the thread is
+parked (§5); `not_interrupted` — a `resume` with no open interrupt;
+`incomplete_resume` — a `resume` that misses an open interrupt (§4.4);
+`unauthorized` — followed by a close with 4401 (§7). The TypeScript WebSocket
+transport also reports a handler that threw as `internal`.
 
 `AIChunk` (identical to chativa's `AIChunk`, so the widget renders it unchanged):
 
@@ -177,19 +203,23 @@ ilmek `IlmekEvent` variants (from the ilmek repo — `ts/packages/core/src/engin
 | `custom`                                                                                  | `isToken(payload)` (ilmek `{type:"token",text,meta?}`) | `genui` chunk `{type:"text", content: payload.text, id: <text-run id>}` under the turn stream, `done:false`. Consecutive text deltas reuse the open text-run id, so a client renders one growing bubble instead of one per token. |
 | `custom`                                                                                  | `payload.$mekik == "genui"`                           | `genui` frame with `chunk = payload.chunk` (an `AIChunk`), `done:false`. If `chunk.id` is absent: a `text` chunk joins the open text run (shared id); a `ui`/`event` chunk closes that run and takes a fresh `nextChunkId`.       |
 | `custom`                                                                                  | `payload.$mekik == "tool"`                            | `tool_call` frame `{data: payload.call}` (upsert by `call.id`)                                                                                                                                                                   |
+| `custom`                                                                                  | `payload.$mekik == "skill"`                           | `skill` frame `{data: payload.use}` (upsert by `use.id`, §12.5)                                                                                                                                                                  |
+| `custom`                                                                                  | `payload.$mekik == "message"`                         | a rich message frame `{type: payload.messageType, id: payload.id ?? <minted>, from:"bot", data: payload.data, timestamp}` (§4.5); dropped when `messageType` is a reserved frame type other than `"text"`                       |
 | `custom`                                                                                  | otherwise                                              | nothing (reserved for an extension hook, §8)                                                                                                                                                                                     |
 | `node_start`, `node_end`, `node_error`, `node_retry`, `step_start`, `state`, `checkpoint` | -                                                      | nothing in v1 (a future `debug` stream mode may surface them)                                                                                                                                                                    |
 | `interrupt`                                                                               | for each `p` in `pending`                              | one `interrupt` frame `{id: p.id, data: unwrapInterrupt(p.payload)}`                                                                                                                                                             |
 | `run_end`                                                                                 | `status == "interrupted"`                              | `run{interrupted}`                                                                                                                                                                                                               |
 | `run_end`                                                                                 | `status == "done"`                                     | close the turn stream if open (`genui` `{done:true, chunk:{type:"event", name:"stream_done", id:nextChunkId}}`); then, if the run produced a reply (see §4.3), a `text` `{from:"bot", data:{text: reply}}`; then `run{finished}` |
-| `run_end`                                                                                 | `status == "error"`                                    | `text` `{from:"bot", data:{text:"⚠️ " + message}}` then `run{error}`                                                                                                                                                             |
+| `run_end`                                                                                 | `status == "error"`                                    | `text` `{from:"bot", data:{text:"⚠️ " + message}}` then `run{error}`; `message` is `<node>: <error message>` per recorded error, joined by `; ` (`the run failed` when none)                                                    |
 | `run_end`                                                                                 | `status == "aborted"`                                  | `run{aborted}` (no text; the last checkpoint stands)                                                                                                                                                                             |
 
 Order within a run is the order ilmek yields events; the mapper preserves it. The
 `run{interrupted}`/`run{finished}`/… transient frame is always the last frame of
 its run. If the event stream throws after `run_start` instead of yielding a
 `run_end` (ilmek's recursion limit, a failing checkpointer), the engine closes
-the run as `run_end{error}` would: a `⚠️ <message>` bot `text`, then `run{error}`.
+the run as `run_end{error}` would: a `⚠️ <message>` bot `text` carrying the
+exception's message, then `run{error}`. (A stream that throws before `run_start`
+has put nothing on the wire; the failure propagates to the caller instead.)
 
 ### 4.2 Interrupt payload wrapping (`unwrapInterrupt`)
 
@@ -240,9 +270,12 @@ At `run_end{done}` the adapter selects the run's reply from final channel state
 via the configured reply selector (`MekikOptions.reply`, §6). If it returns a
 non-empty string, the mapper emits one persistent `bot` `text` frame carrying it;
 if it returns `undefined`/empty, no text frame is emitted (the turn's genui/tool
-frames were the whole answer). Streaming tokens (`ctx.emitToken`) are **not** the
-persistent reply - they are transient `genui` text chunks; the consolidated
-`text` frame at run end is the durable record replay will show.
+frames were the whole answer). Streaming tokens (`ctx.emitToken`, `mekik.text`)
+are **not** the reply - they are `genui` text chunks of the turn's stream
+(persisted and replayed like every `genui` frame, §2), while the consolidated
+`text` frame at run end is a separate message bubble. A node that streams its
+whole answer therefore returns no reply, or the client shows the answer twice
+(`runAgent` / `Agent.RunAsync` with streaming on do exactly that).
 
 ### 4.4 Resume routing
 
@@ -324,18 +357,25 @@ One run per conversation at a time, guarded by a per-conversation turn lock:
 interrupt(s) first"}` - mirroring ilmek's `ResumeError`, a plain new turn would
    drop the pause. The client must send `resume` instead.
 
-The turn lock is process-local; horizontal scale (a distributed lock + cross-node
-fan-out) is out of scope for v1 and requires sticky routing per `conversationId`.
+The turn lock has two layers: a process-local one, then a cross-node lease from
+the `TurnLock` / `ITurnLock` port (`MekikOptions.turnLock`; default
+`LocalTurnLock`, which always grants). A lease another node holds is answered
+`error{busy}` exactly like a local run in flight. Cross-node fan-out goes through
+the `Backplane` / `IBackplane` port (default `NoopBackplane`). `@mekik/redis` /
+`Mekik.Redis` ship Redis implementations of both; see `docs/SCALING.md`. The
+local lock is always freed when the run ends, even when releasing the lease
+fails.
 
 ---
 
 ## 6. Graph context as a parameter (§6)
 
-The graph run receives context from three merged sources, placed on ilmek
-`RunOptions.meta`:
+The graph run receives its context on ilmek `RunOptions.meta`, under these keys
+(each present only when it has something to carry):
 
 - `meta.mekik` - the server-computed context: `MekikOptions.context(conv, turn)`
-  evaluated per turn. `conv = {conversationId, userId}`, `turn = {text, meta}`.
+  evaluated per turn. `conv = {conversationId, userId}`, `turn = {text, meta}`
+  (a `resume` or a component-driven turn has `text: ""` and no `meta`).
 - `meta.client` - the allowlisted subset of the client's `hello.meta` / frame
   `meta` (the server decides via `MekikOptions.acceptClientMeta`; default: drop
   everything). The allowlist sees the connection's `hello.meta` with the turn
@@ -358,11 +398,13 @@ ambient storage is needed (ilmek already threads `ctx` everywhere):
 | helper                                                                | effect                                                                                      |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `mekik.text(ctx, content, {id?})` / `Shuttle.Text`                   | emit a `genui` text chunk (streaming prose)                                                 |
+| `mekik.streamText(ctx, deltas, select?)` / `Shuttle.StreamText`      | emit every delta of an async stream as a text chunk; returns the accumulated text           |
 | `mekik.ui(ctx, component, props, {id?})` / `Shuttle.Ui`              | emit a `genui` ui chunk (mount a component)                                                 |
 | `mekik.mount(ctx, component, props, {id?})` / `Shuttle.Mount`        | mount a ui chunk and return a handle whose `update(props)` re-emits the **same** chunk id  |
 | `mekik.event(ctx, name, payload?, {id?})` / `Shuttle.Event`          | emit a `genui` event chunk                                                                  |
 | `mekik.tool(ctx, name, params, fn)` / `Shuttle.Tool`                 | `ctx.step(name, fn)` (exactly-once) **and** emit `tool_call` running→completed/error traces |
 | `mekik.approve(ctx, payload, {ui?, actions?})` / `Shuttle.Approve`   | `ctx.interrupt` with `$mekik:{ui,actions}` attached                                        |
+| `mekik.onEvent(ctx, eventType, {payload?, ui?, key?})` / `Shuttle.OnEvent` | park until a mounted component sends that event (§10.4.1)                            |
 | `mekik.action(label, value?)` / `Shuttle.Action`                     | build one `MessageAction` chip (typed constructor; no hand-written JSON)                    |
 | `mekik.choose(ctx, payload, options, {ui?, key?})` / `Shuttle.Choose` | `approve` sugar: options become `actions` chips; resolves to the picked option's `value` (its label string when it has none) |
 | `mekik.message(ctx, type, data, {id?})` / `Shuttle.Message`          | emit a rich message frame (§4.5)                                                            |
@@ -370,6 +412,7 @@ ambient storage is needed (ilmek already threads `ctx` everywhere):
 | `mekik.callClientTool(ctx, name, params?, {key?})` / `Shuttle.CallClientToolAsync` | invoke a client tool — a durable interrupt round-trip, or a fire-and-forget chunk for a `notify` tool (§11.3) |
 | `mekik.skills(ctx, {tags?, source?})` / `Shuttle.Skills`            | the turn's skill summaries — level 1, filtered by tag/origin (§12.3)                        |
 | `mekik.skillsPrompt(ctx, filter?, {intro?})` / `Shuttle.SkillsPrompt` | the `<available_skills>` block for a system prompt; `""` when there is nothing to list (§12.3) |
+| `mekik.skillTools(ctx, filter?)` / `Shuttle.SkillTools<TTool>`      | the tools the visible server skills own, by skill name — no trace (§12.6)                   |
 | `mekik.loadSkill(ctx, name)` / `Shuttle.LoadSkill`                  | one skill's instructions — level 2 — **and** a `skill` trace (§12.5); unknown name ⇒ error trace + throw |
 | `mekik.skillResource(ctx, name, path)` / `Shuttle.SkillResourceAsync` | one bundled file — level 3 — when the source has files behind it (§12.5)                    |
 | `mekik.component<P>(name)` / `GenUI.*`, `GenUI.Names.*`              | bind a GenUI component name once, typed — chativa's built-ins are `mekik.genui.*`          |
@@ -407,12 +450,15 @@ refresh/expiry, no RBAC).
 ## 8. Extensibility & non-goals (§8)
 
 - **Custom event mapping.** `custom` payloads the mapper doesn't recognise are
-  dropped by default. `MekikOptions.onCustom(payload, emit)` MAY map them to
-  extra frames (kept out of the core mapping so the golden fixtures stay closed).
-- **Non-goals (v1):** horizontal scale / distributed turn lock; transports other
-  than WebSocket; durable (Redis/Postgres) history stores (ports exist,
-  in-memory only ships); a `debug` stream mode surfacing node/state/checkpoint
-  frames; subgraph `ns` surfacing; Go/Python ports.
+  dropped. An `onCustom(payload, emit)` hook that maps them to extra frames is
+  **reserved** for a later version (kept out of the core mapping so the golden
+  fixtures stay closed); no `MekikOptions` field exists for it yet.
+- **Non-goals (v1):** transports other than WebSocket for the chat wire (§13
+  and §14 are separate doors, not transports of `mekik/1`); durable
+  (Redis/Postgres) history and conversation stores (the ports exist, only the
+  in-memory ones ship); a `debug` stream mode surfacing node/state/checkpoint
+  frames; subgraph `ns` surfacing; Go/Python ports. Horizontal scale is no
+  longer a non-goal: the turn-lock and backplane ports of §5 carry it.
 
 ---
 
@@ -423,19 +469,26 @@ The two implementations are held to the same wire by the golden fixtures in
 `eventToFrames` and compare canonical output) plus the scenario list in
 `conformance/README.md`. Canonical JSON = UTF-8, object keys sorted
 ascending, no insignificant whitespace, numbers in shortest round-trip form.
+Key order is exactly what JavaScript's `JSON.stringify` produces for an object
+built in that sorted order: integer-like keys (array indices such as `"9"`,
+`"10"`) come first in numeric order, then every other key in ascending UTF-16
+code-unit order. Strings use `JSON.stringify`'s escaping (non-ASCII, emoji and
+U+2028/U+2029 stay raw; control characters are escaped). The edge cases are
+pinned by `conformance/hashes/catalogs.json`.
 
 Naming (extends MODEL.md §11):
 
 | concept           | TypeScript                          | .NET                                             |
 | ----------------- | ----------------------------------- | ------------------------------------------------ |
 | app               | `mekik(options)` → `MekikApp`     | `new MekikApp(MekikOptions)`                   |
-| serve             | `serveWs(app, {port, path})`        | `app.MapMekik(path)` on `IEndpointRouteBuilder` |
+| serve             | `serveWs(app, {port, path})` (`@mekik/ws`) | `endpoints.MapMekik(path, app)` on `IEndpointRouteBuilder` (`Mekik.AspNetCore`) |
 | engine            | `ConversationEngine`                | `ConversationEngine`                             |
 | event→frame       | `eventToFrames` / `TurnMapper`      | `Mapper.EventToFrames` / `TurnMapper`             |
 | helpers           | `mekik.text/ui/event/tool/approve` | `Shuttle.Text/Ui/Event/Tool/Approve`              |
 | history port      | `HistoryStore`                      | `IHistoryStore`                                  |
 | conversation port | `ConversationStore`                 | `IConversationStore`                             |
 | auth port         | `Authenticator`                     | `IAuthenticator`                                 |
+| scale ports       | `TurnLock` / `Backplane`            | `ITurnLock` / `IBackplane`                       |
 | client tools read | `mekik.clientTools`                 | `Shuttle.ClientTools`                            |
 | client tool call  | `mekik.callClientTool`              | `Shuttle.CallClientToolAsync`                    |
 | skills read       | `mekik.skills` / `mekik.skillsPrompt` | `Shuttle.Skills` / `Shuttle.SkillsPrompt`      |
@@ -613,7 +666,7 @@ mekik({
 
 It is a mapper, not a place to do work - the same role `input` plays for a `text`
 turn. Side effects belong in the node the turn reaches, where the journal makes them
-exactly-once (§9). The turn it starts obeys §5: one at a time (`error{busy}`), never
+exactly-once (§6). The turn it starts obeys §5: one at a time (`error{busy}`), never
 over a pause (`error{interrupted}`). It writes no `text` frame on the user's behalf -
 a click is not an utterance, and the transcript already carries the widget it came
 from.
@@ -660,7 +713,7 @@ through states it already rendered. Use literal chunk ids across a pause for the
 same reason: an id minted by a counter drifts once its call site stops running.
 
 ```ts
-const phase = (ctx, name, emit) =>
+const phase = (ctx: Context<any>, name: string, emit: () => void) =>
     ctx.step(name, async () => { await sleep(1800); emit(); return true; });
 
 await phase(ctx, "packing",    () => card(ctx, props("Preparing"),  { id: "card-1" }));
@@ -1022,8 +1075,8 @@ the run, and the `load_skill` observation appends `Tools now available from
 skill <name>: a, b.` `runAgent({ skillTools })` / `AgentRunOptions.SkillTools`
 add tools keyed by skill name (for tools built per request), merged after the
 entry's own. A call to such a tool before its skill is loaded is answered with
-an observation naming the skill to load (every skill holding it, in catalog
-order, when there are several), and the tool does not run. A skill the
+an observation naming the skill to load (every skill holding it when there
+are several), and the tool does not run. A skill the
 node's filter hides never unlocks; a failed load (`status:"error"`) unlocks
 nothing. A name both always-on and skill-held, or two different tools sharing a
 name, fails the run. The tools themselves are ordinary server tools — wrapped
@@ -1095,11 +1148,13 @@ exposes an app as **two tools**:
 connection as user `userId` (default `"mcp"`) with the given `conversationId`
 (an unknown id starts a fresh conversation, per §1 adoption; the result reports
 the id actually used), sends the frame, collects the turn's frames until the
-engine returns, and disconnects. Conversations are ordinary: persisted, shared
+engine returns, and disconnects — `driveTurn` (`@mekik/core`) /
+`MekikMcpServer.DriveTurnAsync`. Conversations are ordinary: persisted, shared
 with the WebSocket side, resumable from either door.
 
 **The result** (MCP `CallToolResult`) is the pure reduction of the turn's frames
-— `summarize` / `Summarize`, pinned identically in both suites:
+— `summarizeMcpTurn` (`@mekik/core`) / `MekikMcpServer.Summarize`, pinned
+identically in both suites:
 
 ```jsonc
 { "content": [{ "type": "text", "text": "<see below>" }],
@@ -1192,7 +1247,8 @@ Served at `/.well-known/agent-card.json`:
 **One conversation is one `contextId`; one turn is one task.** `message/send`
 takes `{message: {role, parts, messageId?, taskId?, contextId?}}` — `role` MUST
 be `user` or `agent`, `parts` a non-empty list of text, data or file parts
-(else `-32602`); a message with no text part is `-32005`.
+(else `-32602`); a message that starts a task with no text (no text part, or
+only whitespace) is `-32005`.
 
 - **No `taskId`** — a new task: connect as user `userId` (default `"a2a"`) on
   the conversation `contextId` names (fresh when absent or unknown; the task
@@ -1207,10 +1263,10 @@ The task is built from the turn's summary (§13.2, `summarize`):
 | turn status | `status.state` | `status.message` | artifacts |
 | --- | --- | --- | --- |
 | `finished` | `completed` | none | + `{artifactId, name: "reply", parts: [{kind: "text", text: reply}]}` when the reply is non-empty |
-| `interrupted` | `input-required` | agent message: a text part describing each pending interrupt and how to answer, plus a data part `{pending: […]}` | unchanged |
+| `interrupted` | `input-required` | agent message: a text part describing each pending interrupt and how to answer, plus a data part `{pending: […]}` | + the `reply` artifact when the turn streamed text before pausing |
 | `error` | `failed` | agent message: the error text | unchanged |
 | `refused` | `rejected` | agent message: the engine's `<code>: <message>` | unchanged |
-| `aborted` | `canceled` | agent message: `The run was aborted; the conversation can be continued.` | unchanged |
+| `aborted` | `canceled` | agent message: `The run was aborted; the conversation can be continued.` | + the `reply` artifact when the turn streamed text before the abort |
 
 Every task carries `kind: "task"`, `id`, `contextId` (the conversation),
 `status.timestamp` (ISO 8601), `artifacts` (accumulated across the task's

@@ -6,7 +6,7 @@ description: Expose a mekik graph as Model Context Protocol tools — one turn p
 
 # Serving a graph as MCP tools
 
-A mekik app already speaks to humans over WebSocket. **`MekikMcpServer`** lets it speak to *other agents* too: the graph becomes a pair of [Model Context Protocol](https://modelcontextprotocol.io) tools that any MCP client — Claude Desktop, an IDE, another ilmek graph via [`@ilmek/mcp`](https://ilmek.aimtune.dev/mcp) — can call. The wire rules are normative in [`PROTOCOL.md §13`](https://github.com/AimTune/mekik/blob/main/PROTOCOL.md); this page is the serving guide.
+A mekik app already speaks to humans over WebSocket. **`MekikMcpServer`** lets it speak to *other agents* too: the graph becomes a pair of [Model Context Protocol](https://modelcontextprotocol.io) tools that any MCP client — Claude Desktop, an IDE, another ilmek graph via [`@ilmek/mcp`](https://ilmek.aimtune.dev/mcp) — can call. The wire rules are normative in [`PROTOCOL.md §13`](https://github.com/AimTune/mekik/blob/main/PROTOCOL.md#13-mcp-13); this page is the serving guide.
 
 The mapping is deliberately small: **one turn == one `tools/call`**. A finished run returns the reply; a run that paused for a human returns the open interrupts and asks the caller to answer them through a second tool — so [human-in-the-loop](../authoring/human-in-the-loop.md) survives the hop into another agent's toolbox.
 
@@ -28,13 +28,13 @@ const mcp = new MekikMcpServer(app, {
 serveMcp(mcp, { port: 8900, path: "/mcp" });          // Streamable HTTP at http://localhost:8900/mcp
 ```
 
-`mcpRequestHandler(mcp)` is the bare `(req, res)` handler for mounting on an existing server or framework; `serveMcp(mcp, { server })` attaches to an `http.Server` you already own.
+`mcpRequestHandler(mcp)` is the bare `(req, res)` handler for mounting on an existing server or framework; `serveMcp(mcp, { server })` attaches to an `http.Server` you already own. `path` defaults to `/mcp`; `maxBodyBytes` (default 1 MiB) caps the request body.
 
 </TabItem>
 <TabItem value="dotnet" label=".NET">
 
 ```csharp
-var app = new MekikApp(new MekikOptions { Graph = g, Reply = s => s.GetValueOrDefault("reply") as string });
+var app = new MekikApp(new MekikOptions { Graph = graph, Reply = s => s.GetValueOrDefault("reply") as string });
 var mcp = new MekikMcpServer(app, new McpServerOptions
 {
     Name = "support_desk",                              // the tool name a calling agent invokes
@@ -79,7 +79,7 @@ Both return the same result shape:
 }
 ```
 
-`content[0].text` is what a calling model reads: the reply when the run finished, the error text (with `isError: true`) when the graph failed, and — when the run paused — a description of each open interrupt and the instruction to call the resume tool:
+`content[0].text` is what a calling model reads: the reply when the run finished, the error text (with `isError: true`) when the graph failed — a run whose event stream threw included, since the engine still closes it with the `⚠️` text and `run{error}` — and — when the run paused — a description of each open interrupt and the instruction to call the resume tool:
 
 ```text
 The agent paused and needs input before it can continue:

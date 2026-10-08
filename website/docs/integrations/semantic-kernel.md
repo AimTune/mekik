@@ -15,7 +15,7 @@ using Mekik.SemanticKernel;
 
 .Node("agent", async (State state, IContext ctx) =>
 {
-    using var _ = kernel.UseMekik(ctx, new()
+    using var _ = kernel.UseMekik(ctx, new Dictionary<string, ToolPolicy>
     {
         ["get_order"]       = new ToolPolicy(),                               // shown
         ["refund_payment"]  = new ToolPolicy { Approve = new ApproveSpec() }, // ask the human first
@@ -48,7 +48,7 @@ Disposing removes the filter. This is important because a `Kernel` is usually **
 Policies are matched by **plugin-qualified name** (`Plugin.Function`) first, then the bare function name — specific where two plugins share a name, terse everywhere else:
 
 ```csharp
-new()
+new Dictionary<string, ToolPolicy>
 {
     ["Billing.Charge"] = new ToolPolicy { Approve = new ApproveSpec() }, // this plugin's Charge
     ["Charge"]         = new ToolPolicy { Show = false },                // any other Charge
@@ -66,7 +66,7 @@ When a human declines an `approve` function, the filter **short-circuits**: `nex
 - `Redact` masks only what is *surfaced*; the function still receives real values.
 - Journaled results must survive a serializer round-trip, like any ilmek step.
 - Since `KernelFunction` derives from `AIFunction`, `Mekik.Agents` *can* also wrap SK functions directly — but wrapping changes the type, so the kernel's plugin collection would no longer accept them. **Prefer this filter for Semantic Kernel.**
-- [**Client tools**](../authoring/client-tools.md) work with SK too: `ClientToolFunctions.Wrap(ctx)` returns plain `AIFunction`s, and `KernelFunctionFactory.CreateFromMethod` / `kernel.Plugins.AddFromFunctions` can host them alongside your plugins — or a node can call one directly with `Shuttle.CallClientToolAsync` outside the kernel entirely. The filter does not need to see them: the wrapper already emits its own `tool_call` trace and journals through the interrupt machinery.
+- [**Client tools**](../authoring/client-tools.md) work with SK too: `ClientToolFunctions.Wrap(ctx)` returns plain `AIFunction`s, which a kernel hosts alongside your plugins with `kernel.Plugins.AddFromFunctions("client", ClientToolFunctions.Wrap(ctx).Select(f => f.AsKernelFunction()))` — or a node can call one directly with `Shuttle.CallClientToolAsync` outside the kernel entirely. Client tools already emit their own `tool_call` trace and park through the interrupt machinery, so when they run under `UseMekik` give them a `Show = false` policy (keyed `client.<name>` or by bare name) to keep each call to one trace.
 
 ## Where to go next
 

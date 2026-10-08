@@ -73,9 +73,26 @@ interface MekikOptions {
   /** Allowlist client-supplied meta into ctx.meta.client. Default: drop everything. */
   acceptClientMeta?: (meta: Record<string, unknown>) => Record<string, unknown> | undefined;
 
+  /** Accept client-declared tools into ctx.meta.clientTools (§11). Default: off —
+   *  `true` accepts every well-formed declaration, a function filters them. */
+  clientTools?: ClientToolsPolicy;
+
+  /** The skills this server offers its nodes (§12): a SkillSource (e.g. @ilmek/skills'
+   *  SkillCatalog) or a plain list of SkillEntry. Default: none. */
+  skills?: SkillsInput;
+
+  /** Accept client-declared skills into the turn's skill set (§12.4). Default: off. */
+  clientSkills?: ClientSkillsPolicy;
+
   /** A one-time bot message when a fresh conversation first connects — text,
    *  a described rich message, or a list of both. */
   greeting?: (conv: { conversationId: string; userId: string }) => Greeting | undefined;
+
+  /** Components this server defines itself, shipped to the client on connect (§10). */
+  components?: readonly ComponentSource[];
+
+  /** Turn a component interaction into a graph input update (§10.4). Unset: clicks are inert. */
+  onGenUiEvent?: (event: GenUiEvent) => Record<string, unknown> | undefined;
 
   /** Enable connect-time auth. */
   authenticator?: Authenticator;
@@ -84,7 +101,7 @@ interface MekikOptions {
   conversations?: ConversationStore;
   turnLock?: TurnLock;          // cross-node single-writer lease (fleet); default local
   backplane?: Backplane;        // cross-node fan-out (fleet); default no-op
-  recursionLimit?: number;      // ilmek superstep budget per run
+  recursionLimit?: number;      // ilmek superstep budget per run (default 25)
   minter?: IdMinter;            // override the wire id minter (tests inject a deterministic one)
   now?: () => number;           // override the clock (tests inject a fixed one)
 }
@@ -114,16 +131,33 @@ public sealed record MekikOptions
     /// <summary>Allowlist client-supplied meta into ctx.Meta["client"]. Default: drop everything.</summary>
     public Func<IReadOnlyDictionary<string, object?>, IReadOnlyDictionary<string, object?>?>? AcceptClientMeta { get; init; }
 
+    /// <summary>Accept client-declared tools into ctx.Meta["clientTools"] (§11). Default: off —
+    /// ClientTools.AcceptAll accepts every well-formed declaration, a delegate filters them.</summary>
+    public ClientToolsPolicy? ClientTools { get; init; }
+
+    /// <summary>The skills this server offers its nodes (§12): SkillSources.Inline(…) or a
+    /// source over Ilmek.Skills' catalog. Default: none.</summary>
+    public ISkillSource? Skills { get; init; }
+
+    /// <summary>Accept client-declared skills into the turn's skill set (§12.4). Default: off.</summary>
+    public ClientSkillsPolicy? ClientSkills { get; init; }
+
     /// <summary>A one-time bot message when a fresh conversation first connects — a string,
     /// a described rich message (Messages.…Spec), or a list of both.</summary>
     public Func<(string ConversationId, string UserId), object?>? Greeting { get; init; }
+
+    /// <summary>Components this server defines itself (ComponentSpec, GenUiComponent, or its Type) (§10).</summary>
+    public IReadOnlyList<object>? Components { get; init; }
+
+    /// <summary>Turn a component interaction into a graph input update (§10.4). Unset: clicks are inert.</summary>
+    public Func<GenUiEvent, IReadOnlyDictionary<string, object?>?>? OnGenUiEvent { get; init; }
 
     public IAuthenticator? Authenticator { get; init; }
     public IHistoryStore? History { get; init; }
     public IConversationStore? Conversations { get; init; }
     public ITurnLock? TurnLock { get; init; }   // cross-node single-writer lease (fleet); default local
     public IBackplane? Backplane { get; init; }  // cross-node fan-out (fleet); default no-op
-    public int? RecursionLimit { get; init; }
+    public int? RecursionLimit { get; init; }  // ilmek superstep budget per run (default 25)
     public IIdMinter? Minter { get; init; }
     public Func<long>? Now { get; init; }
 }
@@ -136,21 +170,23 @@ The `MekikApp` it returns exposes three methods a transport calls — `connect(c
 
 `reply`, `input`, `context`, and `greeting` are the four hooks that parameterize a generic graph for your app without the graph knowing anything about mekik. `context` in particular is how per-conversation data (a user id, a locale, a tenant) reaches nodes via `ctx.meta.mekik` — see [Graph context](#7-graph-context-as-a-parameter).
 
+The rest are features you switch on when you need them: [`components`](./authoring/components.md) and `onGenUiEvent` (server-defined widgets and what their clicks do), [`skills`](./authoring/skills.md) (a catalog the model loads on demand — a skill can own the tools its instructions use), and the two client opt-ins, [`clientTools`](./authoring/client-tools.md) and `clientSkills`. Client-declared tools and skills are text a model will read, so both are **off by default**, like `acceptClientMeta`. `turnLock` and `backplane` are for running a fleet — see [Horizontal scale](./scaling.mdx).
+
 ## 4. Frames — the wire vocabulary
 
 A **frame** is a JSON object with a `type` discriminator. That's the entire wire. Frames split two ways.
 
-**By direction.** Client→server frames are `hello`, `text`, `resume`, `genui_event`, `abort`. Server→client frames are `welcome`, `text`, `tool_call`, `genui`, `interrupt`, `interrupt_resolved`, `run`, `error` — plus [rich message frames](./authoring/messages.md), whose `type` is a client message-renderer name rather than a protocol-owned one.
+**By direction.** Client→server frames are `hello`, `text`, `resume`, `genui_event`, `client_tools`, `client_skills`, `abort`. Server→client frames are `welcome`, `text`, `tool_call`, `skill`, `genui`, `interrupt`, `interrupt_resolved`, `genui_components`, `skills`, `run`, `error` — plus [rich message frames](./authoring/messages.md), whose `type` is a client message-renderer name rather than a protocol-owned one.
 
 **By persistence** — this is the important axis:
 
 ```
-PERSISTENT_FRAME_TYPES = ["text", "tool_call", "genui", "interrupt", "interrupt_resolved"]
+PERSISTENT_FRAME_TYPES = ["text", "tool_call", "skill", "genui", "interrupt", "interrupt_resolved"]
                        + any rich message frame (an open, renderer-named type)
 ```
 
 - **Persistent** frames carry a per-conversation, strictly monotonic `seq`. They are appended to the transcript and are exactly what a reconnecting client replays. They *are* the durable record of the conversation.
-- **Transient** frames (`welcome`, `run`, `error`) are live-only: never stored, never replayed. A `run{started}` you missed while offline is meaningless after the fact; a `text` bubble is not.
+- **Transient** frames (`welcome`, `genui_components`, `skills`, `run`, `error`) are live-only: never stored, never replayed. A `run{started}` you missed while offline is meaningless after the fact; a `text` bubble is not.
 
 Getting this split right is what makes reconnect work: the server sends `welcome`, replays every persistent frame with `seq > watermark`, then resumes live delivery. The full catalogue is [Protocol → Frames](./protocol/frames.md).
 
@@ -166,12 +202,16 @@ The mapping is small enough to hold in your head. A sketch:
 | `custom` with a token payload | a streaming `genui` text chunk |
 | `custom` tagged `$mekik: "genui"` | a `genui` frame carrying the `AIChunk` |
 | `custom` tagged `$mekik: "tool"` | a `tool_call` frame (upsert by `id`) |
+| `custom` tagged `$mekik: "skill"` | a `skill` frame — a skill load (upsert by `id`) |
+| `custom` tagged `$mekik: "message"` | a rich message frame |
 | `interrupt` | one `interrupt` frame per pending pause |
 | `run_end{done}` | close the GenUI stream, emit the consolidated `bot` `text`, then `run{finished}` |
 | `run_end{interrupted \| error \| aborted}` | `run{interrupted}` / `⚠️ text` + `run{error}` / `run{aborted}` |
 | node/step/state/checkpoint events | nothing in v1 (reserved for a future `debug` mode) |
 
-The authoring helpers exist precisely so you never emit those `custom` payloads by hand — `mekik.ui` produces the `$mekik: "genui"` payload, `mekik.tool` the `$mekik: "tool"` one. The full table with conditions is [Event mapping](./protocol/event-mapping.md).
+If the event stream itself throws after `run_start` (ilmek's recursion limit, a failing checkpointer), the engine closes the turn exactly as `run_end{error}` would: a `⚠️` bot `text`, then `run{error}`.
+
+The authoring helpers exist precisely so you never emit those `custom` payloads by hand — `mekik.ui` produces the `$mekik: "genui"` payload, `mekik.tool` the `$mekik: "tool"` one, `mekik.loadSkill` the `$mekik: "skill"` one. The full table with conditions is [Event mapping](./protocol/event-mapping.md).
 
 ## 6. The engine — connections, conversations, the turn lock
 
@@ -181,34 +221,40 @@ The authoring helpers exist precisely so you never emit those `custom` payloads 
 
 **Fan-out.** Every persistent frame is broadcast to every connection on the conversation. Your own `text` turn is *not* echoed to the connection that sent it, but it *is* delivered to the conversation's other connections and written to the transcript — so a second tab sees what the first typed, and reconnect replay is complete.
 
-**The turn lock.** One run per conversation at a time. A `text` that arrives while a run is in flight is refused with `error{busy}` to that sender only; no second run starts. This is process-local — horizontal scale needs a distributed lock and is out of scope for v1.
+**The turn lock.** One run per conversation at a time. A `text` that arrives while a run is in flight is refused with `error{busy}` to that sender only; no second run starts. By default the lock is process-local; a fleet adds a cross-node lease through the `turnLock` option — see [Horizontal scale](./scaling.mdx).
 
 **Resume routing.** A `resume` frame is routed by the thread-scoped interrupt `id`, never by ilmek's task-scoped `key` — answering by `key` would silently collapse concurrent pauses. The engine emits an `interrupt_resolved` for each answered id, then streams the continuation run. See [Engine](./engine.md).
 
 ## 7. Graph context as a parameter
 
-A node reads context via ilmek's `ctx.meta`. mekik populates three merged sources there so a generic graph can be parameterized per conversation:
+A node reads context via ilmek's `ctx.meta`. mekik populates three merged sources there so a generic graph can be parameterized per conversation, plus the turn's opt-in toolbox and skill set:
 
 | `ctx.meta.*` | Source | Set by |
 |---|---|---|
 | `meta.mekik` | server-computed per turn | `MekikOptions.context(conv, turn)` |
 | `meta.client` | allowlisted subset of the connection's `hello.meta` with the turn frame's `meta` laid over it per key | `MekikOptions.acceptClientMeta` (default: drop everything) |
 | `meta.auth` | verified claims from the `Authenticator` | the auth port, on success |
+| `meta.clientTools` | the turn's snapshot of client-declared tools (§11.2) | `MekikOptions.clientTools` (default: off) |
+| `meta.skills` | the turn's skill set — server catalog plus accepted client skills (§12.3) | `MekikOptions.skills` / `clientSkills` |
+
+Read the last two through the helpers (`mekik.clientTools`, `mekik.skills`, `mekik.loadSkill`, …), not directly. A `resume` or a component-driven turn carries no frame `meta`, so its `meta.client` comes from `hello.meta` alone.
 
 This is the whole story of "how does my node know *which* user this is?" — the answer never involves the graph importing anything from mekik. mekik puts the data on `ctx.meta`; the node reads it. See [Authentication](./authentication.md) for `meta.auth`.
 
 ## 8. The ports — swappable seams
 
-mekik has four ports (interfaces) with in-memory defaults, so nothing is required but the graph:
+mekik has six ports (interfaces) with in-memory or no-op defaults, so nothing is required but the graph:
 
 | Port | What it holds | Default | Guide |
 |---|---|---|---|
 | `Checkpointer` | ilmek's run state — where a pause lives | `InMemoryCheckpointer` | [Persistence](./persistence.md) |
 | `HistoryStore` | the persistent-frame transcript (what reconnect replays) | `InMemoryHistoryStore` | [Persistence](./persistence.md) |
-| `ConversationStore` | conversation records (users, ids, greeting-sent) | `InMemoryConversationStore` | [Persistence](./persistence.md) |
+| `ConversationStore` | conversation records (owner `userId`, `createdAt`, `meta`) | `InMemoryConversationStore` | [Persistence](./persistence.md) |
 | `Authenticator` | connect-time credential verdict | none (anonymous) | [Authentication](./authentication.md) |
+| `TurnLock` | the cross-node single-writer turn lease | `LocalTurnLock` (no lease) | [Horizontal scale](./scaling.mdx) |
+| `Backplane` | cross-node fan-out of dispatched frames | `NoopBackplane` | [Horizontal scale](./scaling.mdx) |
 
-The ports exist; only the in-memory implementations ship in v1. Durable (Redis/Postgres) history is a stated non-goal for now — but because it's a port, adding one is a new class, not a fork.
+mekik ships in-memory history and conversation stores; a durable (Redis/Postgres) one is bring-your-own — but because it's a port, adding one is a new class, not a fork. The two scaling ports ship Redis implementations in `@mekik/redis` / `Mekik.Redis`.
 
 ## 9. Two languages, one wire
 
@@ -225,7 +271,7 @@ There are two full implementations: **TypeScript** (the reference) and **.NET** 
 | **`TurnMapper`** | Pure ilmek-events → frames; the fixture-checked core. |
 | **`ConversationEngine`** | Identity, turn lock, fan-out, replay, resume routing. |
 | **`IlmekAdapter`** | The seam that runs the graph and holds the checkpointer. |
-| **Ports** | `Checkpointer`, `HistoryStore`, `ConversationStore`, `Authenticator` — in-memory by default. |
-| **Helpers** | `mekik.text/ui/event/tool/approve` — emit the `custom` events the mapper reads. |
+| **Ports** | `Checkpointer`, `HistoryStore`, `ConversationStore`, `Authenticator`, `TurnLock`, `Backplane` — in-memory / single-node by default. |
+| **Helpers** | `mekik.text/ui/event/tool/approve/loadSkill/…` — emit the `custom` events the mapper reads. |
 
 Next: [Architecture](./architecture.md) for how a turn flows end-to-end, or [Protocol → Overview](./protocol/overview.md) for the wire itself.

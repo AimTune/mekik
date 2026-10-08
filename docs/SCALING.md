@@ -1,11 +1,16 @@
 # Horizontal scale, the mekik way
 
-v1 ships in-memory stores and a process-local turn lock — one node serves every
-conversation. This document is the model for running mekik as a **fleet**: N
-nodes behind a load balancer, a Redis backplane, and an autoscaler that adds and
-removes nodes under load. It is a design contract, not a promise that the code
-already does all of this — the ports named here exist (or are scaffolded); the
-Redis implementations are the follow-up workstream.
+By default mekik runs in-memory stores and a process-local turn lock — one node
+serves every conversation. This document is the model for running mekik as a
+**fleet**: N nodes behind a load balancer, a Redis backplane, and an autoscaler
+that adds and removes nodes under load. It is a design contract, not a promise
+that the code already does all of this. What ships today: the `TurnLock` and
+`Backplane` ports in `@mekik/core` / `Mekik.Core`, and their Redis
+implementations in [`@mekik/redis`](../ts/packages/redis/README.md) /
+[`Mekik.Redis`](../dotnet/src/Mekik.Redis/README.md). Durable Redis
+`HistoryStore` / `ConversationStore` adapters and the per-conversation
+*ownership* lease described below are not shipped — bring your own stores; the
+turn lease covers one turn at a time.
 
 The guiding idea: **a conversation is the unit of consistency.** On one node
 that is trivially true — everything about a conversation lives in a single
@@ -16,18 +21,19 @@ interface Live {
     seq: number;                          // the monotonic persistent-frame counter
     connections: Map<string, ConnState>;  // every tab on this conversation
     turn: AbortController | null;          // the turn lock — single writer
+    sub?: Subscription;                    // this node's backplane subscription
 }
 ```
 
 Scaling horizontally means preserving that single-writer invariant across nodes.
 
-## What is process-local today
+## What is process-local by default
 
 Five things live in node memory and must get a fleet story:
 
 | State | Where | What breaks when spread across nodes |
 | --- | --- | --- |
-| `live.turn` (turn lock) | `handleText` / `handleResume` | Two nodes run a turn for the same conversation at once → duplicate LLM run, interleaved frames |
+| `live.turn` (turn lock) | `withTurn` (every `text` / `resume` / component-driven turn) | Two nodes run a turn for the same conversation at once → duplicate LLM run, interleaved frames |
 | `live.seq` counter | `ensureLive` (seeded from `history.currentSeq`) | seq collisions, out-of-order transcript |
 | `live.connections` fan-out | `dispatch` | Two tabs of one user on different nodes never see each other |
 | ilmek `Checkpointer` | `MekikApp` ctor (default in-memory) | Parked interrupts lost on restart / invisible to the re-homing node |
@@ -106,22 +112,27 @@ so single-node runs need no Redis and the fleet swaps implementations in.
 3. **ilmek `Checkpointer` → durable** — this is ilmek's port, not mekik's, but a
    fleet **must** swap the default `InMemoryCheckpointer`, or a re-homing node
    can't see parked interrupts.
-4. **`TurnLock` (new)** — `acquire / renew / release` a per-conversation lease.
-   - In-memory default: today's behavior — the lock is just `live.turn`, one
+4. **`TurnLock`** — `acquire` a per-conversation lease (`renew` / `release` on
+   the lease; `ITurnLease` is `IAsyncDisposable` in .NET).
+   - In-memory default (`LocalTurnLock`): the lock is just `live.turn`, one
      process, no lease.
-   - Redis default: `SET lock:{C} {token} NX PX {ttl}`, renewed by a heartbeat
+   - Redis (`RedisTurnLock`): `SET {prefix}:lock:{C} {token} NX PX {ttl}`, renewed by a heartbeat
      while the run streams, released with a token-checked Lua script. TTL must
      exceed a turn's worst case, and a crashed owner's lock must expire so the
      next turn can proceed elsewhere.
    - A release that fails (a Redis blip) still frees the node's local turn lock;
      the remote lease then simply expires on its TTL, so the conversation never
      answers `busy` forever.
-5. **`Backplane` (new)** — `publish(convId, frame)` / `subscribe(convId, handler)`.
-   - In-memory default: no-op — single node fans out directly.
-   - Redis default: Pub/Sub. `dispatch` fans out to local sockets **and**
-     publishes; a message arriving from the backplane fans out to local sockets
-     **only** (no re-record, no re-publish — the producing node already recorded
-     it once).
+5. **`Backplane`** — `publish(convId, { originId, frame })` / `subscribe(convId, handler)`.
+   - In-memory default (`NoopBackplane`): no-op — single node fans out directly.
+   - Redis (`RedisBackplane`): Pub/Sub on `{prefix}:bp:{C}`. `dispatch` fans out
+     to local sockets **and** publishes; a message arriving from the backplane
+     fans out to local sockets **only** (no re-record, no re-publish — the
+     producing node already recorded it once), and a node skips messages whose
+     `originId` is its own.
+   - The TypeScript and .NET payloads differ in property casing (`originId` /
+     `frame` vs `OriginId` / `Frame`), so one backplane channel serves nodes of
+     one language.
 
 ## The correctness heart: safe re-home
 
@@ -130,7 +141,8 @@ conversation ([`engine.ts`](../ts/packages/core/src/engine.ts)). That is only
 safe if the **previous owner has flushed every `record()` before the new owner
 reads `currentSeq()`.** Otherwise the new owner seeds a stale seq and collides.
 
-Affinity + the ownership lease closes this: the new owner cannot `acquire` until
+Affinity + an ownership lease (designed here, not shipped — the shipped
+`TurnLock` lease is held per turn) closes this: the new owner cannot `acquire` until
 the old lease is released or expires, and the old owner flushes its transcript on
 drain before releasing. **Plain Pub/Sub does not close it** — which is the second
 reason the hybrid keeps affinity as the primary and the backplane as a fallback,

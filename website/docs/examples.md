@@ -55,6 +55,7 @@ Each of the newer examples has a `--probe` mode that scripts only the model's de
 ```bash
 node ts/examples/concierge.ts --probe
 dotnet run --project dotnet/examples/Mekik.SqlAgent -- --probe
+dotnet run --project dotnet/examples/Mekik.WeatherAgent -- --probe
 ```
 
 ## One node or many? The design argument
@@ -91,8 +92,8 @@ them with ordinary `ui` chunks. Adding a widget is a server deploy.
 node ts/examples/server-components.ts            # self-test: catalog, hash cache, in-place updates
 node ts/examples/server-components.ts --serve    # ws://localhost:8806 — then type "track ORD-42"
 
-dotnet run --project dotnet/examples/Mekik.ServerComponents            # the same self-test
-dotnet run --project dotnet/examples/Mekik.ServerComponents -- --serve # ws://localhost:8816/ws
+dotnet run --project dotnet/examples/Mekik.ServerComponents --no-launch-profile # the same self-test
+dotnet run --project dotnet/examples/Mekik.ServerComponents -- --serve          # ws://localhost:8816/ws
 ```
 
 The turn is paced on purpose, because the mechanism is otherwise invisible: the
@@ -146,14 +147,14 @@ The GenUI components these emit — `data-table`, `weather-card`, `approval-form
 ## Running the suites
 
 ```bash
-# TypeScript: build + tests + the refund self-test
+# TypeScript: build + tests + every example self-test and probe (domain scenarios included)
 cd ts && pnpm check
 
 # .NET: conformance (same fixtures, canonical compare)
 cd dotnet && dotnet test Mekik.slnx
 ```
 
-Both are green in [CI](https://github.com/AimTune/mekik/actions): TypeScript builds, passes the golden fixtures and behavioural scenarios, and runs the refund self-test; .NET builds and replays the same golden fixtures through its own `EventToFrames`. See [Conformance](./parity/conformance.md).
+Both are green in [CI](https://github.com/AimTune/mekik/actions): TypeScript builds, passes the golden fixtures and behavioural scenarios, and runs every example's self-test or probe; .NET builds, replays the same golden fixtures through its own `EventToFrames`, and runs the `SqlAgent` and `WeatherAgent` probes and the `ClientTools` and `ServerComponents` self-tests. See [Conformance](./parity/conformance.md).
 
 ## Where to go next
 

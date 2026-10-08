@@ -32,7 +32,7 @@ flowchart TD
 Read the boundaries as a set of promises:
 
 - **Transport** promises only to move frames. It knows sockets and nothing about `seq`, interrupts, or auth. Swapping WebSocket for another transport touches nothing else.
-- **Engine** promises the protocol: identity, the turn lock, fan-out, replay, resume routing. Everything multi-frame or multi-connection is here.
+- **Engine** promises the protocol: identity, the turn lock, fan-out, replay, resume routing, and the turn's client tools and skills. Everything multi-frame or multi-connection is here.
 - **Adapter** promises to run ilmek. It starts and resumes runs and owns the checkpointer seam. It never inspects frames.
 - **Mapper** promises the event→frame contract, purely. Same events in, same canonical frames out — in either language.
 - **Graph** promises nothing to mekik. It's pure ilmek.
@@ -117,16 +117,16 @@ The adapter never forwards ilmek's seq; the engine assigns mekik's. A conversati
 |---|---|---|
 | Parked interrupt (run suspension) | ilmek **Checkpointer** | until answered or the thread is deleted |
 | Persistent-frame transcript | **HistoryStore** | until the conversation is deleted |
-| Conversation record (ids, greeting-sent) | **ConversationStore** | until the conversation is deleted |
+| Conversation record (owner `userId`, `createdAt`, `meta`) | **ConversationStore** | until the conversation is deleted |
 | Live connections on a conversation | **Engine** (in memory) | one process, one socket each |
-| Turn lock | **Engine** (in memory) | the duration of a run |
+| Turn lock | **Engine** (in memory), plus a **TurnLock** lease in a fleet | the duration of a run |
 | Current turn's GenUI stream id + chunk counter | **TurnMapper** | one run |
 
-Two of these are process-local by design — the live-connection set and the turn lock. That's the boundary of v1: a single process fans out to its own connections and serializes its own turns. Horizontal scale means a distributed lock plus cross-node fan-out with sticky routing per `conversationId`, which is a stated non-goal for now. The durable state (checkpoint, history, conversation) already lives behind ports, so it's the connection/lock layer — not the storage layer — that a future scale-out would replace.
+Two of these are process-local by design — the live-connection set and the turn lock. By default a single process fans out to its own connections and serializes its own turns. A fleet keeps that model and adds two ports: a `TurnLock` lease so only one node runs a conversation's turn, and a `Backplane` that carries each dispatched frame to the other nodes holding tabs of the conversation, with sticky routing per `conversationId` as the hot path. The durable state (checkpoint, history, conversation) already lives behind ports. See [Horizontal scale](./scaling.mdx).
 
 ## The `.NET` shape
 
-The .NET architecture is the same diagram with `Mekik.AspNetCore` in the transport box instead of `@mekik/ws`, and `Shuttle` helpers instead of `mekik.*`. The one implementation-level divergence worth knowing: an interrupt propagates as an `InterruptSignalException`, so any `try/catch` around node work must rethrow it — a blanket `catch (Exception)` would swallow the pause. `Shuttle.Tool` does this for you. See [Parity → TypeScript ↔ .NET](./parity/languages.md#the-five-deliberate-divergences).
+The .NET architecture is the same diagram with `Mekik.AspNetCore` in the transport box instead of `@mekik/ws`, and `Shuttle` helpers instead of `mekik.*`. The one implementation-level divergence worth knowing: an interrupt propagates as an `InterruptSignalException`, so any `try/catch` around node work must rethrow it — a blanket `catch (Exception)` would swallow the pause. `Shuttle.Tool` does this for you. See [Parity → TypeScript ↔ .NET](./parity/languages.md#the-six-deliberate-divergences).
 
 ## Where to go next
 

@@ -91,6 +91,10 @@ The `interrupt` frame carries `data.event` — the name it waits for — so the 
 
 Full routing rules, including `mekik-event` for clicks the graph should answer: [Generative UI → Bidirectional events](./generative-ui.md#bidirectional-events--genui_event).
 
+## …or pause for the client's own tool
+
+`mekik.callClientTool` / `Shuttle.CallClientToolAsync` is the third answerer: the pause is resolved by a **tool handler the frontend registered** (open a picker, read the device) rather than by chips or a widget button. Same durable interrupt underneath; the frame carries `data.tool` and the client answers with the tool's result. It is off unless the app opts in — see [Client tools](./client-tools.md).
+
 ## Buttons, typed (no hand-written JSON)
 
 When the pause really is "pick one of these buttons", skip `approve`'s generic and its `actions` JSON: `mekik.choose` / `Shuttle.Choose` take the options directly, and `mekik.action` / `Shuttle.Action` build the chips.
@@ -275,7 +279,8 @@ withMekikTools(ctx, [refundPayment], { refund_payment: { show: true, approve: tr
 
 ```csharp
 // Mekik.Agents
-MekikTools.Wrap(ctx, [refundPayment], new() { ["refund_payment"] = new ToolPolicy { Approve = new ApproveSpec() } });
+MekikTools.Wrap(ctx, [refundPayment],
+    new Dictionary<string, ToolPolicy> { ["refund_payment"] = new ToolPolicy { Approve = new ApproveSpec() } });
 ```
 
 </TabItem>
@@ -285,7 +290,7 @@ The pause is an ordinary `interrupt` frame — chativa renders chips or a form, 
 
 ## .NET note
 
-In .NET the pause propagates as an `InterruptSignalException`. Any `try/catch` around node work **must rethrow** it (`Shuttle.Tool` does) — a blanket `catch (Exception)` would swallow the pause. See [Parity](../parity/languages.md#the-five-deliberate-divergences).
+In .NET the pause propagates as an `InterruptSignalException`. Any `try/catch` around node work **must rethrow** it (`Shuttle.Tool` does) — a blanket `catch (Exception)` would swallow the pause. See [Parity](../parity/languages.md#the-six-deliberate-divergences).
 
 ### Stopping the debugger from breaking on every pause
 

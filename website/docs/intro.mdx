@@ -104,9 +104,9 @@ web.Run();
 </TabItem>
 </Tabs>
 
-That's a working server. A client connecting over `ws://localhost:8800/ws` gets a `welcome` frame, and every `text` turn it sends runs the graph and streams the result back.
+That's a working server. A client connecting over `ws://localhost:8800/ws` gets a `welcome` frame in answer to its first frame (normally `hello`), and every `text` turn it sends runs the graph and streams the result back.
 
-The single `mekik` export is both the **app factory** (`mekik({ graph })`) and the **authoring helpers** (`mekik.ui`, `mekik.tool`, `mekik.approve`, `mekik.text`, `mekik.event`) — one name, read two ways depending on where you call it.
+The single `mekik` export is both the **app factory** (`mekik({ graph })`) and the **authoring helpers** (`mekik.ui`, `mekik.tool`, `mekik.approve`, `mekik.text`, `mekik.event`, and [the rest](./authoring/helpers.md)) — one name, read two ways depending on where you call it.
 
 ## What's in the box
 
@@ -114,34 +114,47 @@ The single `mekik` export is both the **app factory** (`mekik({ graph })`) and t
 |---|---|
 | One graph run per turn, over WebSocket | [Concepts](./concepts.md) · [Transport](./serving/transport.md) |
 | Generative UI streaming (`ui` / `text` / `event` chunks) | [Authoring → Generative UI](./authoring/generative-ui.md) |
+| Server-defined components and rich messages (cards, buttons, …) | [Authoring → Components](./authoring/components.md) · [Messages](./authoring/messages.md) |
 | Tool traces with exactly-once side effects | [Authoring → Tools](./authoring/tools.md) |
 | Durable, interactive human-in-the-loop | [Authoring → Human-in-the-loop](./authoring/human-in-the-loop.md) |
+| Client tools — tools the browser executes (opt-in, PROTOCOL §11) | [Authoring → Client tools](./authoring/client-tools.md) |
+| Skills — a catalog loaded on demand, skills that own their tools, client-declared skills (opt-in), PROTOCOL §12 | [Authoring → Skills](./authoring/skills.md) |
 | Watermark resume, multi-tab, multi-device | [Protocol → Identity & resume](./protocol/identity.md) |
 | Connect-time authentication (opt-in) | [Authentication](./authentication.md) |
-| LangChain / Microsoft.Extensions.AI / Semantic Kernel agents | [Agent integrations](./integrations/overview.md) |
+| A graph served as MCP tools (PROTOCOL §13) or as an A2A agent (PROTOCOL §14) | [Serving → MCP server](./serving/mcp.md) · [A2A agent](./serving/a2a.md) |
+| LangChain / Microsoft.Extensions.AI / Semantic Kernel agents, MCP servers as tools | [Agent integrations](./integrations/overview.md) |
+| A fleet behind a load balancer — Redis turn lock + backplane (opt-in) | [Horizontal scale](./scaling.mdx) |
 | TypeScript reference **and** .NET port, one wire | [Parity → TypeScript ↔ .NET](./parity/languages.md) |
+| Runnable end-to-end scenarios (banking, insurance, triage, travel, support) | [Examples](./examples.md) · [Domain examples](./domain-examples.md) |
 
 ## The repository, at a glance
 
 ```
 mekik/
   PROTOCOL.md            # normative mekik/1 wire spec
+  docs/                  # design notes (SCALING, SKILLS, CLIENT-TOOLS, MCP, A2A, …)
   conformance/
     README.md            # language-neutral scenario list
     fixtures/*.json      # golden event→frame fixtures (shared by both suites)
+    hashes/ mcp/ a2a/    # catalog-hash and JSON-RPC fixtures, same deal
   ts/
-    packages/core/       # @mekik/core — protocol, mapper, engine, helpers, stores, auth
+    packages/core/       # @mekik/core — protocol, mapper, engine, helpers, stores, auth, MCP/A2A servers
     packages/ws/         # @mekik/ws — WebSocket transport
     packages/langchain/  # @mekik/langchain — wrap an agent's tools
+    packages/mcp/        # @mekik/mcp — serve a MekikApp as MCP tools (Streamable HTTP)
+    packages/a2a/        # @mekik/a2a — serve a MekikApp as an A2A agent
     packages/redis/      # @mekik/redis — Redis turn lock + Pub/Sub backplane (fleet)
-    examples/            # refund, llm-agent, sql-agent, weather-agent, concierge, routed-desk
+    examples/            # refund, llm-agent, sql-agent, weather-agent, concierge, routed-desk,
+                         # storefront, client-tools, server-components, + domain scenarios
   dotnet/
     src/Mekik.Core/            # mirror of @mekik/core
-    src/Mekik.AspNetCore/      # app.MapMekik("/ws", app)
+    src/Mekik.AspNetCore/      # app.MapMekik("/ws", app), MapMekikMcp, MapMekikA2a
     src/Mekik.Agents/          # Microsoft.Extensions.AI function wrapping
     src/Mekik.SemanticKernel/  # one filter covers SK agents and planners
     src/Mekik.Redis/           # Redis turn lock + Pub/Sub backplane (fleet)
     test/Mekik.Core.Tests/     # loads the SAME fixtures
+    examples/                  # refund, llm-agent, sql-agent, weather-agent, client tools, components
+  website/               # this documentation site
 ```
 
 ## Where to go next

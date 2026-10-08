@@ -27,8 +27,7 @@ const handle = serveWs(app, { port: 8800, path: "/ws" }); // omit `path` to acce
 <TabItem value="dotnet" label=".NET">
 
 ```csharp
-using Mekik.Core;
-using Mekik.AspNetCore;
+using Mekik; // Mekik.Core and Mekik.AspNetCore both live in the `Mekik` namespace
 
 var web = WebApplication.CreateBuilder(args).Build();
 
@@ -37,7 +36,7 @@ web.MapMekik("/ws", new MekikApp(new MekikOptions { Graph = graph }));
 web.Run();
 ```
 
-`MapMekik` extends `IEndpointRouteBuilder`, so it slots into ordinary ASP.NET Core routing alongside your other endpoints. Same wire, same engine behind it.
+`MapMekik` extends `IEndpointRouteBuilder`, so it slots into ordinary ASP.NET Core routing alongside your other endpoints. A plain (non-WebSocket) HTTP request to that path gets `400`. Same wire, same engine behind it.
 
 </TabItem>
 </Tabs>
@@ -80,7 +79,7 @@ server.listen(3000);
 Identity can arrive two ways, and the transport **merges** them at connect, with the `hello` frame winning on conflict:
 
 1. **The WS query string** — `wss://host/ws?userId=u-1&conversationId=conv-9&watermark=12&token=…`. Read from the upgrade request URL. This is the only channel available to something upstream of mekik (an edge proxy authenticating at the HTTP handshake), because it can't see the `hello` frame.
-2. **The first `hello` frame** — `{type:"hello", userId, conversationId, watermark, token, meta}`. The richer channel; it also carries `meta`, which the query string can't.
+2. **The first `hello` frame** — `{type:"hello", userId, conversationId, watermark, token, meta}`. The richer channel; it also carries `meta`, which the query string can't. That `meta` reaches nodes as `ctx.meta.client` only through your `acceptClientMeta` allowlist (see [Concepts → Graph context](../concepts.md#7-graph-context-as-a-parameter)).
 
 The transport also reads an `Authorization: Bearer` header into the credential if no token came another way (browsers can't set WebSocket headers, but a non-browser client or a proxy can).
 
@@ -92,7 +91,7 @@ flowchart LR
   M -->|"hello wins on conflict"| E["engine.connect(conn, params)"]
 ```
 
-Each field is taken only in its declared type — non-empty strings for `userId`, `conversationId` and `token`, a finite number for `watermark`, an object for `meta` — and anything else is ignored as if absent. So `?watermark=abc` replays the whole transcript rather than nothing, and a `hello` carrying `userId: 42` gets a minted id.
+Each field is taken only in its declared type — non-empty strings for `userId`, `conversationId` and `token`, a finite number for `watermark`, an object for `meta` — and anything else is ignored as if absent. So `?watermark=abc` replays the whole transcript rather than nothing, and a `hello` carrying `userId: 42` falls back to the query string's `userId`, or a minted one. (`Mekik.AspNetCore` applies the same type checks, except that it does not drop an empty string and takes `watermark` only as an integer.)
 
 The merged result is a `ConnectParams` — `{ hello, credential }` — handed to `app.connect(conn, params)`. The `credential` carries the token, the raw headers (for a cookie/session authenticator), and the raw query params. See [Authentication](../authentication.md).
 
@@ -105,16 +104,18 @@ The Node transport serializes per socket so the protocol invariants hold:
 - A non-`hello` first frame (identity came via the query string) is still processed after the handshake, not dropped.
 - **A close never overtakes the handshake.** A socket that closes while `app.connect` is still awaiting (a slow authenticator or store) is disconnected only once the connect has landed — otherwise the engine would register it afterwards and keep it, and its declared [client tools](../authoring/client-tools.md) would linger in every later turn.
 
+`Mekik.AspNetCore` gets the same guarantees from its read loop: it awaits `ConnectAsync`, then each `ReceiveAsync`, one frame at a time, and calls `Disconnect` only for a socket whose connect ran.
+
 These are transport responsibilities precisely because they're about the socket, not the protocol. The engine assumes ordered, post-handshake delivery; the transport provides it.
 
 ## Errors and close codes
 
-- A handler that throws surfaces as an `error{code:"internal"}` frame if the socket is still open — it doesn't take the connection down silently.
-- An **auth reject** closes with WebSocket code **4401** (`AUTH_CLOSE_CODE`) after the `error{unauthorized}` frame. (WS requires close codes in `1000` / `1002–1014` / `3000–4999`; 4401 sits in the app range.) See [Authentication](../authentication.md).
+- In `@mekik/ws`, a handler that throws surfaces as an `error{code:"internal"}` frame if the socket is still open — it doesn't take the connection down silently. In `Mekik.AspNetCore` the exception ends that socket's request: the connection is disconnected and the socket released.
+- An **auth reject** closes with WebSocket code **4401** (`AUTH_CLOSE_CODE` / `Protocol.AuthCloseCode`) after the `error{unauthorized}` frame, in both transports. (WS requires close codes in `1000` / `1002–1014` / `3000–4999`; 4401 sits in the app range.) See [Authentication](../authentication.md).
 
 ## Writing another transport
 
-Because the engine is transport-free, a new transport is small: implement `Connection` (`send(frame)`, `close(code?, reason?)`), build a `ConnectParams` from whatever your transport carries, and call `connect` / `receive` / `disconnect` on the `MekikApp`. Keep the ordering guarantees above and every protocol rule comes along for free. The [`@mekik/ws` source](https://github.com/AimTune/mekik/blob/main/ts/packages/ws/src/index.ts) is ~150 lines and is the reference to copy.
+Because the engine is transport-free, a new transport is small: implement `Connection` (`send(frame)`, `close(code?, reason?)`), build a `ConnectParams` from whatever your transport carries, and call `connect` / `receive` / `disconnect` on the `MekikApp`. Keep the ordering guarantees above and every protocol rule comes along for free. The [`@mekik/ws` source](https://github.com/AimTune/mekik/blob/main/ts/packages/ws/src/index.ts) is under 200 lines and is the reference to copy.
 
 ## Where to go next
 

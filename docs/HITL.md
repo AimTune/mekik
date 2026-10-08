@@ -144,10 +144,11 @@ effect in `mekik.tool` (which is `ctx.step` plus a `tool_call` trace):
     const order = await mekik.tool(ctx, "create_order", { cart: s.cart },
         () => Orders.create(s.cart));
 
-    const ok = await mekik.approve(ctx, { title: `Charge ${order.total}?` });
+    const ok = await mekik.approve<{ approved: boolean }>(ctx, { title: `Charge ${order.total}?` });
+    if (!ok.approved) return { reply: "cancelled" };
 
     // Everything above re-runs on resume — but create_order is memoized, so no
-    // second order is opened. This charge runs after the pause that gates it.
+    // second order is opened. This charge runs only after the pause that gates it.
     await mekik.tool(ctx, "charge", { orderId: order.id }, () => Payments.charge(order));
     return { reply: "done" };
 })
@@ -164,7 +165,8 @@ Two corollaries for tool authors:
 ## Reconnecting mid-pause
 
 Open interrupts live in ilmek's checkpoint, not in memory, so they survive a
-restart. On (re)connect the `welcome` frame re-announces them in
+restart — provided you configured a durable checkpointer (the in-memory default
+loses them). On (re)connect the `welcome` frame re-announces them in
 `welcome.data.pending` — each with its `ui`/`actions` — so a reopened tab
 re-renders the approval form and can answer it.
 

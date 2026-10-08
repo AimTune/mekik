@@ -6,7 +6,7 @@ description: Every mekik/1 frame — client→server and server→client — wit
 
 # Frames
 
-Every message on a mekik socket is a **frame**: a flat JSON object with a `type` discriminator. This page is the catalogue. Shapes here match [`PROTOCOL.md §3`](https://github.com/AimTune/mekik/blob/main/PROTOCOL.md) and the [golden fixtures](../parity/conformance.md) — the fixtures are authoritative.
+Every message on a mekik socket is a **frame**: a flat JSON object with a `type` discriminator. This page is the catalogue. Shapes here match [`PROTOCOL.md §3`](https://github.com/AimTune/mekik/blob/main/PROTOCOL.md#3-frames) and the [golden fixtures](../parity/conformance.md) — the fixtures are authoritative.
 
 Frames are flat (no nested envelope). Persistent server→client frames carry a `seq`; some carry a `timestamp` (ms since epoch). Transient frames carry neither.
 
@@ -15,14 +15,14 @@ Frames are flat (no nested envelope). Persistent server→client frames carry a 
 | `type` | shape | meaning |
 |---|---|---|
 | `hello` | `{type, userId?, conversationId?, watermark?, token?, meta?, componentsHash?, tools?, skillsHash?, skills?}` | Handshake. May instead travel as the WS query string. `meta` is a client-supplied context map. `componentsHash` is the [component catalog](../authoring/generative-ui.md#components-the-server-defines) the client has cached — a matching hash means the catalog is not re-sent. `tools` declares this client's [callable tools](../authoring/client-tools.md). `skillsHash` is the [skill catalog](../authoring/skills.md) the client has cached; `skills` declares the client's own skills. All fields optional. |
-| `text` | `{type, data:{text}, meta?}` | One user turn → starts a run (or is refused `busy` / `interrupted`). |
+| `text` | `{type, data:{text}, meta?}` | One user turn → starts a run (or is refused `busy` / `interrupted`). `meta` is laid over the connection's `hello.meta` per key for this turn. |
 | `resume` | `{type, answers:{[interruptId]: any}}` | Answer the open interrupts, keyed by thread-scoped interrupt `id`. Must cover **every** open interrupt. |
-| `genui_event` | `{type, streamId, eventType, scope?, component?, payload}` | An interaction from a mounted GenUI component. `scope` comes from the markup — `"component"` (`component-event`), `"graph"` (`mekik-event`), or absent (`data-event`) — and decides who receives it: the node parked on `onEvent`, the app's handler, or whichever answers first. A `submit` naming an open interrupt is coerced to a `resume` regardless. See [Bidirectional events](../authoring/generative-ui.md#bidirectional-events--genui_event). |
+| `genui_event` | `{type, streamId, eventType, scope?, component?, payload?}` | An interaction from a mounted GenUI component. `scope` comes from the markup — `"component"` (`component-event`), `"graph"` (`mekik-event`), or absent (`data-event`) — and decides who receives it: the node parked on `onEvent`, the app's handler, or whichever answers first. A `submit` naming an open interrupt is coerced to a `resume` regardless. See [Bidirectional events](../authoring/generative-ui.md#bidirectional-events--genui_event). |
 | `client_tools` | `{type, tools: ClientToolDefinition[]}` | Replace this connection's declared [client tools](../authoring/client-tools.md). The list is the connection's whole new set; `[]` withdraws every tool. Inert unless the server opted in via `MekikOptions.clientTools`. |
 | `client_skills` | `{type, skills: ClientSkillDefinition[]}` | Replace this connection's declared [client skills](../authoring/skills.md#client-declared-skills-off-by-default). Each is `{name, description, instructions, tags?}`; the list is the connection's whole new set; `[]` withdraws every skill. Inert unless the server opted in via `MekikOptions.clientSkills`. |
 | `abort` | `{type}` | Cancel the in-flight run at the next superstep boundary. The last checkpoint stands. |
 
-A malformed inbound frame (bad JSON, missing `type`) draws `error{code:"bad_request"}` and is otherwise ignored — the connection stays open.
+A malformed inbound frame (bad JSON, a non-object, a missing or unknown `type`, a required field missing or of the wrong type) draws `error{code:"bad_request"}` and is otherwise ignored — the connection stays open. A second `hello` mid-session is ignored.
 
 ### `hello`
 
@@ -33,7 +33,7 @@ Sent first on a new socket. Identity may be asserted here or omitted for an anon
   "token": "eyJhbGc…", "meta": { "locale": "tr" } }
 ```
 
-The transport also accepts these as query-string params (`?userId=…&conversationId=…&watermark=…&token=…`) and merges them; the `hello` frame wins on conflict. See [Transport](../serving/transport.md).
+The transport also accepts these as query-string params (`?userId=…&conversationId=…&watermark=…&token=…`) and merges them; the `hello` frame wins on conflict. A field of the wrong type — a numeric `userId`, a non-numeric `watermark`, a `meta` that isn't an object — is ignored as if it were absent. `meta` only reaches the graph through the server's `acceptClientMeta` allowlist (as `ctx.meta.client`). See [Transport](../serving/transport.md).
 
 ### `text`
 
@@ -48,7 +48,7 @@ One user turn:
 Answer open interrupts, keyed by the interrupt `id` the `interrupt` frame carried:
 
 ```jsonc
-{ "type": "resume", "answers": { "gate:interrupt#0": { "approved": true } } }
+{ "type": "resume", "answers": { "approve/0:interrupt#0": { "approved": true } } }
 ```
 
 Answering by `id` (not ilmek's `key`) and covering *every* open interrupt are both required — see [Human-in-the-loop](../authoring/human-in-the-loop.md#answering).
@@ -110,17 +110,17 @@ These carry `seq` and are the durable transcript — exactly what reconnect repl
     "id": "conv-1:ckpt-a:agent/0:skill:0", "name": "pdf", "status": "loaded", "source": "server" } }
 ```
 
-**`genui`** — one `AIChunk` under a turn `streamId`. `done:false` while the stream is open; the mapper closes it at run end with a `stream_done` event chunk (`done:true`):
+**`genui`** — one `AIChunk` under a turn `streamId`. `done:false` while the stream is open; the mapper closes it at run end with a `stream_done` event chunk (`done:true`). Chunk ids the mapper assigns are stream-scoped numbers starting at 1, and consecutive text chunks share one id (one growing bubble):
 
 ```jsonc
 { "type": "genui", "seq": 8, "streamId": "stream-1", "done": false,
-  "chunk": { "type": "ui", "component": "order-card", "props": { "id": "ORD-42" }, "id": 0 } }
+  "chunk": { "type": "ui", "component": "order-card", "props": { "id": "ORD-42" }, "id": 1 } }
 ```
 
 **`interrupt`** — a human-in-the-loop pause. `id` is the thread-scoped interrupt id a `resume` answers; `data.payload` is the question; `ui` and `actions` are optional presentation:
 
 ```jsonc
-{ "type": "interrupt", "seq": 9, "id": "gate:interrupt#0", "data": {
+{ "type": "interrupt", "seq": 9, "id": "approve/0:interrupt#0", "data": {
     "payload": { "title": "Refund $249.9 for ORD-42?" },
     "ui": { "component": "approval-form", "props": { "orderId": "ORD-42" } },
     "actions": [ { "label": "Approve", "value": { "approved": true } },
@@ -137,7 +137,7 @@ Two variants change *who answers*: `data.event` names a component interaction a 
 **`interrupt_resolved`** — acknowledges an answered pause so every tab and future replay learns it's closed:
 
 ```jsonc
-{ "type": "interrupt_resolved", "seq": 10, "id": "gate:interrupt#0",
+{ "type": "interrupt_resolved", "seq": 10, "id": "approve/0:interrupt#0",
   "data": { "answer": { "approved": true } } }
 ```
 
@@ -185,6 +185,13 @@ instead. A server that defines no components sends no frame at all. Definitions,
 the template language and the interaction attributes:
 [Components the server defines](../authoring/generative-ui.md#components-the-server-defines).
 
+**`skills`** — the server's [skill catalog](../authoring/skills.md), level 1 only (names, descriptions, tags; never instructions), sent once per connection after `welcome` (and after `genui_components` when both exist). Hash-versioned like the component catalog: a matching `hello.skillsHash` gets `{ "type": "skills", "hash": "…", "unchanged": true }`. Client-declared skills are never echoed here, and an app without a catalog sends no frame:
+
+```jsonc
+{ "type": "skills", "hash": "9f3a…", "skills": [
+    { "name": "pdf", "description": "Fill, merge and read PDF forms.", "tags": ["docs"], "source": "server" } ] }
+```
+
 **`run`** — the turn's lifecycle signal; always the last frame of its run:
 
 ```jsonc
@@ -203,12 +210,14 @@ Statuses: `started`, `finished`, `interrupted`, `error`, `aborted`. See [Engine 
 
 | `code` | Cause | Socket |
 |---|---|---|
-| `busy` | a `text` arrived while a run is in flight | stays open |
-| `interrupted` | a `text` (not `resume`) arrived while the thread is parked | stays open |
+| `busy` | a turn (`text`, `resume`, or a graph-addressed `genui_event`) arrived while a run is in flight (or another node holds the conversation's turn lease) | stays open |
+| `interrupted` | a `text` (not `resume`), or a graph-addressed `genui_event`, arrived while the thread is parked | stays open |
+| `not_interrupted` | a `resume` arrived with no open interrupt | stays open |
 | `incomplete_resume` | a `resume` omitted an open interrupt | stays open |
-| `bad_request` | malformed inbound frame | stays open |
+| `bad_request` | malformed inbound frame, or an unknown frame `type` | stays open |
+| `no_session` | a frame on a connection that never completed (or already left) the handshake | stays open |
 | `unauthorized` | the authenticator rejected the connection | **closes** with WS code 4401 |
-| `internal` | a handler threw | stays open if it can |
+| `internal` | a handler threw (`@mekik/ws` only) | stays open if it can |
 
 ## Shared payload types
 

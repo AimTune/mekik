@@ -23,6 +23,6 @@ serveA2a(agent, { port: 8901 });   // GET /.well-known/agent-card.json, POST /a2
 One mekik conversation is one A2A `contextId`; one turn is one task. A task
 whose run paused for a human is `input-required`, and the next message on that
 task answers the pause. `message/send`, `tasks/get` and `tasks/cancel` are
-implemented; streaming and push notifications are not (the card says so). Zero
-dependencies; `a2aRequestHandler` mounts on any Node server. Wire rules:
+implemented; streaming and push notifications are not (the card says so). No
+dependencies beyond `@mekik/core`; `a2aRequestHandler` mounts on any Node server. Wire rules:
 PROTOCOL.md §14. Docs: <https://mekik.aimtune.dev/serving/a2a>.

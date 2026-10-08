@@ -158,7 +158,7 @@ No pause: the invocation streams as a genui event chunk under the reserved name 
 
 ### When the handler fails
 
-An `{ok:false, error}` answer makes the `await` **throw** — a plain `Error` in TypeScript, an `InvalidOperationException` in .NET — carrying the client's message, and the `tool_call` trace ends in `error`. Catch it in the node to recover, or let it end the run in `run{error}`; the agent wrappers below turn it into an observation instead, so a model-driven loop keeps going.
+An `{ok:false, error}` answer makes the `await` **throw** — a plain `Error` in TypeScript, an `InvalidOperationException` in .NET — carrying the client's message, and the `tool_call` trace ends in `error`. Catch it in the node to recover, or let it end the run — a `⚠️ <message>` bot text, then `run{error}`; the agent wrappers below turn it into an observation instead, so a model-driven loop keeps going.
 
 ## Handing the toolbox to a model
 
@@ -166,22 +166,26 @@ An `{ok:false, error}` answer makes the `await` **throw** — a plain `Error` in
 <TabItem value="ts" label="TypeScript">
 
 ```ts
-import { withMekikTools, withClientTools, runAgent } from "@mekik/langchain";
+import { withClientTools, runAgent } from "@mekik/langchain";
 
 const tools = [
-    ...withMekikTools(ctx, serverTools, policy),
+    ...serverTools,                                  // raw — runAgent wraps them with `policy`
     ...withClientTools(ctx, { tags: ["billing"] }),
 ];
-return { reply: await runAgent(ctx, model(), { system, input: s.input, tools }) };
+return { reply: await runAgent(ctx, model(), { system, input: s.input, tools, policy }) };
 ```
 
 </TabItem>
 <TabItem value="dotnet" label=".NET">
 
 ```csharp
-var tools = MekikTools.Wrap(ctx, serverFunctions, policies)
+var tools = serverFunctions                                // raw — RunAsync wraps them with Policies
     .Concat(ClientToolFunctions.Wrap(ctx, tags: ["billing"]))
     .ToList();
+return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
+{
+    System = system, Input = state.Get<string>("input") ?? string.Empty, Tools = tools, Policies = policies,
+}));
 ```
 
 </TabItem>

@@ -56,9 +56,14 @@ Agent wrappers: `withSkills(ctx, filter)` / `runAgent({ skills })` in
   model loads that skill successfully, rebuilds the offered list after a load,
   and — because `load_skill` re-runs on a replay pass — offers each round the
   same toolbox on a resume. A premature call is refused as an observation
-  rather than run, so the model never acts without the skill's instructions.
-  `skillTools` / `SkillTools` on the run options add tools that must be built
-  per request (closing over the turn's state); they merge with the entry's own.
+  naming every skill that holds the tool, rather than run, so the model never
+  acts without the skill's instructions. `skillTools` / `SkillTools` on the run
+  options add tools that must be built per request (closing over the turn's
+  state); they merge with the entry's own. A `SKILL.md` folder holds no code,
+  so folder skills get their tools attached by skill name in a source that
+  wraps the catalog (the guide shows it in both languages); a catalog tool
+  reaches the calling run with `toolContext(config)` /
+  `MekikTools.ToolContext(arguments)`.
 - **Why the tools never reach the wire.** A tool is a server object (a function
   with its credentials and side effects), not data. The catalog frame, the
   catalog hash and the `skill` frame are computed from the summary fields

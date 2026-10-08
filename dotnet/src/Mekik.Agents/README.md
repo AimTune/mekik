@@ -9,7 +9,7 @@ chat client inside an ilmek node and get, per function:
 - **Exactly-once** — functions are journaled, so a pause/resume doesn't re-run them
 
 ```csharp
-var tools = MekikTools.Wrap(ctx, [getOrder, refundPayment, internalLookup, charge], new()
+var tools = MekikTools.Wrap(ctx, [getOrder, refundPayment, internalLookup, charge], new Dictionary<string, ToolPolicy>
 {
     ["get_order"]       = new ToolPolicy(),                              // shown
     ["refund_payment"]  = new ToolPolicy { Approve = new ApproveSpec() },// ask the human first
@@ -24,6 +24,28 @@ var response = await chatClient.GetResponseAsync(
 The wrappers are `DelegatingAIFunction`s, so name, description and JSON schema
 are preserved and the model sees exactly the same tools.
 
+## `Agent.RunAsync` — the loop, packaged
+
+```csharp
+.Node("agent", async (State state, IContext ctx) =>
+    Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
+    {
+        System   = SYSTEM,
+        Input    = state.Get<string>("input") ?? string.Empty,
+        Tools    = [getOrder, refundPayment],             // raw functions — RunAsync wraps them
+        Policies = new Dictionary<string, ToolPolicy> { ["refund_payment"] = new() { Approve = new ApproveSpec() } },
+    })))
+```
+
+`Agent.RunAsync` wraps the functions with `MekikTools`, journals each model call
+so a resume replays it, streams text live, and is budgeted by `MaxTurns` (model
+rounds, default 25) and `MaxToolCalls` (default 25). A function that throws, or
+whose arguments fail binding, becomes an `Error from <tool>: …` observation and
+the model keeps going. `ClientToolFunctions.Wrap(ctx, tags?, mode?)` adds the
+frontend's declared tools, and `Agent.RouteAsync(ctx, chat, routes, input)`
+classifies a turn into one node (an exact answer wins, otherwise the longest
+route name mentioned).
+
 ## Skills — progressive disclosure
 
 `SkillFunctions.Wrap(ctx, tags: [...])` turns the app's [skills](https://mekik.aimtune.dev/authoring/skills)
@@ -32,7 +54,7 @@ files), and `AgentRunOptions.Skills = true` appends the `<available_skills>`
 block to the system prompt and adds the functions in one switch. Each load emits
 a persistent `skill` frame so the UI shows which skill the agent is following.
 A skill owns its tools: a `SkillEntry<AIFunction>` in the catalog carries
-`Tools`, and `Agent.RunAsync` offers them to the model only after it loads that
+`Tools`, and `Agent.RunAsync` offers them to the model only after it successfully loads that
 skill, which keeps the per-call tool list small. The tools stay on the server —
 the catalog frame and hash never see them. `AgentRunOptions.SkillTools` adds
 functions that must be built per request; they merge with the entry's own. A

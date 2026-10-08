@@ -10,7 +10,8 @@ This page takes you from an empty folder to a running mekik server that streams 
 
 ## Prerequisites
 
-- **Node ≥ 22** (mekik is developed on Node 26 and uses the built-in TypeScript runner — no build step to run a `.ts` file). For .NET, see the [.NET section](#net-in-parallel).
+- **Node ≥ 22** (mekik is developed on Node 26 and uses the built-in TypeScript runner — no build step to run a `.ts` file; `node server.ts` without a flag needs Node ≥ 22.18).
+- For .NET: the **.NET 9** SDK. See the [.NET section](#net-in-parallel).
 - A compiled **ilmek** graph, or willingness to write a three-line one. If ilmek is new to you, its [MODEL.md](https://github.com/AimTune/ilmek) is the reference; mekik only needs a `compile()`d graph.
 
 ## Step 1 — Install
@@ -19,10 +20,10 @@ This page takes you from an empty folder to a running mekik server that streams 
 <TabItem value="ts" label="TypeScript">
 
 ```bash
-pnpm add @mekik/core @mekik/ws @ilmek/core
+pnpm add @mekik/core @mekik/ws @ilmek/core@^0.1.1
 ```
 
-`@mekik/core` is the engine, mapper, helpers, stores, and auth port. `@mekik/ws` is the WebSocket transport. `@ilmek/core` is the graph runtime mekik serves — a peer you already depend on to author graphs.
+`@mekik/core` is the engine, mapper, helpers, stores, and auth port. `@mekik/ws` is the WebSocket transport. `@ilmek/core` is the graph runtime mekik serves — `@mekik/core` depends on it, and you import it yourself to author graphs. Keep your `@ilmek/core` in the range `@mekik/core` depends on (`^0.1.1` for mekik 0.9.0), so the graph you compile and the engine that runs it share one copy of ilmek.
 
 </TabItem>
 <TabItem value="dotnet" label=".NET">
@@ -30,10 +31,10 @@ pnpm add @mekik/core @mekik/ws @ilmek/core
 ```bash
 dotnet add package Mekik.Core
 dotnet add package Mekik.AspNetCore
-dotnet add package Ilmek.Core
+dotnet add package Ilmek.Core --version 0.1.0
 ```
 
-`Mekik.Core` is the engine, mapper, helpers, stores, and auth port. `Mekik.AspNetCore` is the ASP.NET Core WebSocket transport. `Ilmek.Core` is the graph runtime mekik serves.
+`Mekik.Core` is the engine, mapper, helpers, stores, and auth port. `Mekik.AspNetCore` is the ASP.NET Core WebSocket transport. `Ilmek.Core` is the graph runtime mekik serves (mekik 0.9.0 is built against `Ilmek.Core` 0.1.0).
 
 </TabItem>
 </Tabs>
@@ -76,8 +77,7 @@ node server.ts
 
 ```csharp
 // Program.cs
-using Mekik.Core;
-using Mekik.AspNetCore;
+using Mekik; // Mekik.Core and Mekik.AspNetCore both live in the `Mekik` namespace
 
 var web = WebApplication.CreateBuilder(args).Build();
 
@@ -93,19 +93,26 @@ dotnet run
 </TabItem>
 </Tabs>
 
-`mekik({ graph })` / `new MekikApp(new MekikOptions { Graph = graph })` builds a [`MekikApp`](./concepts.md#3-the-app--mekik-graph-) with in-memory defaults for everything (checkpointer, history, conversations). The transport (`serveWs` / `MapMekik`) turns each socket into a connection the app drives. Omit the path to accept the upgrade on **any** path — handy when a client points at `/chat` while you were thinking `/ws`.
+`mekik({ graph })` / `new MekikApp(new MekikOptions { Graph = graph })` builds a [`MekikApp`](./concepts.md#3-the-app--mekik-graph-) with in-memory defaults for everything (checkpointer, history, conversations). The transport (`serveWs` / `MapMekik`) turns each socket into a connection the app drives. In TypeScript you can omit `path` to accept the upgrade on **any** path — handy when a client points at `/chat` while you were thinking `/ws`; `MapMekik` always takes a route pattern.
 
 ### What a client sees
 
-On connect, the server sends a `welcome` frame announcing the protocol and the minted identity. Each `text` frame the client sends starts one run:
+The handshake runs on the client's first frame — normally a `hello`, carrying any identity it wants to resume. The server answers with a `welcome` frame announcing the protocol and the resolved identity. Each `text` frame the client sends after that starts one run:
 
 ```jsonc
 // client → server
-{ "type": "text", "data": { "text": "hello" } }
+{ "type": "hello" }
 
 // server → client
+{ "type": "welcome", "data": { "protocol": "mekik/1", "conversationId": "conv-…", "userId": "user-…",
+  "connectionId": "connection-…", "watermark": 0, "pending": [] } }
+
+// client → server
+{ "type": "text", "data": { "text": "hello" } }
+
+// server → client (the user's own text took seq 1 — stored, but not echoed to the sender)
 { "type": "run", "data": { "status": "started" } }
-{ "type": "text", "id": "msg-1", "seq": 1, "from": "bot",
+{ "type": "text", "id": "msg-1", "seq": 2, "from": "bot",
   "data": { "text": "You said: hello" }, "timestamp": 1750000000000 }
 { "type": "run", "data": { "status": "finished" } }
 ```
@@ -302,3 +309,10 @@ The `--serve` mode renders end-to-end against chativa's sandbox, whose component
 - [**Protocol → Overview**](./protocol/overview.md) — the wire in one screen.
 - [**Authoring → Helpers**](./authoring/helpers.md) — every helper, in depth.
 - [**Human-in-the-loop**](./authoring/human-in-the-loop.md) — the durable-pause authoring contract.
+
+Beyond the basics, each of these is one option or one extra package away:
+
+- [**Client tools**](./authoring/client-tools.md) — let the graph call tools the browser executes (`clientTools`, opt-in; PROTOCOL §11).
+- [**Skills**](./authoring/skills.md) — a skill catalog the model loads on demand, skills that own their tools, and client-declared skills (`skills` / `clientSkills`; PROTOCOL §12).
+- [**MCP server**](./serving/mcp.md) and [**A2A agent**](./serving/a2a.md) — serve the same app to other agents (PROTOCOL §13, §14).
+- [**Horizontal scale**](./scaling.mdx) — run a fleet with `@mekik/redis` / `Mekik.Redis`.

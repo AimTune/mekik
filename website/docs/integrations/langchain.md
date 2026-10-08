@@ -45,7 +45,7 @@ function runAgent(
   options: {
     system: string;
     input: string;
-    tools?: readonly StructuredToolInterface[];
+    tools?: readonly StructuredToolInterface[]; // raw tools — runAgent wraps them with withMekikTools
     maxTurns?: number;           // model↔tool round-trips; default 25. Tool calls don't consume turns —
                                  // a round that fires five tools still costs one turn.
     maxToolCalls?: number;       // total tool invocations across the run; default 25
@@ -64,7 +64,9 @@ The loop is budgeted twice. `maxTurns` counts **model rounds** — how many time
 
 **A failing tool call is an observation, not a crash.** A call to a tool the agent does not have reads `Unknown tool <name>.`; a call whose arguments fail the tool's schema, or a tool that throws, reads `Error from <tool>: <message>` — the tool does not run (or its error is caught), the call is traced `running → error`, and the model gets another round to react. Only an interrupt (an approval, a client tool call) leaves the loop, by parking the run.
 
-You return the result as your node's reply (`{ reply }`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `runAgent` returns an **empty string** — `{ reply: "" }` emits nothing extra, no duplicate. With `stream: false`, it returns the full text for the consolidated `text` reply. Reach for [`withMekikTools`](#withmekiktools) directly when you need to drive the loop yourself (a custom agent framework, a non-standard message shape).
+You return the result as your node's reply (`{ reply }`). When **streaming** (the default), the answer is delivered live as the durable message (streamed chunks persist and replay), so `runAgent` returns an **empty string** — `{ reply: "" }` emits nothing extra, no duplicate. With `stream: false`, it returns the full text for the consolidated `text` reply.
+
+Hand `runAgent` **raw** tools and put their policies in `policy`: it wraps every entry of `tools` with `withMekikTools` itself, so a tool you already wrapped would be wrapped twice and each call traced twice. Reach for [`withMekikTools`](#withmekiktools) directly when you need to drive the loop yourself (a custom agent framework, a non-standard message shape).
 
 ## `withMekikTools`
 
@@ -105,14 +107,14 @@ Each returned tool, when the agent calls it: emits a `tool_call` trace (unless `
 The connected **client** can declare tools of its own — open its date picker, render one of its cards — via [client tools](../authoring/client-tools.md) (PROTOCOL.md §11). `withClientTools` turns the turn's accepted declarations into LangChain tools so the model calls the UI the same way it calls a server tool:
 
 ```ts
-import { withMekikTools, withClientTools, runAgent } from "@mekik/langchain";
+import { withClientTools, runAgent } from "@mekik/langchain";
 
 .node("agent", async (state, ctx) => {
   const tools = [
-    ...withMekikTools(ctx, serverTools, policy),   // the server's own tools
+    ...serverTools,                                 // the server's own tools (runAgent wraps them)
     ...withClientTools(ctx, { tags: ["billing"] }), // the frontend's, scoped by tag
   ];
-  return { reply: await runAgent(ctx, model(), { system: SYSTEM, input: state.input, tools }) };
+  return { reply: await runAgent(ctx, model(), { system: SYSTEM, input: state.input, tools, policy }) };
 })
 ```
 
@@ -131,23 +133,29 @@ Each wrapper's executor is [`mekik.callClientTool`](../authoring/client-tools.md
 
 ## `withSkills` — progressive disclosure
 
-The app's [skills](../authoring/skills.md) (PROTOCOL.md §12) reach a model in three levels: the `<available_skills>` block in the system prompt lists names and descriptions, `load_skill` pulls one skill's instructions when a task matches, and `read_skill_resource` opens a bundled file when the instructions point at it. `withSkills` builds the tools; `skillsPrompt` (from `@mekik/core`) builds the block:
+The app's [skills](../authoring/skills.md) (PROTOCOL.md §12) reach a model in three levels: the `<available_skills>` block in the system prompt lists names and descriptions, `load_skill` pulls one skill's instructions when a task matches, and `read_skill_resource` opens a bundled file when the instructions point at it. `withSkills` builds the tools; `skillsPrompt` (from `@mekik/core`) builds the block. `runAgent`'s `skills` option wires both in one switch:
+
+```ts
+import { runAgent } from "@mekik/langchain";
+
+.node("agent", async (state, ctx) => ({
+  // appends <available_skills> to the system prompt and adds load_skill / read_skill_resource
+  reply: await runAgent(ctx, model(), { system: SYSTEM, input: state.input, tools: serverTools, policy, skills: { tags: ["docs"] } }),
+}))
+```
+
+Driving the loop yourself, build both pieces by hand:
 
 ```ts
 import { skillsPrompt } from "@mekik/core";
-import { withMekikTools, withSkills, runAgent } from "@mekik/langchain";
+import { withMekikTools, withSkills } from "@mekik/langchain";
 
-.node("agent", async (state, ctx) => {
-  const system = SYSTEM + "\n\n" + skillsPrompt(ctx, { tags: ["docs"] });
-  const tools = [
-    ...withMekikTools(ctx, serverTools, policy),
-    ...withSkills(ctx, { tags: ["docs"] }),
-  ];
-  return { reply: await runAgent(ctx, model(), { system, input: state.input, tools }) };
-})
-
-// …or let runAgent do both with one option:
-return { reply: await runAgent(ctx, model(), { system: SYSTEM, input: state.input, tools, skills: { tags: ["docs"] } }) };
+const system = SYSTEM + "\n\n" + skillsPrompt(ctx, { tags: ["docs"] });
+const tools = [
+  ...withMekikTools(ctx, serverTools, policy),
+  ...withSkills(ctx, { tags: ["docs"] }),
+];
+// hand `system` and `tools` to your own model↔tool loop
 ```
 
 Signature:
@@ -156,6 +164,10 @@ Signature:
 function withSkills(
   ctx: Context<any>,
   filter?: { tags?: readonly string[]; source?: "server" | "client" },
+  options?: {
+    toolNames?: Readonly<Record<string, readonly string[]>>; // extra tool names a load announces, per skill
+    onLoaded?: (name: string) => void;                       // after each successful load
+  },
 ): StructuredToolInterface[];   // [] when the turn has no skills
 
 const LOAD_SKILL_TOOL = "load_skill";                 // schema { name }
@@ -164,7 +176,7 @@ const READ_SKILL_RESOURCE_TOOL = "read_skill_resource"; // schema { name, path }
 
 `load_skill` returns the instructions as the observation and emits the persistent `skill` frame, so the conversation shows which skill the agent is following. An unknown name — or one the `filter` hides — comes back as an error observation listing what *is* available, so the loop stays alive and the prompt and the tool always agree. The skill tools are not wrapped with the tool policy: a load is a catalog read that emits its own trace, not a side effect to journal.
 
-A skill **owns** its tools: declare the catalog as `SkillEntry<StructuredToolInterface>[]` and give an entry `tools`. With `skills` on, `runAgent` holds each visible entry's tools back — they are not offered to the model until it loads that skill successfully, then join `tools` for the rest of the run, and the `load_skill` observation names them. A premature call is refused with an observation; once unlocked, a call that fails reads `Error from <tool>: <message>` like any other (above); the tools themselves go through `withMekikTools` with the same `policy`, and a resume rebuilds each round's toolbox. The tools never reach the wire (catalog frame and hash are unchanged), and an entry holding something that is not a LangChain tool fails the run. `runAgent({ skillTools })` adds tools keyed by skill name for the ones that must be built per request; they merge with the entry's own. See [Skills → Tools under a skill](../authoring/skills.md#tools-under-a-skill). Wiring the loop yourself, `withSkills(ctx, filter, { toolNames, onLoaded })` names each entry's tools in the observation (plus any `toolNames`) and calls `onLoaded(name)` after each successful load; `mekik.skillTools(ctx, filter)` gives you the visible entries' tools. A tool built once (a catalog's) reads the calling run's `ctx` with `toolContext(config)` — `withMekikTools` passes it in the LangChain `config.configurable` on every call.
+A skill **owns** its tools: declare the catalog as `SkillEntry<StructuredToolInterface>[]` and give an entry `tools`. With `skills` on, `runAgent` holds each visible entry's tools back — they are not offered to the model until it loads that skill successfully, then join `tools` for the rest of the run, and the `load_skill` observation names them. A failed load unlocks nothing. A premature call does not run the tool: it is refused with an observation naming the skill to load (every skill that holds the tool, when several do); once unlocked, a call that fails reads `Error from <tool>: <message>` like any other (above); the tools themselves go through `withMekikTools` with the same `policy`, and a resume rebuilds each round's toolbox. The tools never reach the wire (catalog frame and hash are unchanged), and an entry holding something that is not a LangChain tool fails the run. `runAgent({ skillTools })` adds tools keyed by skill name for the ones that must be built per request; they merge with the entry's own. See [Skills → Tools under a skill](../authoring/skills.md#tools-under-a-skill). Wiring the loop yourself, `withSkills(ctx, filter, { toolNames, onLoaded })` names each entry's tools in the observation (plus any `toolNames`) and calls `onLoaded(name)` after each successful load; `mekik.skillTools(ctx, filter)` gives you the visible entries' tools. A tool built once (a catalog's) reads the calling run's `ctx` with `toolContext(config)` — `withMekikTools` passes it in the LangChain `config.configurable` on every call.
 
 ## Why wrapping, not just callbacks
 
@@ -258,7 +270,7 @@ import { route } from "@mekik/langchain";
     { name: "billing",   description: "invoices and charges" },
     { name: "general",   description: "everything else" },
   ], state.input, { fallback: "general" });
-  return command(update({ route: target }), target); // set channel + goto node
+  return command({ update: { route: target }, goto: target }); // ilmek: set channel + goto node
 })
 ```
 

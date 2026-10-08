@@ -105,7 +105,7 @@ When the source yields structured chunks rather than raw strings, pass a selecto
 
 ## A streaming reply, end to end
 
-A complete server whose one node streams a model's answer token by token and then returns the consolidated reply. `model` is your own LLM client:
+A complete server whose one node streams a model's answer token by token — the streamed bubble is the reply, so the node returns none. `model` is your own LLM client:
 
 <Tabs groupId="lang">
 <TabItem value="ts" label="TypeScript">
@@ -135,9 +135,8 @@ serveWs(app, { port: 8800, path: "/ws" });
 
 ```csharp
 // Program.cs
-using Ilmek.Core;
-using Mekik.Core;
-using Mekik.AspNetCore;
+using Ilmek;
+using Mekik; // Mekik.Core and Mekik.AspNetCore (MapMekik) share the Mekik namespace
 
 var g = Graph.Create("assistant")
     .Channel("input", Channels.LastWrite(""))
@@ -267,7 +266,9 @@ prop defaults — as metadata; chativa registers each definition as a custom ele
 and mounts it by name from then on. Adding a widget becomes a server deploy.
 
 ```ts
-const deliveryCard = defineComponent({
+type DeliveryProps = { id: string; title: string; status: string; note?: string; lines: Array<{ label: string; price: number }> };
+
+const deliveryCard = defineComponent<DeliveryProps>({
     name: "delivery-card",
     template: `<div class="card">
         <header><h3>{{title}}</h3><span class="badge">{{status}}</span></header>
@@ -348,7 +349,7 @@ Two rules, both learned the hard way:
   its call site stops running.
 
 ```ts
-const phase = (ctx, name, emit) =>
+const phase = (ctx: Context<any>, name: string, emit: () => void) =>
     ctx.step(name, async () => { await sleep(1800); emit(); return true; });
 
 await phase(ctx, "packing",    () => card(ctx, props("Preparing"),  { id: "card-1" }));

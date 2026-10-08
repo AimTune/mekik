@@ -17,7 +17,7 @@ const features = [
   {
     icon: "⏸️",
     title: "Durable human-in-the-loop",
-    body: "A node calls mekik.approve and suspends. The pause lives in ilmek's checkpoint — it survives a restart — and resumes exactly where it stopped, answered by a thread-scoped interrupt id.",
+    body: "A node calls mekik.approve and suspends. The pause lives in ilmek's checkpoint — with a durable checkpointer it survives a restart — and resumes exactly where it stopped, answered by a thread-scoped interrupt id.",
   },
   {
     icon: "🎯",
@@ -38,6 +38,21 @@ const features = [
     icon: "⚖️",
     title: "Two languages, one wire",
     body: "TypeScript (reference) and .NET (port) speak byte-identical mekik/1, held to that promise by shared golden fixtures replayed through both mappers.",
+  },
+  {
+    icon: "📚",
+    title: "Agent Skills",
+    body: "Give a node a catalog of SKILL.md folders. The model sees names and descriptions, loads a skill's instructions on demand, and a skill's own tools are offered only once it is loaded.",
+  },
+  {
+    icon: "🖱️",
+    title: "Client tools",
+    body: "The frontend declares what its page can do — a date picker, a calendar — and a node calls it like a server tool, answered through the same durable pause.",
+  },
+  {
+    icon: "🔌",
+    title: "MCP and A2A",
+    body: "Serve the graph as MCP tools or as an Agent2Agent peer, and bring other MCP servers' tools into an agent with the same traces, approvals and exactly-once.",
   },
 ];
 
@@ -116,9 +131,9 @@ function HomepageFeatures() {
             margin: "0 auto 2rem",
           }}
         >
-          Everything below comes from <code>@mekik/core</code> +{" "}
-          <code>@mekik/ws</code> (or <code>Mekik.Core</code> +{" "}
-          <code>Mekik.AspNetCore</code>). Your graph stays pure ilmek.
+          Everything below comes from the mekik packages —{" "}
+          <code>@mekik/*</code> on npm, <code>Mekik.*</code> on NuGet. Your
+          graph stays pure ilmek.
         </p>
         <div className={styles.featureGrid}>
           {features.map((f) => (

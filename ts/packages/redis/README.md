@@ -46,14 +46,16 @@ methods it uses works, and you share your own connection:
 new RedisTurnLock(redis, {
   keyPrefix: "mekik",   // share one Redis across apps. Default "mekik".
   ttlMs: 30_000,        // lock TTL; must exceed a turn's worst case. Default 30s.
-  heartbeatMs: 10_000,  // self-renew interval. Default ttlMs / 3.
+  heartbeatMs: 10_000,  // self-renew interval. Default ttlMs / 3 (at least 1s).
   onLost: (convId) => log.warn("turn lease lost", convId),
 });
 ```
 
 The lease is token-checked: a node can only renew or release a lock it still
 holds, so a slow node whose TTL lapsed can never free the new owner's lock. The
-key is `${keyPrefix}:lock:${conversationId}`.
+key is `${keyPrefix}:lock:${conversationId}`. If a release fails (a Redis blip),
+the engine still frees its local turn lock and the key simply expires on its
+TTL, so the conversation never answers `busy` forever.
 
 ## `RedisBackplane` options
 
@@ -66,7 +68,10 @@ new RedisBackplane(redis, {
 
 One subscriber connection is multiplexed across every conversation — channels are
 reference-counted, so the Nth `subscribe` shares one Redis `SUBSCRIBE` and the last
-`unsubscribe` tears it down. The channel is `${keyPrefix}:bp:${conversationId}`.
+`unsubscribe` tears it down. The channel is `${keyPrefix}:bp:${conversationId}`,
+and each message is the JSON `{ originId, frame }` — the engine skips its own by
+`originId`. The .NET `Mekik.Redis` backplane serializes the same message with
+PascalCase keys, so don't mix TypeScript and .NET nodes on one backplane prefix.
 Call `backplane.close()` on shutdown to close the connection it opened.
 
 ## Routing

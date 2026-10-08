@@ -12,10 +12,10 @@ The server side of mekik reduces to one pure function: **`eventToFrames`** (the 
 
 The `TurnMapper` is **turn-stateful** but **conversation-stateless**:
 
-- It owns the current turn's GenUI `streamId` and the per-stream chunk counter.
-- It is *handed* the conversation's persistent-`seq` allocator and a deterministic id minter.
+- It owns the current turn's GenUI `streamId`, the per-stream chunk counter, and the id of the open text run (so consecutive text deltas share one chunk id — one growing bubble, not one per token).
+- It is *handed* the conversation's persistent-`seq` allocator, an id minter, a clock, and the reply selector.
 
-That split is deliberate. Because the conversation state (seq, ids) is injected, the mapper is a pure function of `(events, seqAllocator, minter, clock)` — which is exactly what makes it reproducible across languages. Production passes a random minter and the wall clock; the fixtures pass a deterministic minter and a fixed clock. Only those injected pieces differ.
+That split is deliberate. Because the conversation state (seq, ids) is injected, the mapper is a pure function of `(events, seqAllocator, minter, clock, reply)` — which is exactly what makes it reproducible across languages. Production passes a random minter and the wall clock; the fixtures pass a deterministic minter and a fixed clock. Only those injected pieces differ.
 
 ## The `IlmekEvent` variants
 
@@ -34,16 +34,17 @@ Most of these produce **nothing** in v1. The mapper cares about four: `run_start
 | `IlmekEvent` | condition | frame(s) emitted |
 |---|---|---|
 | `run_start` | — | `run{started}` |
-| `custom` | `isToken(payload)` (ilmek `{type:"token",text,meta?}`) | a `genui` text chunk `{type:"text", content: payload.text, id: nextChunkId}`, `done:false` |
-| `custom` | `payload.$mekik == "genui"` | a `genui` frame with `chunk = payload.chunk`; assign `chunk.id = nextChunkId` if absent; `done:false` |
+| `custom` | `isToken(payload)` (ilmek `{type:"token",text,meta?}`) | a `genui` text chunk `{type:"text", content: payload.text, id: <text-run id>}`, `done:false` — consecutive text deltas reuse the open text run's id |
+| `custom` | `payload.$mekik == "genui"` | a `genui` frame with `chunk = payload.chunk`, `done:false`. Without a `chunk.id`, a `text` chunk joins the open text run; a `ui`/`event` chunk closes it and takes `nextChunkId`. An explicit id is kept and also closes the run |
 | `custom` | `payload.$mekik == "tool"` | a `tool_call` frame `{data: payload.call}` (upsert by `call.id`) |
+| `custom` | `payload.$mekik == "skill"` | a [`skill` frame](../authoring/skills.md) `{data: payload.use}` (upsert by `use.id`) |
 | `custom` | `payload.$mekik == "message"` | a [rich message frame](../authoring/messages.md) `{type: payload.messageType, id: payload.id ?? mint(), from:"bot", data: payload.data, timestamp}` — **dropped** if `messageType` is a reserved protocol frame type (except `"text"`) |
-| `custom` | otherwise | nothing (reserved for the `onCustom` extension hook) |
+| `custom` | otherwise | nothing (a reserved `onCustom` extension hook, not shipped — see below) |
 | `node_*`, `step_start`, `state`, `checkpoint` | — | nothing in v1 |
 | `interrupt` | for each `p` in `pending` | one `interrupt` frame `{id: p.id, data: unwrapInterrupt(p.payload)}` |
 | `run_end` | `status == "interrupted"` | `run{interrupted}` |
 | `run_end` | `status == "done"` | close the turn stream if open (`genui {done:true, chunk:{type:"event", name:"stream_done"}}`); then, if the run produced a reply, a `bot` `text` frame; then `run{finished}` |
-| `run_end` | `status == "error"` | a `bot` `text` `{text:"⚠️ " + message}` then `run{error}` |
+| `run_end` | `status == "error"` | a `bot` `text` `{text:"⚠️ " + message}` then `run{error}` — `message` is `<node>: <error>` per recorded error, joined by `; ` |
 | `run_end` | `status == "aborted"` | `run{aborted}` (no text; the last checkpoint stands) |
 
 Order within a run is the order ilmek yields events; the mapper preserves it. The terminal `run{...}` frame is always the last frame of its run.
@@ -64,6 +65,9 @@ You never write those `custom` payloads by hand. The [authoring helpers](../auth
 | `mekik.approve(ctx, payload, opts)` | `ctx.interrupt` with `$mekik:{ui,actions}` | `interrupt` frame |
 | `mekik.choose(ctx, payload, options)` | `ctx.interrupt` with `$mekik:{actions}` built from the options | `interrupt` frame |
 | `mekik.message(ctx, type, data)` | `{$mekik:"message", messageType, data, id?}` | rich message frame |
+| `mekik.onEvent(ctx, eventType)` | `ctx.interrupt` with `$mekik:{event}` | `interrupt` frame carrying `data.event` |
+| `mekik.callClientTool(ctx, name, params)` | `{$mekik:"tool", …}` traces, then `ctx.interrupt` with `$mekik:{tool}` — or, for a `notify` tool, a `client_tool` event chunk | `tool_call` + `interrupt` carrying `data.tool` (or a `genui` event chunk) |
+| `mekik.loadSkill(ctx, name)` | `{$mekik:"skill", use:{…}}` | `skill` upsert |
 
 The `$mekik` key is the reserved namespace the mapper keys on. It's an implementation detail of the helpers — but knowing it exists explains the fixtures.
 
@@ -86,7 +90,9 @@ The `$mekik` key is the reserved namespace the mapper keys on. It's an implement
   "actions": [ { "label": "Approve", "value": { "approved": true } } ] } // present only if given
 ```
 
-A plain `ctx.interrupt(x)` with no `$mekik` key yields `{payload: x}` with no `ui`/`actions` — the client falls back to default Approve/Cancel chips. (Fixture `plain-interrupt` pins this.)
+A plain `ctx.interrupt(x)` with no `$mekik` key yields `{payload: x}` with no `ui`/`actions` — the client falls back to default Approve/Cancel chips. (Each suite's mapper unit tests pin this; the `single-approval` and `client-tool-call` fixtures pin the `ui`/`actions` and `tool` splits.)
+
+`mekik.onEvent` uses the same envelope as `$mekik:{event:"<name>"}`, which surfaces as `data.event`, and `mekik.callClientTool` as `$mekik:{tool:{name, params?}}`, which surfaces as `data.tool`. Either one tells the client not to render default chips.
 
 ## The reply text frame
 
@@ -94,9 +100,9 @@ At `run_end{done}` the adapter selects the run's reply from final channel state 
 
 A crucial distinction:
 
-> Streaming tokens (`ctx.emitToken` / `mekik.text`) are **not** the persistent reply. They are transient `genui` text chunks. The consolidated `text` frame at run end is the durable record that replay will show.
+> Streaming tokens (`ctx.emitToken` / `mekik.text`) are **not** the reply. They are `genui` text chunks of the turn's stream — persisted and replayed like every `genui` frame — while the consolidated `text` frame at run end is a separate message bubble.
 
-So a node that streams prose token-by-token *and* returns a reply produces both: live `genui` text chunks during the run, and one persistent `text` bubble at the end. On reconnect, only the `text` bubble replays — which is what you want. (Fixture `reply-text` pins the consolidated frame; `tokens` pins the streaming chunks.)
+So a node that streams prose token-by-token *and* returns the same text as its reply shows the answer twice, live and on every replay. A node that streams its whole answer returns no reply; `runAgent` / `Agent.RunAsync` with streaming on do exactly that. (Fixtures `mixed-turn` and `skill-loaded` pin the consolidated frame; `tokens` pins the streaming chunks.)
 
 ## Resume routing
 
@@ -109,9 +115,9 @@ There's a convenience path: a `genui_event{eventType:"submit", payload:{id, answ
 
 ## Extending the mapping (reserved)
 
-`custom` payloads the mapper doesn't recognise are **dropped** by default — the core mapping is closed so the [golden fixtures](../parity/conformance.md) stay authoritative. [`PROTOCOL.md §8`](https://github.com/AimTune/mekik/blob/main/PROTOCOL.md) reserves an `onCustom(payload, emit)` seam for mapping them to extra frames, kept deliberately outside that closed core.
+`custom` payloads the mapper doesn't recognise are **dropped** by default — the core mapping is closed so the [golden fixtures](../parity/conformance.md) stay authoritative. [`PROTOCOL.md §8`](https://github.com/AimTune/mekik/blob/main/PROTOCOL.md#8-extensibility--non-goals-8) reserves an `onCustom(payload, emit)` seam for mapping them to extra frames, kept deliberately outside that closed core.
 
-It's a documented extension point rather than a shipped option in v1. To produce custom frames today, emit a payload the mapper already recognises (`$mekik: "genui"` or `$mekik: "tool"`) from your node via the [authoring helpers](../authoring/helpers.md) — that's what `mekik.ui` / `mekik.tool` do.
+It's a reserved extension point, not a shipped option: there is no `onCustom` field on `MekikOptions` in 0.9. To produce custom frames today, emit a payload the mapper already recognises from your node via the [authoring helpers](../authoring/helpers.md) — `mekik.ui` / `mekik.event` for GenUI chunks, `mekik.tool` for traces, and `mekik.message` for a [rich message frame](../authoring/messages.md) of any client renderer type.
 
 ## Where to go next
 

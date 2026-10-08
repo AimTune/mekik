@@ -1,6 +1,6 @@
 # mekik conformance
 
-Language-neutral parity for **mekik/1** (see `../../PROTOCOL.md`). Same shape as
+Language-neutral parity for **mekik/1** (see [`../PROTOCOL.md`](../PROTOCOL.md)). Same shape as
 ilmek's own `conformance/README.md`: a scenario list every implementation encodes
 as its own test suite, plus **golden fixtures** that both suites replay
 byte-for-byte.
@@ -17,6 +17,20 @@ Two layers:
    locking, auth). Each language writes these as ordinary tests
    (`node --test` in TS, `dotnet test` in .NET), asserting the same observable
    wire behaviour.
+
+Where the runners live:
+
+| layer | TypeScript (`ts/packages/core/test/`) | .NET (`dotnet/test/Mekik.Core.Tests/`) |
+| --- | --- | --- |
+| golden fixtures | `fixtures.test.ts` | `ConformanceTests.cs` |
+| catalog hashes | `hashes.test.ts` | `CatalogHashConformanceTests.cs` |
+| MCP JSON-RPC | `mcp.test.ts` | `McpServerTests.cs` |
+| A2A JSON-RPC | `a2a.test.ts` | `A2aServerTests.cs` |
+| scenarios | `scenarios.test.ts`, `engine-edges.test.ts`, `client-tools.test.ts`, `skills.test.ts`, … | `EngineScenariosTests.cs`, `EngineEdgeTests.cs`, `ClientToolsTests.cs`, `SkillsTests.cs`, … |
+
+The .NET test project copies the JSON files in this folder to its output
+directory and reads them from `AppContext.BaseDirectory` (CI builds rewrite
+source paths, so `[CallerFilePath]` cannot find them).
 
 ## Fixture format
 
@@ -56,21 +70,21 @@ and committed; both suites then treat them as read-only goldens.
 
 | fixture                | exercises                                                                                   |
 | ---------------------- | ------------------------------------------------------------------------------------------- |
-| `run-empty`            | `run_start` → `run{started}`; `run_end{done}` with no output → `run{finished}` only         |
-| `tokens`               | `emitToken` customs → streaming `genui` text chunks; auto-close `stream_done` at run end    |
-| `genui-ui`             | `mekik.ui` custom → `genui` ui chunk; chunk-id assignment                                  |
-| `tool-call`            | `mekik.tool` running→completed customs → `tool_call` upsert by id                          |
-| `tool-error`           | tool failure → `tool_call{status:"error"}`                                                  |
-| `reply-text`           | `run_end{done}` + `replyChannel` → consolidated `bot` `text` frame after stream close       |
-| `single-approval`      | one `interrupt` → `interrupt` frame with `ui` + `actions`; `run{interrupted}`               |
-| `plain-interrupt`      | `ctx.interrupt` with no `$mekik` → `interrupt` frame, no `ui`/`actions`                    |
-| `concurrent-approvals` | two pending in one `interrupt` event → two `interrupt` frames, distinct ids, both preserved |
-| `run-error`            | `run_end{error}` → `⚠️` `text` + `run{error}`                                               |
-| `run-aborted`          | `run_end{aborted}` → `run{aborted}` only, no text                                           |
-| `mixed-turn`           | ui + tokens + tool + reply in one run (ordering + seq monotonicity)                         |
+| `run-empty`            | `run_start` → `run{started}`; `run_end{done}` with no output → `run{finished}` only (no stream opened, so no `stream_done`) |
+| `tokens`               | `emitToken` customs → streaming `genui` text chunks sharing one chunk id (one growing bubble); auto-close `stream_done` at run end |
+| `single-approval`      | one `interrupt` → `interrupt` frame with `ui` + `actions`, `$mekik` stripped from the payload; `run{interrupted}` |
+| `concurrent-approvals` | two pending in one `interrupt` event (same journal key) → two `interrupt` frames, distinct thread-scoped ids, both preserved |
+| `mixed-turn`           | `mekik.tool` running→completed traces, a `mekik.ui` chunk, tokens and a `replyChannel` reply in one run: ordering, seq monotonicity, chunk-id sequencing (the text run shares one id; the ui chunk before and the `stream_done` after take their own), stream auto-close, then the consolidated `bot` `text`; `node_start` is ignored |
 | `rich-message`         | `mekik.message` customs → persistent rich message frames (§4.5); caller id wins over the minted one; a reserved frame type is dropped |
 | `client-tool-call`     | `mekik.callClientTool` (§11.3): running `tool_call` trace, then an interrupt whose `$mekik.tool` unwraps to `data.tool={name,params}` with empty payload and no ui/actions/event |
 | `skill-loaded`         | `mekik.loadSkill` (§12.5): `$mekik.skill` customs → persistent `skill` frames carrying the use record verbatim; an unknown name is a `status:"error"` use; the reply follows |
+
+The rest of the §4.1 table — `run_end{error}` (`⚠️` text + `run{error}`, the
+`<node>: <message>` joining), `run_end{aborted}`, a plain `ctx.interrupt` with
+no `$mekik`, an explicit chunk id — is pinned by each suite's mapper unit tests
+(`mapper.test.ts` / `mapper-edges.test.ts`, `CoreUnitTests.cs`) rather than by a
+shared fixture. A stream that throws mid-run (§4.1) is covered behaviourally by
+the recursion-limit tests (`helpers-ports.test.ts`, `EngineEdgeTests.cs`).
 
 ### The MCP JSON-RPC fixture
 
@@ -108,7 +122,9 @@ shortest round-trip form (`1e+21`, `1e-7`). Generated by the TS reference
    `conversationId` resets client watermark to 0.
 2. **watermark replay** - reconnect with `watermark = N` receives exactly the
    persistent frames with `seq > N`, in order, then live delivery; transient
-   frames are never replayed.
+   frames are never replayed. A `watermark` or id of the wrong type in the
+   `hello` (or a non-numeric query-string watermark) is ignored as if absent
+   (transport tests: `ts/packages/ws/test/`, `Mekik.AspNetCore.Tests`).
 3. **multi-tab fan-out** - two connections on one conversation both receive every
    persistent frame; the sender's own `text` turn is not echoed to itself but is
    delivered to the other connection and stored.
@@ -244,6 +260,10 @@ shortest round-trip form (`1e+21`, `1e-7`). Generated by the TS reference
     to the transcript; a lease whose release fails, or a lock whose acquire
     throws, never leaves the conversation answering `busy`; a tab that sends a
     turn and disconnects at once still has its turn run for the other tabs.
+35. **stream that throws** (§4.1) - a run whose event stream throws after
+    `run_start` (ilmek's recursion limit) ends on the wire like
+    `run_end{error}`: a `⚠️` bot `text`, then `run{error}`, for every tab; the
+    turn lock is freed.
 
 Subtle cases fresh ports tend to break (mirroring ilmek's list): 6 and 7
 (id-vs-key routing), 8 (pending re-announce), 12 (refuse new turn while parked),

@@ -20,23 +20,32 @@ The wire rules are normative in [`PROTOCOL.md §12`](https://github.com/AimTune/
 
 ## Configuring the server's skills
 
+A skill is its instructions **plus the tools those instructions use**. Give each entry its `tools`; they stay out of the model's request until the skill is loaded (see [Tools under a skill](#tools-under-a-skill)). A skill with no tools — pure guidance, like a house style — simply omits the field.
+
 <Tabs groupId="lang">
 <TabItem value="ts" label="TypeScript">
 
 ```ts
-import { mekik } from "@mekik/core";
-import { SkillCatalog } from "@ilmek/skills";
+import { mekik, type SkillEntry } from "@mekik/core";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 
-// From folders — @ilmek/skills' catalog is a SkillSource as-is.
-const app = mekik({ graph, skills: await SkillCatalog.fromDirectories(["./skills"]) });
-
-// …or inline, for a small fixed set (or a test).
-const app2 = mekik({
+const app = mekik({
     graph,
     skills: [
-        { name: "brand-voice", description: "Write in the house voice.", instructions: "Short sentences. No exclamation marks." },
-        { name: "pdf", description: "Fill, merge and read PDF forms.", instructions: "…", tags: ["docs"] },
-    ],
+        {
+            name: "pdf",
+            description: "Fill, merge and read PDF forms.",
+            instructions: "Read the form's fields first, then fill only the ones the user gave values for.",
+            tags: ["docs"],
+            tools: [readPdfFields, fillPdfForm, mergePdfs],  // offered once `pdf` is loaded
+        },
+        {
+            name: "brand-voice",
+            description: "Write in the house voice.",
+            instructions: "Short sentences. No exclamation marks.",
+            // no tools: guidance only
+        },
+    ] satisfies SkillEntry<StructuredToolInterface>[],
 });
 ```
 
@@ -44,27 +53,117 @@ const app2 = mekik({
 <TabItem value="dotnet" label=".NET">
 
 ```csharp
-using Ilmek.Skills;
+using Microsoft.Extensions.AI;
 
-// Inline, for a small fixed set (or a test).
 var app = new MekikApp(new MekikOptions
 {
     Graph = g,
     Skills = SkillSources.Inline(
-        new SkillEntry { Name = "brand-voice", Description = "Write in the house voice.", Instructions = "Short sentences. No exclamation marks." },
-        new SkillEntry { Name = "pdf", Description = "Fill, merge and read PDF forms.", Instructions = "…", Tags = ["docs"] }),
+        new SkillEntry<AIFunction>
+        {
+            Name = "pdf",
+            Description = "Fill, merge and read PDF forms.",
+            Instructions = "Read the form's fields first, then fill only the ones the user gave values for.",
+            Tags = ["docs"],
+            Tools = [readPdfFields, fillPdfForm, mergePdfs],   // offered once `pdf` is loaded
+        },
+        new SkillEntry
+        {
+            Name = "brand-voice",
+            Description = "Write in the house voice.",
+            Instructions = "Short sentences. No exclamation marks.",
+            // no tools: guidance only
+        }),
 });
-
-// From folders — map Ilmek.Skills' catalog into entries.
-var catalog = await SkillCatalog.FromDirectoriesAsync("./skills");
-Skills = SkillSources.Inline(catalog.All().Select(s => new SkillEntry
-{
-    Name = s.Name, Description = s.Description, Instructions = s.Instructions,
-})),
 ```
 
 </TabItem>
 </Tabs>
+
+### Skills from `SKILL.md` folders, with their tools
+
+A folder holds the instructions; the **tools are code**, so you attach them by skill name when you load the catalog. Everything else about the folder — progressive disclosure, bundled files (level 3) — keeps working.
+
+<Tabs groupId="lang">
+<TabItem value="ts" label="TypeScript">
+
+```ts
+import { mekik, type SkillSource } from "@mekik/core";
+import { SkillCatalog } from "@ilmek/skills";
+import type { StructuredToolInterface } from "@langchain/core/tools";
+
+const folders = await SkillCatalog.fromDirectories(["./skills"]);
+
+// The tools each folder skill owns, by skill name.
+const toolsFor: Record<string, StructuredToolInterface[]> = {
+    pdf: [readPdfFields, fillPdfForm, mergePdfs],
+};
+
+// The catalog as-is, plus each skill's tools. `readResource` still reads the
+// folder's bundled files.
+const skills: SkillSource = {
+    list: () => folders.list(),
+    get: (name) => {
+        const s = folders.get(name);
+        return s && { ...s, tools: toolsFor[name] ?? [] };
+    },
+    readResource: (name, path) => folders.readResource(name, path),
+};
+
+const app = mekik({ graph, skills });
+```
+
+`SkillCatalog` is a `SkillSource` as-is, so a folder catalog without tools needs no wrapper: `mekik({ graph, skills: folders })`.
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+using Ilmek.Skills;
+using Mekik;
+using Microsoft.Extensions.AI;
+
+var folders = await SkillCatalog.FromDirectoriesAsync("./skills");
+
+// The tools each folder skill owns, by skill name.
+var toolsFor = new Dictionary<string, IReadOnlyList<AIFunction>>
+{
+    ["pdf"] = [readPdfFields, fillPdfForm, mergePdfs],
+};
+
+var app = new MekikApp(new MekikOptions { Graph = g, Skills = new FolderSkills(folders, toolsFor) });
+
+// The catalog as-is, plus each skill's tools. ReadResourceAsync still reads the
+// folder's bundled files.
+sealed class FolderSkills(SkillCatalog folders, IReadOnlyDictionary<string, IReadOnlyList<AIFunction>> toolsFor)
+    : Mekik.ISkillSource   // qualified: Ilmek.Skills has an ISkillSource of its own
+{
+    public IReadOnlyList<SkillSummary> List() =>
+        folders.All().Select(s => new SkillSummary { Name = s.Name, Description = s.Description }).ToList();
+
+    public SkillEntry? Get(string name) => folders.Get(name) is { } s
+        ? new SkillEntry<AIFunction>
+        {
+            Name = s.Name,
+            Description = s.Description,
+            Instructions = s.Instructions,
+            Tools = toolsFor.GetValueOrDefault(name) ?? [],
+        }
+        : null;
+
+    public bool HasResources => true;
+
+    public Task<string> ReadResourceAsync(string name, string path, CancellationToken ct = default) =>
+        folders.ReadResourceAsync(name, path, ct);
+}
+```
+
+`Ilmek.Skills`' catalog is not a `Mekik.ISkillSource` by itself, so .NET always goes through an adapter like this one, even for skills without tools. Mapping `folders.All()` into `SkillSources.Inline(...)` is shorter, but an inline source has no files, so level 3 (`read_skill_resource`) goes away.
+
+</TabItem>
+</Tabs>
+
+A tool built once in the catalog still gets the run that called it: read it with `toolContext(config)` / `MekikTools.ToolContext(arguments)` (see [below](#a-skill-owns-its-tools)). Tools that must be built **per request** — closing over a value only the node knows — go in `runAgent`'s `skillTools` / `AgentRunOptions.SkillTools` instead, keyed by skill name; they merge with the entry's own (see [Tools built per request](#tools-built-per-request-skilltools)).
 
 `skills` takes a **`SkillSource`** — anything with `list()` (level 1) and `get(name)` (level 2), optionally `readResource(name, path)` (level 3) — or a plain list. Tags on an entry scope which node sees it, exactly as [client tool tags](./client-tools.md#reading-the-toolbox--and-tags) do: an untagged skill is visible to every query, a tagged one only to queries whose tags intersect its own.
 
@@ -111,7 +210,7 @@ You have the following skills available. Each entry gives a skill's name and wha
 </available_skills>
 ```
 
-It returns `""` when the turn has no skills, so appending it unconditionally is safe. Pass `{ intro: null }` / `intro: null` for the block alone, or your own sentence.
+It returns `""` when the turn has no skills, so appending it unconditionally is safe. Pass `{ intro: null }` as the third argument (`mekik.skillsPrompt(ctx, filter, { intro: null })`) / `intro: null` for the block alone, or your own sentence.
 
 ## Loading a skill — and the `skill` frame
 
@@ -142,7 +241,7 @@ Every load emits a persistent **`skill` frame** — `{type:"skill", seq, data:{i
 
 Loading is a catalog read, not a side effect, so it is not journaled; the trace id is replay-stable (task id + call order, like tool ids), so the resume pass after a pause upserts the same frame rather than duplicating it.
 
-Level 3 exists only for a source with files behind it — `@ilmek/skills`' catalog confines `path` to the skill folder (`..` and absolute paths are refused). Inline and client-declared skills have no files; `skillResource` rejects for them, and `skillResourcesAvailable(ctx)` / `Shuttle.SkillResourcesAvailable` tells you up front.
+Level 3 exists only for a source with files behind it — `@ilmek/skills`' catalog confines `path` to the skill folder (`..` and absolute paths are refused). Inline and client-declared skills have no files; `skillResource` rejects for them, and `skillResourcesAvailable(ctx)` (a named import from `@mekik/core`) / `Shuttle.SkillResourcesAvailable` tells you up front.
 
 ## Client-declared skills (off by default)
 
@@ -153,6 +252,8 @@ A frontend can declare skills of its own — a house style, the names its screen
     { "name": "ui-conventions", "description": "How this app names its screens.",
       "instructions": "Call the cart the Basket. Never say 'checkout'.", "tags": ["ui"] } ] }
 ```
+
+With chativa, pass the same entries as `skills` to `@chativa/connector-mekik`'s `MekikConnector`; like its [client tools](./client-tools.md#declaring-the-chativa-side), the set is sealed at construction unless you pass `allowDynamicSkills: true` (which unlocks `registerSkill` / `unregisterSkill`).
 
 Declarations are **ignored entirely unless the app opts in** — the same posture as [client tools](./client-tools.md#accepting-the-server-side--off-by-default) and `acceptClientMeta`, because a skill's description and instructions are text a model will follow.
 
@@ -382,7 +483,7 @@ return Update.Of("reply", await Agent.RunAsync(ctx, chat, new AgentRunOptions
 </TabItem>
 </Tabs>
 
-`skillTools` is also how you hold tools under a skill the catalog does not own as an entry — one read from `SKILL.md` folders, or a client declaration the app accepted (the server picks the tools; the client only named the skill).
+`skillTools` is also how you hold tools under a skill whose entry does not carry them — one read from `SKILL.md` folders without the wrapper [above](#skills-from-skillmd-folders-with-their-tools), or a client declaration the app accepted (the server picks the tools; the client only named the skill).
 
 ### The rules
 

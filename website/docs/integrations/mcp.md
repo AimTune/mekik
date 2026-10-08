@@ -15,16 +15,17 @@ The other direction — *your* graph as an MCP tool for other agents — is [Ser
 ```ts
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpToolbox } from "@ilmek/mcp";
-import { withMekikTools, withMcpTools, runAgent } from "@mekik/langchain";
+import { withMcpTools, runAgent } from "@mekik/langchain";
 
+const client = new Client({ name: "my-agent", version: "1.0.0" });  // connect it to the server's transport
 const github = await McpToolbox.connect(client, { name: "github" });   // any SDK Client fits, structurally
 
 .node("agent", async (state, ctx) => {
   const tools = [
-    ...withMekikTools(ctx, serverTools, policy),
+    ...serverTools,                                                              // runAgent wraps these with `policy`
     ...withMcpTools(ctx, github, { github__create_issue: { approve: true } }),   // destructive → ask first
   ];
-  return { reply: await runAgent(ctx, model(), { system: SYSTEM, input: state.input, tools }) };
+  return { reply: await runAgent(ctx, model(), { system: SYSTEM, input: state.input, tools, policy }) };
 })
 ```
 
@@ -46,19 +47,20 @@ Each tool keeps the server's name, description and JSON Schema. The observation 
 **With the official SDK.** `ModelContextProtocol`'s `McpClientTool` already *is* an `AIFunction`, so the client's tools go straight into [`MekikTools.Wrap`](./dotnet-agents.md#mekiktoolswrap):
 
 ```csharp
-var client = await McpClientFactory.CreateAsync(transport);
-var tools = MekikTools.Wrap(ctx, await client.ListToolsAsync(), new()
+var client = await McpClient.CreateAsync(transport);   // ModelContextProtocol.Client
+var tools = MekikTools.Wrap(ctx, await client.ListToolsAsync(), new Dictionary<string, ToolPolicy>
 {
     ["create_issue"] = new ToolPolicy { Approve = new ApproveSpec() },
 });
 ```
 
-**With `Ilmek.Mcp`'s toolbox** (or any tool list plus an invoker), `McpFunctions.Wrap` builds the functions and wraps them the same way:
+**With `Ilmek.Mcp`'s toolbox** (or any tool list plus an invoker), `McpFunctions.Wrap` builds the functions and wraps them the same way (`SdkClient` is the small `IMcpClient` adapter from [ilmek's MCP page](https://ilmek.aimtune.dev/mcp#install-and-connect)):
 
 ```csharp
 using Ilmek.Mcp;
 using Mekik.Agents;
 
+// SdkClient: the two-method IMcpClient adapter over the official client, from ilmek's MCP page
 var github = await McpToolbox.ConnectAsync(new SdkClient(client), new() { Name = "github" });
 
 var tools = MekikTools.Wrap(ctx, serverFunctions, policies)
@@ -69,7 +71,7 @@ var tools = MekikTools.Wrap(ctx, serverFunctions, policies)
             var r = await github.InvokeAsync(name, args, ct);
             return new RemoteToolResult { Text = r.Text, Structured = r.Structured, IsError = r.IsError };
         },
-        new() { ["github__create_issue"] = new ToolPolicy { Approve = new ApproveSpec() } }))
+        new Dictionary<string, ToolPolicy> { ["github__create_issue"] = new ToolPolicy { Approve = new ApproveSpec() } }))
     .ToList();
 ```
 
