@@ -6,6 +6,13 @@ public sealed record Credential
     public string? Token { get; init; }
     public IReadOnlyDictionary<string, string?>? Headers { get; init; }
     public IReadOnlyDictionary<string, string?>? Query { get; init; }
+    /// <summary>
+    /// The <c>hello.meta</c> of a hello the <b>transport synthesised itself</b>. Only a hub
+    /// transport such as <c>Mekik.Converger</c> sets it, with the hub-verified identity at
+    /// <c>Meta["auth"]</c> (read by <see cref="HubAuthenticator"/>). <c>MapMekik</c> never
+    /// does: a client's own <c>hello.meta</c> is client input, not a credential.
+    /// </summary>
+    public IReadOnlyDictionary<string, object?>? Meta { get; init; }
 }
 
 public sealed record AuthVerdict

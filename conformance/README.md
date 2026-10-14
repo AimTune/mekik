@@ -27,6 +27,7 @@ Where the runners live:
 | Redis backplane envelope | `ts/packages/redis/test/envelope.test.ts` | `dotnet/test/Mekik.Redis.Tests/EnvelopeConformanceTests.cs` |
 | MCP JSON-RPC | `mcp.test.ts` | `McpServerTests.cs` |
 | A2A JSON-RPC | `a2a.test.ts` | `A2aServerTests.cs` |
+| behind a hub (Converger) | `ts/packages/converger/test/conformance.test.ts` | `dotnet/test/Mekik.Converger.Tests/HubConformanceTests.cs` |
 | scenarios | `scenarios.test.ts`, `engine-edges.test.ts`, `client-tools.test.ts`, `skills.test.ts`, … | `EngineScenariosTests.cs`, `EngineEdgeTests.cs`, `ClientToolsTests.cs`, `SkillsTests.cs`, … |
 
 The .NET test project copies the JSON files in this folder to its output
@@ -129,6 +130,25 @@ decoded by .NET and vice versa. `decode` cases carry raw payloads and the
 message they decode to: the legacy shapes (the .NET 0.9 PascalCase
 `{"OriginId", "Frame"}`, read for one release) and every malformed payload,
 which decodes to `null` and is dropped instead of fanned out.
+
+### The hub scenario
+
+[`converger/refund.json`](converger/refund.json) is the compatibility guard for
+running behind a hub (PROTOCOL.md §15). Each suite drives the refund example
+twice with the same counting minter and fixed clock: over a direct mekik/1
+socket (`@mekik/ws` / `MapMekik`), and behind a fake Converger through
+`@mekik/converger` / `Mekik.Converger` with the external-transcript profile.
+The fake hub speaks the channel-scoped side of Converger's native endpoint: a
+bare `hello` gets a channel `welcome`, user turns arrive as
+`{conversationId, frame}` with the hub's own `seq` and a `sender`, a `resume`
+is forwarded unchanged, and messages with an `id` are acked. The inner frames
+the hub receives must equal the direct client's frames after `welcome` in
+canonical JSON. Nothing is excluded but `welcome`; `seq`, message ids and
+stream ids match because the engine still mints and numbers the unechoed user
+turn. The one normalisation is ilmek's checkpoint ids (`ckpt-…`, embedded in
+the ids of tool traces after a resume), which ilmek mints from the clock and
+randomness, so they differ between any two runs: each suite renames them
+`ckpt-1`, `ckpt-2`, … by first appearance, as the fixture's `normalize` rule says.
 
 ## Scenario suites (behavioural)
 

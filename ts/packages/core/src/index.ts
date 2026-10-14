@@ -285,4 +285,13 @@ export { LocalTurnLock, NoopBackplane } from "./scaling.ts";
 export type { Backplane, BackplaneMessage, Subscription, TurnLease, TurnLock } from "./scaling.ts";
 
 export { StaticTokenAuthenticator } from "./auth.ts";
+
+export {
+    ExternalTranscript,
+    ExternalTranscriptHistoryStore,
+    externalTranscript,
+    HubAuthenticator,
+    HubConversationStore,
+} from "./external.ts";
+export type { ExternalTranscriptOptions } from "./external.ts";
 export type { AuthVerdict, Authenticator, Credential } from "./auth.ts";

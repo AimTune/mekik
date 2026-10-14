@@ -105,6 +105,12 @@ public sealed record EngineConfig
     public required ITurnLock TurnLock { get; init; }
     /// <summary>Cross-node fan-out. Default: <see cref="NoopBackplane"/> (single node fans out directly).</summary>
     public required IBackplane Backplane { get; init; }
+    /// <summary>
+    /// Record and fan out the user's own <c>text</c> turn (§1). Default: true. <c>false</c> is the
+    /// external-transcript profile (behind a hub, which already stored and delivered the turn):
+    /// the frame is minted and numbered but not dispatched.
+    /// </summary>
+    public bool EchoUserTurns { get; init; } = true;
 }
 
 /// <summary>
@@ -542,7 +548,10 @@ public sealed class ConversationEngine
             var text = ((IReadOnlyDictionary<string, object?>)frame["data"]!)["text"] as string ?? "";
 
             // The user's own turn: stored + shown to the other tabs, not echoed back (§1).
-            await DispatchAsync(convId, new Frame
+            // Behind a hub (EchoUserTurns = false) the hub already stored and delivered it:
+            // the frame is still minted and numbered, so ids and seq hints stay as in a
+            // direct run, but it is neither recorded nor fanned out.
+            var userTurn = new Frame
             {
                 ["type"] = "text",
                 ["id"] = _cfg.Minter.Message(),
@@ -550,7 +559,8 @@ public sealed class ConversationEngine
                 ["from"] = "user",
                 ["data"] = new Frame { ["text"] = text },
                 ["timestamp"] = _cfg.Now(),
-            }, conn.Id).ConfigureAwait(false);
+            };
+            if (_cfg.EchoUserTurns) await DispatchAsync(convId, userTurn, conn.Id).ConfigureAwait(false);
 
             var meta = BuildMeta(convId, state, text, frame.GetValueOrDefault("meta") as IReadOnlyDictionary<string, object?>);
             var input = _cfg.Input(frame);

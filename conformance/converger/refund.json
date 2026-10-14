@@ -1,0 +1,34 @@
+{
+  "name": "refund-behind-hub",
+  "description": "The refund example (ts/examples/refund.ts, dotnet/examples/Mekik.Examples) driven twice with the same deterministic minter and clock: directly over the mekik/1 WebSocket transport (@mekik/ws / MapMekik), and behind a fake Converger hub through @mekik/converger / Mekik.Converger with the external-transcript profile. The inner frames the hub receives for the conversation must equal, in canonical JSON (PROTOCOL.md section 9), the frames the direct client receives after `welcome`.",
+  "conversationId": "conv-refund-1",
+  "userId": "alice",
+  "clock": 1750000000000,
+  "greeting": "Hi! Send an order number to start a refund. Available orders: ORD-42.",
+  "steps": [
+    {
+      "note": "the user asks for a refund; the run parks on the approval interrupt",
+      "send": { "type": "text", "data": { "text": "ORD-42" } },
+      "until": { "type": "run", "status": "interrupted" }
+    },
+    {
+      "note": "a new turn while parked is refused with error{interrupted}, relayed by the hub as a transient frame",
+      "send": { "type": "text", "data": { "text": "hello?" } },
+      "until": { "type": "error" }
+    },
+    {
+      "note": "the human approves; `$interrupt` is the id of the last `interrupt` frame received. Behind the hub this is a forwarded resume, which is also how a tapped WhatsApp button answering the interrupt arrives",
+      "send": { "type": "resume", "answers": { "$interrupt": { "approved": true } } },
+      "until": { "type": "run", "status": "finished" }
+    }
+  ],
+  "hub": {
+    "envelope": "every conversation-level frame, both ways, is {conversationId, frame}; connection-level frames (hello, welcome, ping, auth) are bare",
+    "userTurn": "a user text reaches the transport as Converger delivers it: {type, id, seq, from: \"user\", sender: {id, role}, data, timestamp}, its seq taken from the hub's own per-conversation counter (one per persistent frame stored, the user's turns included); a forwarded frame (resume) carries no seq",
+    "excluded": "only the direct run's `welcome`: the hub has its own handshake and the transport swallows the engine's. The engine still mints and numbers the unechoed user turn, so seq, message ids and stream ids are identical in both runs"
+  },
+  "normalize": {
+    "pattern": "ckpt-[^:\"]+",
+    "rule": "ilmek mints checkpoint ids from the wall clock and randomness (not injectable), and a tool trace after a resume embeds one in its id, so two direct runs differ there as well. In both runs each distinct match of `pattern` in a frame's canonical JSON is renamed ckpt-1, ckpt-2, ... by order of first appearance. Nothing else is normalised."
+  }
+}

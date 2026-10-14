@@ -62,6 +62,8 @@ Each row is a claim about the [event→frame mapping](../protocol/event-mapping.
 
 Another fixture file, [`conformance/mcp/rpc.json`](https://github.com/AimTune/mekik/blob/main/conformance/mcp/rpc.json), pins the JSON-RPC surface of the [MCP server](../serving/mcp.md) — `initialize`, `ping`, `tools/list`, the error codes — request by request, replayed by both suites. A third, [`conformance/a2a/rpc.json`](https://github.com/AimTune/mekik/blob/main/conformance/a2a/rpc.json), pins the [A2A agent](../serving/a2a.md)'s Agent Card and JSON-RPC surface the same way. And [`conformance/redis/envelope.json`](https://github.com/AimTune/mekik/blob/main/conformance/redis/envelope.json) pins the [Redis backplane](../scaling.mdx) envelope: both encoders must write the exact same canonical `{"frame", "originId"}` string, each suite decodes the other language's output, and malformed payloads must decode to nothing.
 
+[`conformance/converger/refund.json`](https://github.com/AimTune/mekik/blob/main/conformance/converger/refund.json) is the guard for running [behind a hub](../serving/converger.md): it drives the refund example once over a direct socket and once through a fake Converger speaking the `{conversationId, frame}` envelope, and the frames inside the envelope must equal the direct run's in canonical JSON — `seq` and ids included, with only ilmek's checkpoint ids normalised. `@mekik/converger` and `Mekik.Converger` both run it.
+
 ## The scenario suites
 
 The 35 behavioural scenarios cover what a single-run fixture can't. The first sixteen are the core wire:

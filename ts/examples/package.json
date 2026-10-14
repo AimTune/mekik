@@ -25,9 +25,11 @@
     "insurance": "node insurance/insurance.ts",
     "triage": "node healthcare-triage/triage.ts",
     "travel": "node travel-booking/travel.ts",
-    "support": "node support-desk/support.ts"
+    "support": "node support-desk/support.ts",
+    "converger": "node refund.ts --converger"
   },
   "dependencies": {
+    "@mekik/converger": "workspace:*",
     "@mekik/core": "workspace:*",
     "@mekik/langchain": "workspace:*",
     "@mekik/ws": "workspace:*",

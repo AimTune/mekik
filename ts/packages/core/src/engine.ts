@@ -185,6 +185,12 @@ export interface EngineConfig {
     turnLock: TurnLock;
     /** Cross-node fan-out. Default: `NoopBackplane` (single node fans out directly). */
     backplane: Backplane;
+    /**
+     * Record and fan out the user's own `text` turn (§1). Default: true. `false`
+     * is the external-transcript profile (behind a hub, which already stored and
+     * delivered the turn): the frame is minted and numbered but not dispatched.
+     */
+    echoUserTurns?: boolean;
 }
 
 interface ConnState {
@@ -524,15 +530,19 @@ export class ConversationEngine {
             }
 
             // The user's own turn: stored + shown to the other tabs, not echoed
-            // back to the sender (§1).
-            await this.dispatch(convId, {
+            // back to the sender (§1). Behind a hub (echoUserTurns: false) the hub
+            // already stored and delivered it: the frame is still minted and
+            // numbered, so ids and seq hints stay as in a direct run, but it is
+            // neither recorded nor fanned out.
+            const userTurn: OutgoingFrame = {
                 type: "text",
                 id: this.cfg.minter.message(),
                 seq: ++live.seq,
                 from: "user",
                 data: { text: frame.data.text },
                 timestamp: this.cfg.now(),
-            }, conn.id);
+            };
+            if (this.cfg.echoUserTurns !== false) await this.dispatch(convId, userTurn, conn.id);
 
             const turn = { text: frame.data.text, ...(frame.meta !== undefined ? { meta: frame.meta } : {}) };
             const meta = this.buildMeta(convId, state, turn);

@@ -47,6 +47,7 @@ Every package is versioned together (currently 0.9.0).
 | `@mekik/langchain` | `Mekik.Agents` | wrap an agent's tools: traces, approvals, exactly-once, skills (LangChain / Microsoft.Extensions.AI) |
 | — | `Mekik.SemanticKernel` | one function filter for Semantic Kernel agents and planners |
 | `@mekik/redis` | `Mekik.Redis` | Redis turn lock + Pub/Sub backplane, for a fleet |
+| `@mekik/converger` | `Mekik.Converger` | run behind the [Converger](https://github.com/AimTune/converger) hub: one outbound multiplexed WebSocket, with the external-transcript profile (`connectConverger` / `ConvergerTransport.Connect`) |
 
 ```bash
 pnpm add @mekik/core @mekik/ws @ilmek/core@^0.1.1
@@ -106,6 +107,7 @@ mekik/
     packages/redis/      # @mekik/redis — Redis turn lock + Pub/Sub backplane (fleet)
     packages/mcp/        # @mekik/mcp — the graph as MCP tools over Streamable HTTP (§13)
     packages/a2a/        # @mekik/a2a — the graph as an A2A agent: card + JSON-RPC over HTTP (§14)
+    packages/converger/  # @mekik/converger — run behind the Converger hub (§15)
     examples/refund.ts    # showcase: tool + GenUI + form approval + resume
     examples/llm-agent.ts # the same desk, driven by a real Claude model
     examples/sql-agent.ts # a model writing its own SQL over SQLite
@@ -126,6 +128,7 @@ mekik/
     src/Mekik.Agents/          # Microsoft.Extensions.AI function wrapping
     src/Mekik.SemanticKernel/  # one filter covers SK agents and planners
     src/Mekik.Redis/           # Redis turn lock + Pub/Sub backplane (fleet)
+    src/Mekik.Converger/       # run behind the Converger hub (§15)
     test/Mekik.Core.Tests/     # loads the SAME fixtures
     examples/Mekik.Examples    # mirror of the refund showcase
     examples/Mekik.LlmAgent    # mirror of the LLM-driven desk

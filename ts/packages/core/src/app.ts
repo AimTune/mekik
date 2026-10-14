@@ -28,6 +28,8 @@ import {
 } from "./stores.ts";
 import { LocalTurnLock, NoopBackplane, type Backplane, type TurnLock } from "./scaling.ts";
 import { toSkillSource, type SkillsInput } from "./skills.ts";
+// For the {@link externalTranscript} doc link only.
+import type { externalTranscript } from "./external.ts";
 
 export interface MekikOptions {
     /** The ilmek graph this app serves. One run == one conversational turn. */
@@ -176,6 +178,13 @@ export interface MekikOptions {
      * node fans out directly. Pass a Redis Pub/Sub backplane to run a fleet.
      */
     backplane?: Backplane;
+    /**
+     * Record and fan out the user's own `text` turn to the conversation's other
+     * connections (PROTOCOL.md §1). Default: `true`. Set `false` only behind a hub
+     * that already stored and delivered the turn; {@link externalTranscript} does
+     * (PROTOCOL.md "Running behind a hub").
+     */
+    echoUserTurns?: boolean;
     /** ilmek superstep budget per run. */
     recursionLimit?: number;
     /** Override the wire id minter (tests inject a deterministic one). */
@@ -217,6 +226,7 @@ export class MekikApp {
             ...(options.greeting ? { greeting: options.greeting } : {}),
             ...(options.components?.length ? { components: new ComponentCatalog(options.components) } : {}),
             ...(options.onGenUiEvent ? { onGenUiEvent: options.onGenUiEvent } : {}),
+            ...(options.echoUserTurns !== undefined ? { echoUserTurns: options.echoUserTurns } : {}),
         };
         this.engine = new ConversationEngine(cfg);
     }
