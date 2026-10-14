@@ -165,6 +165,10 @@ The .NET ports follow the interface-name convention — `IHistoryStore` / `IConv
 
 For a single long-lived process that never restarts mid-conversation, the in-memory defaults are enough — which is why they're the defaults. The moment "answer this approval tomorrow" or "survive a deploy" enters the requirements, the checkpointer and history need backing. Running several nodes adds two more ports, `turnLock` and `backplane` — see [Horizontal scale](./scaling.mdx).
 
+## Behind a hub: no transcript of your own
+
+When mekik runs [behind the Converger hub](./serving/converger.md), the hub is the transcript and owns the conversations, so the `externalTranscript()` / `WithExternalTranscript()` profile swaps in stores that keep nothing: `ExternalTranscriptHistoryStore` records nothing, replays nothing and seeds the `seq` counter from what the hub reported, and `HubConversationStore` answers ownership from the hub instead of creating records. The checkpointer is still yours: parked interrupts live in it, not in the hub.
+
 ## Where to go next
 
 - [**Protocol → Identity & resume**](./protocol/identity.md) — the watermark model the HistoryStore serves.

@@ -181,6 +181,16 @@ WebSocket + LLM serving breaks the usual autoscaling assumptions.
   (`?conversationId=…`, see [`@mekik/ws`](../ts/packages/ws/src/index.ts)). The
   ingress hashes that; the ownership lease absorbs the transient during a remap.
 
+## Behind a hub instead
+
+A fleet is not the only way to scale out. Behind the [Converger](https://github.com/AimTune/converger)
+hub (PROTOCOL.md §15, `@mekik/converger` / `Mekik.Converger`), the hub owns the
+transcript, tokens and the end users' sockets, and several mekik processes share a
+bot channel through `hello.group`: the hub serves each conversation from exactly one
+member and moves only the departed member's conversations when membership changes.
+Each process still needs a shared checkpointer for parked interrupts to survive a
+move, but needs no turn lock or backplane for the end users' sockets.
+
 ## What single-node still gets
 
 None of this changes the smallest useful call. `mekik({ graph })` keeps the

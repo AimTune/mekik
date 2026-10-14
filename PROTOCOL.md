@@ -513,6 +513,8 @@ Naming (extends MODEL.md §11):
 | MCP server        | `MekikMcpServer` / `serveMcp` (`@mekik/mcp`) | `MekikMcpServer` / `MapMekikMcp` (`Mekik.AspNetCore`) |
 | MCP tools wrap    | `withMcpTools` (`@mekik/langchain`) | `McpFunctions.Wrap` (`Mekik.Agents`)          |
 | A2A agent         | `MekikA2aServer` / `serveA2a` (`@mekik/a2a`) | `MekikA2aServer` / `MapMekikA2a` (`Mekik.AspNetCore`) |
+| behind a hub      | `connectConverger(app, options)` (`@mekik/converger`) | `ConvergerTransport.Connect(app, options)` (`Mekik.Converger`) |
+| external transcript | `mekik({ graph, ...externalTranscript() })` | `new MekikOptions { … }.WithExternalTranscript()` |
 
 **.NET caveat (MODEL.md §11 divergence 2):** any `try/catch` in the adapter or
 helpers that wraps node execution MUST rethrow when
@@ -1339,3 +1341,126 @@ gateway; all A2A conversations belong to one mekik user; the graph's approvals
 still gate what a calling agent can make happen. Task stores are per-process
 by default (`InMemoryA2aTaskStore`); a durable `A2aTaskStore` /
 `IA2aTaskStore` is a two-method port.
+
+---
+
+## 15. Running behind a hub (§15, deployment profile)
+
+> **Not a protocol change.** Every frame in this section is a mekik/1 frame of §3,
+> byte-identical to what the same app sends over its own WebSocket (pinned by
+> `conformance/converger/refund.json`). What changes is who owns the transcript,
+> the seq space and identity: a **hub**. The reference hub is
+> [Converger](https://github.com/AimTune/converger), whose wire protocol
+> (`converger/1`) is a superset profile of mekik/1.
+
+```
+chativa / WhatsApp / Telegram / …  ⇄  Converger  ⇄  one outbound WebSocket  ⇄  @mekik/converger  ⇄  ConversationEngine ⇄ ilmek
+                                       │ transcript, seq, identity, routing      │ one virtual Connection per conversation
+```
+
+### 15.1 The connection
+
+The mekik process dials **out** to the hub's native endpoint
+(`ws(s)://HOST/socket/converger/v1`) with `Authorization: Bearer <token>`, where the
+token is **channel-scoped**: minted by `POST /api/v1/converger/tokens/generate` with
+the bot channel's secret as the bearer and the body `{"scope":"channel"}`. The
+transport takes a fixed token, a token function, or the secret (it then mints
+tokens itself, on every connect and again a minute before `welcome.data.expiresAt`,
+presented mid-session as `{type:"auth", token}`). A fixed token cannot be renewed:
+when the hub refuses it (close 4401) the transport stops instead of retrying.
+
+- It sends one **bare** `{type:"hello", protocol:"converger/1", group?, watermarks?}`.
+  `group` lets several mekik processes share one channel, each conversation served
+  by exactly one of them; `watermarks` (`{conversationId: seq}`) resumes the
+  conversations it served before a reconnect.
+- The hub answers a bare `welcome` with `scope:"channel"`. Connection-level frames
+  (`hello`, `welcome`, `ping`, `heartbeat`, `auth`, `tokenRefreshed`) travel bare;
+  every **conversation-level frame, both ways, is `{conversationId, frame}`** (no
+  `type` on the envelope). The transport sends `ping` every `limits.idleTimeoutMs / 2`.
+
+### 15.2 Virtual connections
+
+The transport creates one virtual `Connection` per conversation, the first time a
+frame for it arrives, and drives it with the same three calls a WebSocket
+transport makes (`connect`, `receive`, `disconnect`). The hello it synthesises:
+
+| field | value |
+| --- | --- |
+| `conversationId` | the envelope's |
+| `userId` | the user turn's `sender.id`; else the owner already observed; else `"anonymous"` |
+| `watermark` | the seq the engine continues from (§15.3) |
+| `meta` | `{auth: {userId, role?, name?}}` from `sender`, also passed as `credential.meta` |
+
+Inbound, per conversation, in arrival order:
+
+- a **user turn**: a message frame with `from:"user"` and a string `data.text` (`text`
+  or any rich type; not `typing`, `event`, `conversationUpdate`) becomes the mekik/1
+  turn `{type:"text", data:{text}, meta?}`. `meta` is the transport's allowlist over
+  the frame's `metadata` with its `meta` laid over it; the app's `acceptClientMeta`
+  then applies as usual (§6);
+- `resume`, `genui_event`, `client_tools`, `client_skills`, `abort`: forwarded
+  unchanged. A tapped WhatsApp button that answers an open interrupt arrives as
+  `resume` (the hub converts it);
+- everything else is not mekik's to answer and is ignored: the bot's own and other
+  agents' frames (`from:"bot"`, `tool_call`, `interrupt`, …), `ack`, `deliveryStatus`,
+  `typing`, `presence`, and chativa's `survey` / `regenerate` / `edit` (not mekik/1).
+
+Frames enter the engine in arrival order after the handshake, but are **not**
+serialised behind each other's runs, so an `abort` reaches a running turn and a
+second turn draws `error{busy}` (§5). `maxConcurrentTurns` caps the turns (`text`,
+`resume`, `genui_event`) running at once across all conversations; the rest wait.
+A conversation idle for `idleMs` (default 15 min) with nothing in flight is
+disconnected; its next frame connects it again.
+
+Outbound, every frame the engine sends on a virtual connection goes back unchanged
+in the conversation's envelope, except `welcome` (the hub has its own handshake).
+The hub stores the persistent ones, keeping a message `id` (its idempotency key, so
+a resend is not stored twice) and renumbering `seq`; it relays the transient ones
+(`run`, `genui_components`, `skills`, `error`) to the conversation's clients.
+
+**Reconnect.** A dropped socket is reopened with jittered exponential backoff
+(full jitter, 500 ms to 30 s by default). The re-hello lists every remembered
+conversation with its watermark: the highest hub `seq` the transport has seen for
+it, from user turns and from the `ack`s of its own messages (up to
+`maxConversations`, default 5000). A frame replayed at or below that watermark is
+not delivered twice. While the socket is down, persistent frames the engine
+produces are buffered (up to `maxBuffered`) and sent after the next `welcome`;
+transient ones are dropped, so a stale `run{started}` never reaches a client late.
+A user turn the hub delivers as `resume` carries no seq, so it moves the watermark
+only through the next `ack`.
+
+### 15.3 The external-transcript profile
+
+The hub is the transcript and the seq authority, so mekik stops being either. The
+profile is four opt-in pieces, installed together by `externalTranscript()` (TS) /
+`WithExternalTranscript()` (.NET); the transport refuses an app without it:
+
+| piece | behaviour |
+| --- | --- |
+| `ExternalTranscriptHistoryStore` | `record` keeps nothing, `after` returns `[]` (the hub replays to its clients), `currentSeq` is what the transport observed |
+| `HubConversationStore` | `get` answers from what the transport observed (the hub already checked access), `create` is a no-op |
+| `HubAuthenticator` | trusts `credential.meta.auth.userId`; the whole `auth` object becomes the claims (`ctx.meta.auth`). Anti-spoofing is the hub's job; only a transport that synthesises the hello sets `credential.meta`, never `@mekik/ws` / `MapMekik` |
+| `echoUserTurns: false` / `EchoUserTurns = false` | the user's own `text` frame (§1) is still minted and numbered but neither recorded nor fanned out: the hub already stored and delivered it |
+
+**seq is a hint.** The engine keeps stamping `seq` (so fixtures and mappers are
+unchanged), seeded so it continues the hub's numbering: when a user turn with hub
+seq N brings a conversation in, the engine's counter starts at N−1, its own unsent
+copy of the turn takes N, and its first reply N+1, which is what the hub assigns
+when nothing else is written in between. The hub renumbers on persistence either
+way. A conversation first seen through a forwarded frame starts at its watermark,
+at least 1.
+
+**Greeting.** The app's `greeting` (§1) still goes out once for a fresh
+conversation: when the turn that brings it in is the hub's seq 1, the greeting
+follows the user's first message. A conversation first seen through a forwarded
+frame is never greeted.
+
+### 15.4 The compatibility guard
+
+`conformance/converger/refund.json` drives the refund example twice: over a direct
+mekik/1 socket, and through a fake hub speaking the `{conversationId, frame}`
+envelope with the profile above. The inner frames the hub receives must equal the
+direct client's frames after `welcome` in canonical JSON (§9), `seq` and ids
+included; the only normalisation is ilmek's checkpoint ids (`ckpt-…`), which ilmek
+mints from the clock and randomness and which differ between any two runs.
+`@mekik/converger` and `Mekik.Converger` both run it.

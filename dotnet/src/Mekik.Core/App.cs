@@ -125,6 +125,13 @@ public sealed record MekikOptions
     public ITurnLock? TurnLock { get; init; }
     /// <summary>Cross-node fan-out backplane (docs/SCALING.md). Default: <see cref="NoopBackplane"/>.</summary>
     public IBackplane? Backplane { get; init; }
+    /// <summary>
+    /// Record and fan out the user's own <c>text</c> turn to the conversation's other
+    /// connections (PROTOCOL.md §1). Default: <c>true</c>. Set <c>false</c> only behind a hub
+    /// that already stored and delivered the turn; <see cref="ExternalTranscriptProfile.WithExternalTranscript"/>
+    /// does (PROTOCOL.md "Running behind a hub").
+    /// </summary>
+    public bool EchoUserTurns { get; init; } = true;
     public int? RecursionLimit { get; init; }
     public IIdMinter? Minter { get; init; }
     public Func<long>? Now { get; init; }
@@ -172,6 +179,7 @@ public sealed class MekikApp
             Now = options.Now ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
             TurnLock = options.TurnLock ?? new LocalTurnLock(),
             Backplane = options.Backplane ?? new NoopBackplane(),
+            EchoUserTurns = options.EchoUserTurns,
         });
     }
 

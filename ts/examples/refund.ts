@@ -7,6 +7,8 @@
 //
 //   node examples/refund.ts             # in-memory self-test, exit 0/1 (no socket)
 //   node examples/refund.ts --serve     # real WebSocket server on :8800
+//   node examples/refund.ts --converger # behind a Converger hub (CONVERGER_URL +
+//                                       # CONVERGER_SECRET or CONVERGER_TOKEN)
 //
 // The self-test drives the app the way a client would and asserts the exact wire
 // trace, including that each tool's side effect runs exactly once across the
@@ -14,8 +16,9 @@
 
 import { channel, command, END, graph, START } from "@ilmek/core";
 
-import { mekik } from "@mekik/core";
-import type { Connection, OutgoingFrame } from "@mekik/core";
+import { externalTranscript, mekik } from "@mekik/core";
+import type { Connection, MekikOptions, OutgoingFrame } from "@mekik/core";
+import { connectConverger } from "@mekik/converger";
 import { serveWs } from "@mekik/ws";
 
 // ── the domain ────────────────────────────────────────────────────────────────
@@ -81,7 +84,7 @@ const refund = graph("refund")
     .edge("refund", END)
     .compile();
 
-function makeApp() {
+function makeApp(profile: Partial<MekikOptions> = {}) {
     return mekik({
         graph: refund,
         input: (frame) => ({ input: frame.data.text }),
@@ -89,6 +92,7 @@ function makeApp() {
         context: (conv) => ({ userId: conv.userId, locale: "en" }), // → ctx.meta.mekik
         greeting: () =>
             `Hi! Send an order number to start a refund. Available orders: ${Object.keys(ORDERS).join(", ")}.`,
+        ...profile,
     });
 }
 
@@ -169,7 +173,21 @@ async function selftest(): Promise<number> {
 
 // ── entry point ───────────────────────────────────────────────────────────────
 
-if (process.argv.includes("--serve")) {
+if (process.argv.includes("--converger")) {
+    // The same graph behind Converger (PROTOCOL.md "Running behind a hub"): the hub
+    // owns the transcript and identity, mekik dials out to the bot channel.
+    const url = process.env.CONVERGER_URL ?? "ws://localhost:4000/socket/converger/v1";
+    const secret = process.env.CONVERGER_SECRET;
+    const token = process.env.CONVERGER_TOKEN;
+    if (!secret && !token) throw new Error("set CONVERGER_SECRET (the bot channel's secret) or CONVERGER_TOKEN");
+    const hub = connectConverger(makeApp(externalTranscript()), {
+        url,
+        ...(secret ? { secret } : { token: token! }),
+        onError: (err) => console.error("converger:", err.message),
+    });
+    void hub.ready.then(() => console.log(`mekik refund demo serving the Converger channel at ${url}`));
+    process.on("SIGINT", () => void hub.close().then(() => process.exit(0)));
+} else if (process.argv.includes("--serve")) {
     // No `path` filter: accept the upgrade on any path (chativa's connector may
     // point at /ws, /chat, …), so the demo just connects.
     const handle = serveWs(makeApp(), { port: 8800 });

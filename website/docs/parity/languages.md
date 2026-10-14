@@ -62,6 +62,8 @@ mekik ships two implementations that speak the identical `mekik/1` wire: **TypeS
 | auth port | `Authenticator` / `StaticTokenAuthenticator` | `IAuthenticator` / `StaticTokenAuthenticator` |
 | turn lock / backplane ports | `TurnLock` / `LocalTurnLock`, `Backplane` / `NoopBackplane` | `ITurnLock` / `LocalTurnLock`, `IBackplane` / `NoopBackplane` |
 | Redis fleet | `RedisTurnLock` / `RedisBackplane` (`@mekik/redis`) | `RedisTurnLock` / `RedisBackplane` (`Mekik.Redis`) |
+| behind a hub (§15) | `connectConverger(app, options)` (`@mekik/converger`) | `ConvergerTransport.Connect(app, options)` (`Mekik.Converger`) |
+| external-transcript profile | `externalTranscript()` → `ExternalTranscriptHistoryStore`, `HubConversationStore`, `HubAuthenticator`, `echoUserTurns: false` | `WithExternalTranscript()` → the same three classes, `EchoUserTurns = false` |
 | id minter | `IdMinter` / `randomMinter()` | `IIdMinter` / `RandomMinter` |
 | protocol version | `PROTOCOL_VERSION` | `Protocol.Version` |
 | auth close code | `AUTH_CLOSE_CODE` (4401) | `Protocol.AuthCloseCode` |

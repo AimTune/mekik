@@ -12,6 +12,13 @@ export interface Credential {
     headers?: Record<string, string | undefined>;
     /** Raw connect query params. */
     query?: Record<string, string | undefined>;
+    /**
+     * The `hello.meta` of a hello the **transport synthesised itself**. Only a hub
+     * transport such as `@mekik/converger` sets it, with the hub-verified identity
+     * at `meta.auth` (read by `HubAuthenticator`). `@mekik/ws` never does: a
+     * client's own `hello.meta` is client input, not a credential.
+     */
+    meta?: Record<string, unknown>;
 }
 
 export interface AuthVerdict {

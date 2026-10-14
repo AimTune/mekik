@@ -4,11 +4,13 @@
   <Project Path="src/Mekik.Agents/Mekik.Agents.csproj" />
   <Project Path="src/Mekik.SemanticKernel/Mekik.SemanticKernel.csproj" />
   <Project Path="src/Mekik.Redis/Mekik.Redis.csproj" />
+  <Project Path="src/Mekik.Converger/Mekik.Converger.csproj" />
   <Project Path="test/Mekik.Core.Tests/Mekik.Core.Tests.csproj" />
   <Project Path="test/Mekik.Agents.Tests/Mekik.Agents.Tests.csproj" />
   <Project Path="test/Mekik.SemanticKernel.Tests/Mekik.SemanticKernel.Tests.csproj" />
   <Project Path="test/Mekik.AspNetCore.Tests/Mekik.AspNetCore.Tests.csproj" />
   <Project Path="test/Mekik.Redis.Tests/Mekik.Redis.Tests.csproj" />
+  <Project Path="test/Mekik.Converger.Tests/Mekik.Converger.Tests.csproj" />
   <Project Path="examples/Mekik.Examples/Mekik.Examples.csproj" />
   <Project Path="examples/Mekik.ClientTools/Mekik.ClientTools.csproj" />
   <Project Path="examples/Mekik.LlmAgent/Mekik.LlmAgent.csproj" />

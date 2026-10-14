@@ -257,6 +257,10 @@ The chativa connector presents credentials through its own `MekikAuthProvider` a
 
 See chativa's [MekikConnector → Authentication](https://github.com/AimTune/chativa/blob/main/docs/connectors/mekik.md#authentication) for the client side.
 
+## Behind a hub
+
+When mekik runs [behind the Converger hub](./serving/converger.md), end users authenticate to the hub, not to mekik. The hub transport puts the identity the hub verified at `credential.meta.auth` (`{ userId, role?, name? }`) of the hello it synthesises for each conversation, and `HubAuthenticator` (installed by the external-transcript profile) accepts exactly that: the verified `userId` wins, and the whole `auth` object reaches nodes as `ctx.meta.auth`. `@mekik/ws` and `MapMekik` never fill `credential.meta`, so a direct client cannot use it to claim an identity.
+
 ## Where to go next
 
 - [**Transport**](./serving/transport.md) — how the credential is assembled from the socket.

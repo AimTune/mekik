@@ -1,0 +1,53 @@
+{
+  "name": "@mekik/converger",
+  "version": "0.9.0",
+  "description": "Converger transport for mekik — serve a MekikApp behind the Converger channel hub over one outbound multiplexed WebSocket.",
+  "type": "module",
+  "license": "MIT",
+  "author": "AimTune",
+  "homepage": "https://github.com/AimTune/mekik/tree/main/ts/packages/converger#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AimTune/mekik.git",
+    "directory": "ts/packages/converger"
+  },
+  "bugs": "https://github.com/AimTune/mekik/issues",
+  "keywords": [
+    "mekik",
+    "websocket",
+    "converger",
+    "hub",
+    "realtime",
+    "transport"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "node --test test/*.test.ts",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include=\"src/**\" test/*.test.ts"
+  },
+  "dependencies": {
+    "@mekik/core": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@ilmek/core": "^0.1.1",
+    "@mekik/ws": "workspace:*",
+    "@types/ws": "^8.5.0"
+  }
+}

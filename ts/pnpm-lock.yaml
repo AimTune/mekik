@@ -26,6 +26,9 @@ importers:
       '@langchain/core':
         specifier: ^1.2.3
         version: 1.2.3(ws@8.21.1)
+      '@mekik/converger':
+        specifier: workspace:*
+        version: link:../packages/converger
       '@mekik/core':
         specifier: workspace:*
         version: link:../packages/core
@@ -51,6 +54,25 @@ importers:
       '@ilmek/core':
         specifier: ^0.1.1
         version: 0.1.1
+
+  packages/converger:
+    dependencies:
+      '@mekik/core':
+        specifier: workspace:*
+        version: link:../core
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.1
+    devDependencies:
+      '@ilmek/core':
+        specifier: ^0.1.1
+        version: 0.1.1
+      '@mekik/ws':
+        specifier: workspace:*
+        version: link:../ws
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
 
   packages/core:
     dependencies:
