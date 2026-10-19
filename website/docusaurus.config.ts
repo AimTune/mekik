@@ -125,6 +125,7 @@ const config: Config = {
             { label: "chativa", href: "https://github.com/AimTune/chativa" },
             { label: "GitHub", href: GITHUB_REPO },
             { label: "Issues", href: `${GITHUB_REPO}/issues` },
+            { label: "Security", to: "/security" },
           ],
         },
       ],

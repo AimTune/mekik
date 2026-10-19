@@ -58,6 +58,7 @@ const sidebars: SidebarsConfig = {
     },
     "examples",
     "domain-examples",
+    "security",
   ],
 };
 

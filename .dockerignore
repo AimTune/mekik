@@ -1,0 +1,9 @@
+# Build context for .oss-scanner/Dockerfile: keep local build output and
+# installed modules out so the image installs from the lockfiles.
+**/node_modules
+**/dist
+**/bin
+**/obj
+**/*.tsbuildinfo
+website/build
+.git
