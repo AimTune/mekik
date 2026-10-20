@@ -279,6 +279,14 @@ The client end is chativa's `@chativa/connector-mekik`, which already speaks
 answers them with a `resume` keyed by interrupt id, and re-renders open pauses
 announced in `welcome.pending` after a reconnect.
 
+## Security
+
+Report vulnerabilities privately via [GitHub security advisories](https://github.com/AimTune/mekik/security/advisories/new)
+or the contact in [`SECURITY.md`](SECURITY.md). The repository is enrolled in
+[Anthropic's OSS Scanner](https://red.anthropic.com/oss-scanner); the build it
+audits is [`.oss-scanner/Dockerfile`](.oss-scanner/Dockerfile) and the threat
+model it reads is [`.oss-scanner/threat_model.md`](.oss-scanner/threat_model.md).
+
 ## License
 
-MIT.
+MIT. See [`LICENSE`](LICENSE).
